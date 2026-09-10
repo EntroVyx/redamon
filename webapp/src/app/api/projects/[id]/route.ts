@@ -23,6 +23,7 @@ import { seedProjectDomains } from '@/lib/graphSeedDomains'
 import { computeSkillTextOverrides } from '@/lib/plugins/overrideDelivery'
 import { userSkillsForAgent } from '@/lib/userSkillAgentPayload'
 import type { ResolvedPart } from '@/lib/plugins/overrides'
+import { normalizeOpenApiSourceIds, validateOpenApiSettings } from '@/lib/validation/openapiSettings'
 
 // Path to output directories (fallback for local deletion)
 const RECON_OUTPUT_PATH = process.env.RECON_OUTPUT_PATH || '/home/samuele/Progetti didattici/RedAmon/recon/output'
@@ -234,6 +235,13 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     // check and its audit row.
     const updateData: Record<string, any> = pickProjectColumns(rawUpdate)
     for (const key of NOT_WRITABLE_BY_SAVE) delete updateData[key]
+    const openapiError = validateOpenApiSettings(updateData)
+    if (openapiError) {
+      return NextResponse.json({ error: openapiError }, { status: 400 })
+    }
+    if ('openapiSources' in updateData) {
+      updateData.openapiSources = normalizeOpenApiSourceIds(updateData.openapiSources)
+    }
 
     // Sanitize string inputs that are used as hostnames/IPs (trailing spaces break DNS)
     if (typeof updateData.targetDomain === 'string') {
