@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import math
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -27,6 +29,12 @@ LLM_TIMEOUT_SECONDS = 600
 # The Gateway proxy refuses answers above this size too (16 MB).
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _LONG_OPS = frozenset({"llm/invoke"})
+# data.query / data.count filters (master plan TD-28). The Gateway checks them again; the
+# client only gives a plugin author the error early.
+WHERE_MAX_FIELDS = 5
+WHERE_TEXT_MAX_CHARS = 512
+WHERE_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+ORDERS = ("-updated", "updated", "key", "-key")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -130,6 +138,31 @@ def _checked(body: dict) -> dict:
     return body
 
 
+def _invalid_query(message: str) -> PluginError:
+    return PluginError("invalid_query", message)
+
+
+def check_where(where) -> None:
+    if where is None:
+        return
+    if not isinstance(where, dict) or not 1 <= len(where) <= WHERE_MAX_FIELDS:
+        raise _invalid_query(f"where takes 1 to {WHERE_MAX_FIELDS} fields.")
+    for name, value in where.items():
+        if not isinstance(name, str) or not WHERE_FIELD_RE.match(name):
+            raise _invalid_query(f"where field {name!r} is not a valid name.")
+        scalar = (value is None or isinstance(value, bool)
+                  or (isinstance(value, str) and len(value) <= WHERE_TEXT_MAX_CHARS)
+                  or (isinstance(value, (int, float)) and math.isfinite(value)))
+        if not scalar:
+            raise _invalid_query(f"where value for {name!r} must be text of at most "
+                                 f"{WHERE_TEXT_MAX_CHARS} characters, a finite number, true, false or null.")
+
+
+def check_order(order) -> None:
+    if order not in ORDERS:
+        raise _invalid_query(f"order is one of {', '.join(ORDERS)}.")
+
+
 class _Api:
     def __init__(self, transport):
         self._t = transport
@@ -173,17 +206,50 @@ class DataApi(_Api):
             body["ttlSeconds"] = ttl_seconds
         await self._post("data/put", body)
 
-    async def query(self, collection: str, *, prefix: Optional[str] = None, limit: int = 50,
-                    owner: str = "user") -> list:
-        """Newest first: `[{key, value, updatedAt, expiresAt}]`."""
+    async def query(self, collection: str, *, prefix: Optional[str] = None, where: Optional[dict] = None,
+                    order: str = "-updated", limit: int = 50, cursor: Optional[str] = None,
+                    owner: str = "user") -> dict:
+        """One page: `{items: [{key, value, updatedAt, expiresAt}], next}`.
+
+        `where` matches top-level fields of the stored JSON object by equality (1 to 5
+        fields, ANDed with `prefix`). `next` is None on the last page; pass it back as
+        `cursor`, with the same query, for the following one. A cursor is opaque.
+        """
+        check_where(where)
+        check_order(order)
+        if cursor is not None and not isinstance(cursor, str):
+            raise _invalid_query("cursor must be the string a previous page returned.")
         body: dict = {"collection": collection, "owner": owner, "limit": limit}
         if prefix is not None:
             body["prefix"] = prefix
+        if where is not None:
+            body["where"] = where
+        if order != "-updated":
+            body["order"] = order
+        if cursor is not None:
+            body["cursor"] = cursor
         out = await self._post("data/query", body)
-        items = out.get("items")
+        items, nxt = out.get("items"), out.get("next")
         if not isinstance(items, list):
             raise PluginError("gateway_bad_response", "The Gateway's answer has no item list.")
-        return items
+        if nxt is not None and not isinstance(nxt, str):
+            raise PluginError("gateway_bad_response", "The Gateway's answer has no valid next cursor.")
+        return {"items": items, "next": nxt}
+
+    async def count(self, collection: str, *, prefix: Optional[str] = None, where: Optional[dict] = None,
+                    owner: str = "user") -> int:
+        """How many live rows `query` would page through with the same filters."""
+        check_where(where)
+        body: dict = {"collection": collection, "owner": owner}
+        if prefix is not None:
+            body["prefix"] = prefix
+        if where is not None:
+            body["where"] = where
+        out = await self._post("data/count", body)
+        count = out.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise PluginError("gateway_bad_response", "The Gateway's answer has no count.")
+        return count
 
     async def delete(self, collection: str, key: str, *, owner: str = "user") -> bool:
         out = await self._post("data/delete", {"collection": collection, "key": key, "owner": owner})

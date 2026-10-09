@@ -16,6 +16,7 @@ every quota: passing here is necessary, not sufficient.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -23,7 +24,7 @@ import re
 import time
 from typing import Any, Callable, Iterable, Optional
 
-from .client import Sdk
+from .client import Sdk, check_order, check_where
 from .context import Context
 from .errors import PluginError
 
@@ -39,6 +40,25 @@ _ROLES = ("system", "user", "assistant")
 
 def _json_copy(value: Any) -> Any:
     return json.loads(json.dumps(value))
+
+
+def _jsonb_equal(stored: Any, wanted: Any) -> bool:
+    """Equality as Postgres compares jsonb scalars: a bool never equals a number, 1 == 1.0."""
+    if wanted is None:
+        return stored is None
+    if isinstance(wanted, bool) or isinstance(stored, bool):
+        return isinstance(wanted, bool) and isinstance(stored, bool) and stored == wanted
+    if isinstance(wanted, (int, float)):
+        return isinstance(stored, (int, float)) and stored == wanted
+    return isinstance(stored, str) and stored == wanted
+
+
+def _matches(value: Any, where: Optional[dict]) -> bool:
+    if not where:
+        return True
+    if not isinstance(value, dict):
+        return False
+    return all(name in value and _jsonb_equal(value[name], wanted) for name, wanted in where.items())
 
 
 def _iso(ts: float) -> str:
@@ -206,17 +226,63 @@ class FakeGateway:
         self.rows[ident] = {"value": value, "updatedAt": now, "seq": self._seq, "expiresAt": expires}
         return {"sizeBytes": size, "expiresAt": _iso(expires) if expires is not None else None}
 
-    def _data_query(self, body: dict) -> dict:
+    def _selected(self, body: dict) -> tuple:
         owner, collection = self._owner(body), self._collection(body)
         prefix = body.get("prefix") or ""
+        where = body.get("where")
+        try:
+            check_where(where)
+        except PluginError as e:
+            raise PluginError("invalid_query", e.message) from None
+        rows = [(k, r) for (o, c, k), r in self.rows.items()
+                if o == owner and c == collection and k.startswith(prefix) and self._live(r)
+                and _matches(r["value"], where)]
+        return owner, collection, prefix, where, rows
+
+    @staticmethod
+    def _sort_key(order: str, key: str, row: dict) -> tuple:
+        # Ties broken by the row's insertion sequence, in the same direction (TD-28).
+        return (row["updatedAt"], row["seq"]) if order.endswith("updated") else (key, row["seq"])
+
+    def _data_query(self, body: dict) -> dict:
+        owner, collection, prefix, where, rows = self._selected(body)
+        order = body.get("order", "-updated")
+        try:
+            check_order(order)
+        except PluginError as e:
+            raise PluginError("invalid_query", e.message) from None
         limit = body.get("limit", 50)
         limit = max(1, min(_QUERY_LIMIT_MAX, int(limit) if isinstance(limit, (int, float)) else 50))
-        rows = [(k, r) for (o, c, k), r in self.rows.items()
-                if o == owner and c == collection and k.startswith(prefix) and self._live(r)]
-        rows.sort(key=lambda kr: (kr[1]["updatedAt"], kr[1]["seq"]), reverse=True)
+        descending = order.startswith("-")
+        rows.sort(key=lambda kr: self._sort_key(order, *kr), reverse=descending)
+        # The fake's own opaque cursor: the query's fingerprint plus the last sort key.
+        fingerprint = hashlib.sha256(json.dumps([collection, list(owner), prefix, where, order],
+                                                sort_keys=True).encode()).hexdigest()[:16]
+        cursor = body.get("cursor")
+        if cursor is not None:
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+                if decoded["q"] != fingerprint:
+                    raise ValueError
+                after = tuple(decoded["after"])
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise PluginError("invalid_cursor", "This cursor belongs to another query.") from None
+            if descending:
+                rows = [kr for kr in rows if self._sort_key(order, *kr) < after]
+            else:
+                rows = [kr for kr in rows if self._sort_key(order, *kr) > after]
+        page, more = rows[:limit], len(rows) > limit
+        nxt = None
+        if more:
+            last = self._sort_key(order, *page[-1])
+            nxt = base64.urlsafe_b64encode(json.dumps({"q": fingerprint, "after": list(last)}).encode()).decode()
         return {"items": [{"key": k, "value": copy.deepcopy(r["value"]), "updatedAt": _iso(r["updatedAt"]),
                            "expiresAt": _iso(r["expiresAt"]) if r["expiresAt"] is not None else None}
-                          for k, r in rows[:limit]]}
+                          for k, r in page],
+                "next": nxt}
+
+    def _data_count(self, body: dict) -> dict:
+        return {"count": len(self._selected(body)[4])}
 
     def _data_delete(self, body: dict) -> dict:
         ident = (self._owner(body), self._collection(body), self._key(body))

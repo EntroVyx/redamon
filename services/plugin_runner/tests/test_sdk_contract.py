@@ -11,7 +11,7 @@ from tests.support import CONTRACT_CASES, SDK_ROOT, load_contract_cases
 
 PACKAGE = SDK_ROOT / "redamon_plugin_sdk"
 SDK_METHODS = {
-    "session.read", "llm.invoke", "data.get", "data.put", "data.query", "data.delete",
+    "session.read", "llm.invoke", "data.get", "data.put", "data.query", "data.count", "data.delete",
     "override.get", "override.propose", "override.withdraw", "jobs.progress",
 }
 
