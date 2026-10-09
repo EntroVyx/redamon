@@ -105,6 +105,8 @@ eq "joins exactly plugins-net and plugins-edge" "$(q "$C" "sorted($P['networks']
 eq "never joins the redamon network" "$(q "$C" "'redamon' in $P['networks']")" "False"
 eq "read-only root filesystem" "$(q "$C" "$P.get('read_only')")" "True"
 eq "drops every capability and adds none" "$(q "$C" "($P.get('cap_drop'), $P.get('cap_add'))")" "(['ALL'], None)"
+eq "gets the action cap, so it never times out an action the runner still allows" \
+   "$(q "$C" "$P['environment'].get('PLUGIN_ACTION_MAX_TIMEOUT') == $R['environment']['PLUGIN_ACTION_MAX_TIMEOUT']")" "True"
 eq "runs the proxy entrypoint" "$(q "$C" "$P['command']")" "['python', '-m', 'gateway_proxy.proxy']"
 eq "same image as the runner" "$(q "$C" "$P['image'] == $R['image'] == 'redamon-plugin-runner:latest'")" "True"
 eq "same build as the runner (a missing image is built, never pulled)" \

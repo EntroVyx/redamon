@@ -1417,6 +1417,8 @@ services:
     environment:
       PLUGIN_GATEWAY_UPSTREAM: http://webapp:3000
       PLUGIN_RUNNER_UPSTREAM: http://plugin-runner:7080
+      # The proxy waits on the runner a minute longer than the longest action it allows.
+      PLUGIN_ACTION_MAX_TIMEOUT: ${PLUGIN_ACTION_MAX_TIMEOUT:-900}
     # Never `redamon`: there a compromised proxy would reach Postgres, Neo4j and the
     # agent's unauthenticated routes. On plugins-edge it reaches only the webapp.
     networks:

@@ -13,6 +13,13 @@ the listener's prefix, any %-encoded byte, `..`, `//` or a backslash, a query st
 POST or one over 512 characters, a body on a GET, a chunked body, a body over 8 MB. An
 answer over 16 MB becomes a 502. One log line per request: listener, method, path (no
 query), status, milliseconds; never a header or a body.
+
+Plugin code is the client on :7071, so no caller may exhaust the proxy for the others:
+each listener serves at most MAX_CONNECTIONS at once (one thread each, inside the
+container's pids limit) and answers 503 at once beyond that, the webapp's door keeping its
+own share; a client that stops sending is dropped after CLIENT_TIMEOUT; and the bodies and
+answers held in memory share BUFFER_BYTES (inside the container's memory limit), a request
+that would exceed it being answered 503.
 """
 
 from __future__ import annotations
@@ -31,14 +38,78 @@ from urllib.parse import urlsplit
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_QUERY_CHARS = 512
-# An LLM call may take 600 s and an action 900 s (PLUGIN_ACTION_MAX_TIMEOUT); the runner
-# door must outlast both.
-UPSTREAM_TIMEOUT = 960.0
+# Per listener; with both full the threads stay under the container's pids_limit (64).
+MAX_CONNECTIONS = 24
+CLIENT_TIMEOUT = 30.0
+# Shared by both listeners; well inside the container's 128 MB.
+BUFFER_BYTES = 48 * 1024 * 1024
+RESPONSE_CHUNK = 64 * 1024
+DEFAULT_ACTION_MAX_TIMEOUT = 900
+BUSY = (b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nConnection: close\r\n"
+        b"Content-Length: 72\r\n\r\n"
+        b'{"error":"The plugin gateway proxy is busy; retry.","code":"proxy_busy"}')
 FORWARDED_HEADERS = ("Authorization", "Content-Type", "X-Plugin-Runner-Key")
 PATH_RULES = {
     "gateway": re.compile(r"^/api/plugin-(?:gateway|runner)/v1/[a-z0-9/_-]+$"),
     "runner": re.compile(r"^/runner/v1/[A-Za-z0-9/_-]+$"),
 }
+
+
+def upstream_timeout() -> float:
+    """Outlasts the longest action the runner allows (PLUGIN_ACTION_MAX_TIMEOUT, as the
+    runner reads it) and an LLM call (600 s) by a minute."""
+    raw = (os.environ.get("PLUGIN_ACTION_MAX_TIMEOUT") or "").strip()
+    cap = int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_ACTION_MAX_TIMEOUT
+    return float(max(cap, 600) + 60)
+
+
+class ByteBudget:
+    """Bytes the proxy may hold in bodies and answers at once, across both listeners."""
+
+    def __init__(self, total: int):
+        self._left = total
+        self._lock = threading.Lock()
+
+    def take(self, n: int) -> bool:
+        with self._lock:
+            if n > self._left:
+                return False
+            self._left -= n
+            return True
+
+    def give(self, n: int) -> None:
+        with self._lock:
+            self._left += n
+
+
+class BoundedServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address, handler, max_connections: int):
+        super().__init__(address, handler)
+        self._slots = threading.BoundedSemaphore(max_connections)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            # Answered here, without a thread: a full listener must not cost another one.
+            try:
+                request.settimeout(1.0)
+                request.sendall(BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def _refusal(target: str, kind: str, method: str):
@@ -53,9 +124,11 @@ def _refusal(target: str, kind: str, method: str):
     return None
 
 
-def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: float = UPSTREAM_TIMEOUT,
+def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: float | None = None,
                  max_body: int = MAX_BODY_BYTES, max_response: int = MAX_RESPONSE_BYTES,
-                 log=None) -> ThreadingHTTPServer:
+                 log=None, budget: ByteBudget | None = None) -> ThreadingHTTPServer:
+    timeout = timeout if timeout is not None else upstream_timeout()
+    budget = budget or ByteBudget(BUFFER_BYTES)
     if kind not in PATH_RULES:
         raise ValueError(f"unknown listener {kind!r}")
     up = urlsplit(upstream)
@@ -68,6 +141,8 @@ def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: flo
         protocol_version = "HTTP/1.1"
         server_version = "plugin-gateway"
         sys_version = ""
+        # Each read from the client; one that stops sending loses its connection.
+        timeout = CLIENT_TIMEOUT
 
         def log_message(self, *args):  # the one line per request is ours
             pass
@@ -104,7 +179,26 @@ def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: flo
                 return self._error(413, "body_too_large", f"A body is limited to {max_body} bytes.")
             if self.command == "GET" and length:
                 return self._error(400, "body_refused", "A GET has no body.")
-            body = self.rfile.read(length) if length else b""
+            if not budget.take(length):
+                return self._busy()
+            self._held = length
+            try:
+                return self._forward(length)
+            finally:
+                budget.give(self._held)
+
+        def _busy(self) -> int:
+            return self._error(503, "proxy_busy", "The plugin gateway proxy is busy; retry.")
+
+        def _forward(self, length: int) -> int:
+            try:
+                body = self.rfile.read(length) if length else b""
+            except OSError:  # the client stopped sending (CLIENT_TIMEOUT) or went away
+                self.close_connection = True
+                return 408
+            if len(body) < length:
+                self.close_connection = True
+                return 400
             headers = {"Host": f"{up_host}:{up_port}", "Connection": "close"}
             for name in FORWARDED_HEADERS:
                 value = self.headers.get(name)
@@ -113,6 +207,7 @@ def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: flo
             if self.command == "POST":
                 headers["Content-Length"] = str(len(body))
             conn = http.client.HTTPConnection(up_host, up_port, timeout=timeout)
+            chunks, size = [], 0
             try:
                 # putrequest, not request(): request() adds Accept-Encoding of its own.
                 conn.putrequest(self.command, self.path, skip_host=True, skip_accept_encoding=True)
@@ -120,17 +215,26 @@ def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: flo
                     conn.putheader(name, value)
                 conn.endheaders(body if self.command == "POST" else None)
                 resp = conn.getresponse()
-                data = resp.read(max_response + 1)
                 status, content_type = resp.status, resp.getheader("Content-Type") or "application/json"
+                while size <= max_response:
+                    chunk = resp.read(RESPONSE_CHUNK)
+                    if not chunk:
+                        break
+                    # Twice the chunk: joining the chunks copies them once more.
+                    if not budget.take(2 * len(chunk)):
+                        return self._busy()
+                    self._held += 2 * len(chunk)
+                    chunks.append(chunk)
+                    size += len(chunk)
             except (socket.timeout, TimeoutError):
                 return self._error(504, "upstream_timeout", "The upstream did not answer in time.")
             except (OSError, http.client.HTTPException):
                 return self._error(502, "upstream_unreachable", "The upstream could not be reached.")
             finally:
                 conn.close()
-            if len(data) > max_response:
+            if size > max_response:
                 return self._error(502, "upstream_response_too_large", "The upstream's answer is too large.")
-            self._answer(status, data, content_type)
+            self._answer(status, b"".join(chunks), content_type)
             return status
 
         def _run(self) -> None:
@@ -147,18 +251,17 @@ def build_server(kind: str, bind: str, port: int, upstream: str, *, timeout: flo
 
         do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = do_TRACE = do_CONNECT = _run
 
-    server = ThreadingHTTPServer((bind, port), Handler)
-    server.daemon_threads = True
-    return server
+    return BoundedServer((bind, port), Handler, MAX_CONNECTIONS)
 
 
 def main() -> None:
     bind = os.environ.get("PLUGIN_PROXY_BIND") or "0.0.0.0"
+    budget = ByteBudget(BUFFER_BYTES)
     servers = [
         build_server("gateway", bind, int(os.environ.get("PLUGIN_PROXY_GATEWAY_PORT") or 7071),
-                     os.environ.get("PLUGIN_GATEWAY_UPSTREAM") or "http://webapp:3000"),
+                     os.environ.get("PLUGIN_GATEWAY_UPSTREAM") or "http://webapp:3000", budget=budget),
         build_server("runner", bind, int(os.environ.get("PLUGIN_PROXY_RUNNER_PORT") or 7072),
-                     os.environ.get("PLUGIN_RUNNER_UPSTREAM") or "http://plugin-runner:7080"),
+                     os.environ.get("PLUGIN_RUNNER_UPSTREAM") or "http://plugin-runner:7080", budget=budget),
     ]
     for s in servers[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()

@@ -260,3 +260,85 @@ def test_main_listens_on_both_ports(monkeypatch):
     finally:
         proc.terminate()
         proc.wait(10)
+
+
+# --- one plugin must not take the proxy down for every other caller (phase 03 review) ---
+
+def _closed_within(sock, seconds):
+    """True when the proxy closes `sock` within `seconds` (whatever it sends first)."""
+    sock.settimeout(seconds)
+    try:
+        while sock.recv(4096):
+            pass
+        return True
+    except ConnectionResetError:
+        return True
+    except socket.timeout:
+        return False
+
+
+def test_an_idle_or_stalled_connection_is_closed(monkeypatch, upstream):
+    monkeypatch.setattr(proxy, "CLIENT_TIMEOUT", 1.0)
+    p = Proxy("gateway", upstream.base_url)
+    try:
+        idle = socket.create_connection(("127.0.0.1", p.port))
+        stalled = socket.create_connection(("127.0.0.1", p.port))
+        stalled.sendall(b"POST /api/plugin-gateway/v1/data/get HTTP/1.1\r\nHost: x\r\n"
+                        b"Content-Length: 100\r\n\r\n{")
+        assert _closed_within(idle, 5) and _closed_within(stalled, 5)
+        idle.close()
+        stalled.close()
+        assert upstream.requests == []
+    finally:
+        p.close()
+
+
+def test_a_full_listener_refuses_at_once_and_the_other_listener_still_answers(monkeypatch, upstream):
+    monkeypatch.setattr(proxy, "MAX_CONNECTIONS", 4)
+    gateway, runner_door = Proxy("gateway", upstream.base_url), Proxy("runner", upstream.base_url)
+    # Accepted in order, each taking its slot in the accept loop: the fifth finds none.
+    held = [socket.create_connection(("127.0.0.1", gateway.port)) for _ in range(4)]
+    try:
+        status, _, body = gateway.raw("POST", "/api/plugin-gateway/v1/data/get", b"{}")
+        assert status == 503 and b"proxy_busy" in body
+        assert runner_door.raw("GET", "/runner/v1/health")[0] == 200
+        for s in held:
+            s.close()
+        wait_until(lambda: gateway.raw("POST", "/api/plugin-gateway/v1/data/get", b"{}")[0] == 200, timeout=10)
+    finally:
+        for s in held:
+            s.close()
+        gateway.close()
+        runner_door.close()
+
+
+def test_buffered_bodies_and_answers_share_a_memory_budget(monkeypatch, upstream):
+    monkeypatch.setattr(proxy, "BUFFER_BYTES", 1024 * 1024)
+    p = Proxy("gateway", upstream.base_url)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", p.port, timeout=10)
+        conn.putrequest("POST", "/api/plugin-gateway/v1/data/put", skip_accept_encoding=True)
+        conn.putheader("Content-Length", str(2 * 1024 * 1024))
+        conn.endheaders()  # refused on the length alone, before a byte of it is read
+        r = conn.getresponse()
+        assert r.status == 503 and b"proxy_busy" in r.read() and upstream.requests == []
+        conn.close()
+        upstream.answer_raw(200, "y" * (2 * 1024 * 1024), "text/plain")
+        status, _, body = p.raw("POST", "/api/plugin-gateway/v1/data/get", b"{}")
+        assert status == 503 and b"proxy_busy" in body
+        # Released after each request: a small call passes again.
+        upstream.answer_json(200, {"ok": True})
+        assert p.raw("POST", "/api/plugin-gateway/v1/data/get", b"{}")[0] == 200
+    finally:
+        p.close()
+
+
+# Never under 660 s: the Gateway's LLM calls take up to 600 s whatever the action cap.
+@pytest.mark.parametrize("value,expected", [(None, 960.0), ("1200", 1260.0), ("120", 660.0), ("", 960.0),
+                                            ("abc", 960.0), ("0", 960.0)])
+def test_the_upstream_timeout_outlasts_the_action_cap(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("PLUGIN_ACTION_MAX_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("PLUGIN_ACTION_MAX_TIMEOUT", value)
+    assert proxy.upstream_timeout() == expected
