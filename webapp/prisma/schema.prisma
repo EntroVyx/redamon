@@ -33,6 +33,8 @@ model User {
   mcpTokens       McpAccessToken[]
   settings        UserSettings?
   apiUsageReport  ApiUsageReport?
+  pluginData      PluginData[]
+  pluginOverrides PluginOverride[]
   uiPreferences Json              @default("{}") @map("ui_preferences")
   // Per-user remembered model choices, used to pre-fill new projects.
   // Null until the user creates their first project and picks models.
@@ -1453,6 +1455,8 @@ model Project {
   nodeFilter                        ProjectNodeFilter?
   nodeFilterRuns                    NodeFilterRun[]
   nodeFilterExemptions              NodeFilterExemption[]
+  pluginData                        PluginData[]
+  pluginOverrides                   PluginOverride[]
 
   @@map("projects")
 }
@@ -2405,4 +2409,128 @@ model UserTradecraftResource {
   @@unique([userId, slug])
   @@index([userId])
   @@map("user_tradecraft_resources")
+}
+
+// ========== PLUGIN PLATFORM ==========
+// Four platform-owned tables, created once; installing a plugin never changes the
+// schema (docs/readmes/README.PLUGINS.md §7.4). Invariants Prisma cannot express
+// (one active override per target, status values, owner and scope consistency) are
+// applied after `db push` by scripts/apply-plugin-constraints.mjs.
+// `@default(cuid())` and `@updatedAt` are applied by the Prisma client, not by the
+// database: a raw SQL insert into these tables must supply `id` and `updated_at`.
+
+/// One row per plugin on this instance: the source of truth the plugins volume and the
+/// runner follow (README.PLUGINS.md §7.4, §9.1). `enabled` is what an admin wants;
+/// `status` is what the platform observed, and only the platform writes it.
+model PluginInstall {
+  pluginId            String    @id @map("plugin_id")
+  enabled             Boolean   @default(false)
+  status              String    @default("available")
+  activeVersion       String?   @map("active_version")
+  previousVersion     String?   @map("previous_version")
+  pendingVersion      String?   @map("pending_version")
+  dataVersion         Int       @default(0) @map("data_version")
+  previousDataVersion Int?      @map("previous_data_version")
+  grantedPermissions  Json      @default("[]") @map("granted_permissions")
+  // Contributions are read from here, never from the volume, on a page load.
+  manifest            Json?
+  // The pinned url and sha256, used to heal a lost volume.
+  catalogEntry        Json?     @map("catalog_entry")
+  // No foreign key: a cascade from the installing admin would uninstall the plugin
+  // for everyone when that admin is deleted.
+  installedBy         String?   @map("installed_by")
+  installedAt         DateTime? @map("installed_at")
+  // A lease instead of an advisory lock: a pooled Prisma connection cannot hold a
+  // session-level lock across requests. Kind and args tell crash recovery what an
+  // interrupted operation was (e.g. an uninstall with {mode: "purge"}).
+  operationId         String?   @map("operation_id")
+  operationKind       String?   @map("operation_kind")
+  operationArgs       Json?     @map("operation_args")
+  leaseExpiresAt      DateTime? @map("lease_expires_at")
+  lastError           String?   @map("last_error") @db.Text
+  // Written only by reconciliation when the signed catalog revokes the installed
+  // version. It stops serving without touching `enabled`, which stays the admin's.
+  revokedReason       String?   @map("revoked_reason") @db.Text
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  data                PluginData[]
+  overrides           PluginOverride[]
+
+  @@map("plugin_installs")
+}
+
+/// Everything a plugin stores, as JSON, in its own namespace. ownerId is the key the
+/// design names; userId/projectId repeat it as foreign keys so rows die with their
+/// owner (a unique key over nullable columns would not dedupe in Postgres).
+model PluginData {
+  id         String    @id @default(cuid())
+  pluginId   String    @map("plugin_id")
+  // "live", or "migrating:<operationId>" while a data migration runs on a copy.
+  namespace  String    @default("live")
+  ownerType  String    @map("owner_type")
+  ownerId    String    @map("owner_id")
+  userId     String?   @map("user_id")
+  projectId  String?   @map("project_id")
+  collection String
+  key        String
+  value      Json
+  sizeBytes  Int       @map("size_bytes")
+  expiresAt  DateTime? @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  plugin     PluginInstall @relation(fields: [pluginId], references: [pluginId], onDelete: Cascade)
+  user       User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project    Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([pluginId, namespace, ownerType, ownerId, collection, key])
+  @@index([pluginId, namespace, collection])
+  @@index([expiresAt])
+  @@map("plugin_data")
+}
+
+/// A value proposed at a behaviour extension point (skill.text). Rows that share a
+/// changeSetId were proposed and are decided together; an approved change set is a
+/// "version" and gets the next revision number for its scope and target group.
+model PluginOverride {
+  id             String    @id @default(cuid())
+  pluginId       String    @map("plugin_id")
+  extensionPoint String    @map("extension_point")
+  scopeType      String    @map("scope_type")
+  scopeId        String    @map("scope_id")
+  userId         String?   @map("user_id")
+  projectId      String?   @map("project_id")
+  targetGroup    String    @map("target_group")
+  targetKey      String    @map("target_key")
+  changeSetId    String    @map("change_set_id")
+  revision       Int?
+  value          String    @db.Text
+  baseSha256     String    @map("base_sha256")
+  status         String    @default("proposed")
+  note           String?   @db.Text
+  meta           Json?
+  // No foreign key, as for PluginInstall.installedBy: deleting an admin who decided a
+  // version must not delete the version from its owner's scope.
+  createdBy      String    @map("created_by")
+  decidedBy      String?   @map("decided_by")
+  decidedAt      DateTime? @map("decided_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  plugin         PluginInstall @relation(fields: [pluginId], references: [pluginId], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([extensionPoint, scopeType, scopeId, targetGroup, status])
+  @@index([changeSetId])
+  @@map("plugin_overrides")
+}
+
+/// Instance facts the plugin platform must remember: the highest catalog serial
+/// accepted (a lower one is a replayed catalog), the never-lowered version counters,
+/// the reconcile lease.
+model PluginPlatformState {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("plugin_platform_state")
 }
