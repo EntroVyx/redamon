@@ -36,6 +36,7 @@ from llm_guard import (master_key_is_weak, require_internal_auth,
 from logging_config import setup_logging
 from orchestrator import AgentOrchestrator
 from orchestrator_helpers import normalize_content
+from plugin_api import router as plugin_router
 from prompt_safety import wrap_untrusted, UNTRUSTED_OUTPUT_GUIDANCE
 from startup_guard import check_single_worker
 from utils import get_session_count
@@ -166,6 +167,10 @@ async def _request_validation_error(request, exc: RequestValidationError):
     # input, and a lone surrogate in it (a target string recon passed through)
     # fails the UTF-8 render, which turned a 422 into a 500.
     return _AsciiJSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+
+# Plugin platform: the overridable built-in skill parts and their validator.
+app.include_router(plugin_router)
 
 
 # =============================================================================
