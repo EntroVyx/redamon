@@ -95,10 +95,17 @@ describe.skipIf(!ON)('plugin actions on the running stack (PLUGINS_INTEGRATION=1
 
   test('a worker that crashes fails its action; the platform keeps serving (D-12)', async () => {
     const crashed = await action('crash', { code: 3 })
-    expect(crashed.status).toBeGreaterThanOrEqual(500)
+    expect(crashed).toMatchObject({ status: 502, body: { code: 'worker_crashed' } })
     const status = await call('/api/plugins/status')
     expect(status.body).toMatchObject({ runner: { reachable: true } })
-    const again = await action('echo', { after: 'crash' })
+    // The supervisor replaces the worker with a backoff: meanwhile a coded 503, then service.
+    const until = Date.now() + 30_000
+    let again = await action('echo', { after: 'crash' })
+    while (again.status !== 200 && Date.now() < until) {
+      expect(again).toMatchObject({ status: 503, body: { code: 'worker_unavailable' } })
+      await new Promise((r) => setTimeout(r, 500))
+      again = await action('echo', { after: 'crash' })
+    }
     expect(again.body).toMatchObject({ ok: true, result: { echo: { after: 'crash' } } })
   }, 90_000)
 })
