@@ -242,7 +242,7 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
 
     test('approve and delete of one set at once never both succeed', async () => {
       const id = await propose(alice, { workflow: 'W' })
-      const rs = await settle([ov.approve(id, 'alice', H, db), ov.deleteChangeSet(id, db)])
+      const rs = await settle<unknown>([ov.approve(id, 'alice', H, db), ov.deleteChangeSet(id, db)])
       expect(rs.map(outcome).sort()).toEqual(expect.arrayContaining(['ok']))
       expect(rs.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     })
