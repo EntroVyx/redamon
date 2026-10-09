@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma'
-import { builtinSkillName } from '@/lib/builtinSkills'
+import { KNOWN_ATTACK_PATH_CONFIG } from '@/app/graph/components/AIAssistantDrawer/phaseConfig'
 import { auditPlugin } from './audit'
 import { BEHAVIOUR_EXTENSION_POINTS, POINT_PERMISSION, type BehaviourExtensionPoint } from './extensionPoints'
 import { GatewayError, type GatewayContext } from './gateway'
@@ -21,6 +21,15 @@ import { registrySkill, validateSkillParts, type RegistrySkill } from './skillPa
  */
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 const MAX_PARTS = 50
+
+/**
+ * A built-in skill's name as the UI shows it. Taken from the chat drawer's per-skill config,
+ * a layer every built-in skill already fills, rather than a list of its own that a new skill
+ * could forget; the id for a skill it does not know.
+ */
+export function skillDisplayName(skillId: string): string {
+  return Object.hasOwn(KNOWN_ATTACK_PATH_CONFIG, skillId) ? KNOWN_ATTACK_PATH_CONFIG[skillId].label : skillId
+}
 
 const isPoint = (p: unknown): p is BehaviourExtensionPoint => (BEHAVIOUR_EXTENSION_POINTS as readonly unknown[]).includes(p)
 
@@ -63,7 +72,7 @@ export async function getOverride(ctx: GatewayContext): Promise<Record<string, u
   return {
     point,
     targetGroup: group,
-    displayName: builtinSkillName(group),
+    displayName: skillDisplayName(group),
     parts: skill.parts.map((p) => ({ partId: p.partId, text: p.text, sha256: p.sha256, chars: p.chars, maxChars: p.maxChars })),
     active: set
       ? {
