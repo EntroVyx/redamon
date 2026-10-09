@@ -134,7 +134,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
   if (TOKEN_AUTH_PREFIXES.some(p => pathname.startsWith(p))) {
-    return NextResponse.next()
+    // No session on these routes: user headers can only be the caller's own.
+    const headers = new Headers(request.headers)
+    headers.delete('x-user-id')
+    headers.delete('x-user-role')
+    return NextResponse.next({ request: { headers } })
   }
 
   // Allow static assets and Next.js internals

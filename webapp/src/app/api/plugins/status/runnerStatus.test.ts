@@ -69,6 +69,15 @@ describe('runner states', () => {
     expect((await res.json()).runner).toEqual({ reachable: false, error: 'runner_unavailable' })
   })
 
+  test.each([[{}], [{ platformVersion: '1.0.0', state: 'ok', workers: 'none' }], [[1, 2]]])(
+    'a health answer of the wrong shape (%j): reachable false, not a 5xx', async (body) => {
+      const s = await startFakeServer({ 'GET /runner/v1/health': { body } })
+      vi.stubEnv('PLUGIN_RUNNER_URL', s.baseUrl)
+      const res = await GET()
+      expect(res.status).toBe(200)
+      expect((await res.json()).runner).toEqual({ reachable: false, error: 'runner_unavailable' })
+    })
+
   test('a runner with another key: reachable false, unauthorized', async () => {
     const r = await startFakeRunner({ runnerKey: 'o'.repeat(64) })
     vi.stubEnv('PLUGIN_RUNNER_URL', r.baseUrl)

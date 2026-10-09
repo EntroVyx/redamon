@@ -10,6 +10,7 @@ import { describe, test, expect, afterEach } from 'vitest'
 import { startFakeRunner } from './__testing__/fakeRunner'
 import { closeAllFakeServers, startFakeServer } from './__testing__/fakeHttpServer'
 import {
+  RUNNER_TIMEOUTS,
   RunnerError,
   RunnerUnavailableError,
   actionTimeoutMs,
@@ -158,6 +159,14 @@ describe('failures', () => {
     await expect(runnerHealth({ baseUrl: s.baseUrl, key: KEY })).rejects.toBeInstanceOf(RunnerUnavailableError)
   })
 
+  test.each([[{}], [{ platformVersion: '1.0.0', bootId: 'b', state: 'ok' }], [{ platformVersion: 1, bootId: 'b', state: 'ok', workers: [] }]])(
+    'a health answer of the wrong shape (%j) is a bad response', async (body) => {
+      const s = await startFakeServer({ 'GET /runner/v1/health': { body } })
+      await expect(runnerHealth({ baseUrl: s.baseUrl, key: KEY })).rejects.toMatchObject({
+        name: 'RunnerUnavailableError', reason: 'bad_response',
+      })
+    })
+
   test('an error answer without a code', async () => {
     const s = await startFakeServer({ 'GET /runner/v1/health': { status: 500, body: 'oops' } })
     await expect(runnerHealth({ baseUrl: s.baseUrl, key: KEY })).rejects.toMatchObject({
@@ -176,6 +185,52 @@ describe('failures', () => {
     await expect(runAction(pluginId, action, { token: 't', params: {}, ctx: CTX, timeoutSeconds: 5 }, config))
       .rejects.toBeInstanceOf(TypeError)
     expect(r.server.calls).toHaveLength(0)
+  })
+
+  test.each([
+    [502, 'upstream_unreachable', 'unreachable'],
+    [504, 'upstream_timeout', 'timeout'],
+    [502, 'upstream_response_too_large', 'bad_response'],
+    [503, 'proxy_busy', 'unreachable'],
+  ])('the proxy answering %i %s means the runner is unavailable', async (status, code, reason) => {
+    const s = await startFakeServer({ 'GET /runner/v1/health': { status, body: { error: 'From the proxy.', code } } })
+    await expect(runnerHealth({ baseUrl: s.baseUrl, key: KEY })).rejects.toMatchObject({
+      name: 'RunnerUnavailableError', reason,
+    })
+  })
+
+  test("the supervisor's own 502 and 504 stay RunnerErrors", async () => {
+    const { config } = await fake({
+      actions: { 'echo/crash': () => ({ status: 502, body: { error: 'Gone.', code: 'worker_crashed' } }),
+                 'echo/slow': () => ({ status: 504, body: { error: 'Too slow.', code: 'action_timeout' } }) },
+    })
+    const req = { token: 't', params: {}, ctx: CTX, timeoutSeconds: 5 }
+    await expect(runAction('echo', 'crash', req, config)).rejects.toMatchObject({
+      name: 'RunnerError', status: 502, code: 'worker_crashed',
+    })
+    await expect(runAction('echo', 'slow', req, config)).rejects.toMatchObject({
+      name: 'RunnerError', status: 504, code: 'action_timeout',
+    })
+  })
+
+  test.each([['../health'], [''], ['a'.repeat(201)], ['a b'], [42]])(
+    'a job id that is not one (%s) never becomes a request', async (jobId) => {
+      const { r, config } = await fake()
+      const req = { token: 't', params: {}, ctx: CTX, timeoutSeconds: 5, async: true, jobId: jobId as string }
+      await expect(runAction('echo', 'sleep', req, config)).rejects.toBeInstanceOf(TypeError)
+      expect(r.server.calls).toHaveLength(0)
+    })
+
+  test('an async action without a job id never becomes a request', async () => {
+    const { r, config } = await fake()
+    await expect(runAction('echo', 'sleep', { token: 't', params: {}, ctx: CTX, timeoutSeconds: 5, async: true }, config))
+      .rejects.toBeInstanceOf(TypeError)
+    expect(r.server.calls).toHaveLength(0)
+  })
+
+  test('a reload may take as long as the runner starting and stopping workers', () => {
+    // Up to 30 s for a new worker to say ready, then the replaced ones stop and scrub.
+    expect(RUNNER_TIMEOUTS.reload).toBeGreaterThanOrEqual(60_000)
   })
 
   test('an action may run its timeout plus ten seconds of margin', () => {

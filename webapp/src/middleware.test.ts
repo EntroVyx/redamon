@@ -281,10 +281,17 @@ describe('plugin token-auth prefixes (RV-33)', () => {
     expect(res.status).toBe(401)
   })
 
-  test('a token route never gets user headers from the middleware', async () => {
-    // A cookie-less request passes untouched: nothing injects x-user-id, so a handler
-    // that read it would read only what the caller sent, which is why none does.
-    const res = await middleware(makeRequest('/api/plugin-gateway/v1/data/get'))
-    expect(res.headers.get('x-middleware-request-x-user-id')).toBeNull()
-  })
+  test.each(['/api/plugin-gateway/v1/data/get', '/api/plugin-runner/v1/run-list'])(
+    '%s never carries user headers, not even ones the caller sent', async (path) => {
+      const res = await middleware(makeRequest(path, {
+        headers: { 'x-user-id': 'admin-user', 'x-user-role': 'admin', authorization: 'Bearer t' },
+      }))
+      expect(res.status).toBe(200)
+      // The headers the handler receives are exactly this list (Next.js request override).
+      const forwarded = (res.headers.get('x-middleware-override-headers') ?? '').split(',')
+      expect(forwarded).toContain('authorization')
+      expect(forwarded).not.toContain('x-user-id')
+      expect(forwarded).not.toContain('x-user-role')
+      expect(res.headers.get('x-middleware-request-x-user-id')).toBeNull()
+    })
 })
