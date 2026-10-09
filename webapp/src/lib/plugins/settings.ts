@@ -11,6 +11,11 @@ function positiveInt(name: string, fallback: number): number {
   return Number.isSafeInteger(n) && n > 0 ? n : fallback
 }
 
+/** The cap on any plugin action's timeout, whatever its manifest says (the runner applies it too). */
+export function actionMaxTimeoutSeconds(): number {
+  return positiveInt('PLUGIN_ACTION_MAX_TIMEOUT', 900)
+}
+
 export interface DataLimits {
   maxRows: number
   maxBytes: number
