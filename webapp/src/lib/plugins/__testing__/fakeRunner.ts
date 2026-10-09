@@ -7,7 +7,7 @@
  *   GET  /runner/v1/health
  *   POST /runner/v1/reload
  *   POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId}
- *   POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel
+ *   POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel     200 | 404 unknown_job
  *   GET  /runner/v1/plugins/{id}/logs?lines=N
  *
  * Every route requires `X-Plugin-Runner-Key`; no key configured → 503
@@ -44,7 +44,10 @@ export interface FakeRunnerOptions {
   bootId?: string
   state?: 'ok' | 'out_of_date' | 'degraded'
   workers?: FakeWorker[]
-  /** Keyed `${pluginId}/${action}`; an unknown pair answers 404 unknown_action. */
+  /**
+   * Keyed `${pluginId}/${action}`. A plugin with no key here answers 404 unknown_plugin,
+   * an undeclared action of a known plugin 404 unknown_action (as the real supervisor).
+   */
   actions?: Record<string, ActionScript>
   /** Keyed by plugin id. */
   logs?: Record<string, string[]>
@@ -56,6 +59,7 @@ export interface FakeRunner {
   options: Required<Pick<FakeRunnerOptions, 'platformVersion' | 'bootId' | 'state'>> & FakeRunnerOptions
   reloads: number
   actionCalls: ActionCall[]
+  /** Accepted cancels: of jobs whose script was still running. */
   cancels: Array<{ pluginId: string; jobId: string }>
   /** Calls refused for a missing or wrong key. */
   refused: FakeRequest[]
@@ -87,6 +91,9 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
     cancels: [] as Array<{ pluginId: string; jobId: string }>,
     refused: [] as FakeRequest[],
   }
+  // `${pluginId}/${jobId}` of async scripts still running, for cancel.
+  const running = new Set<string>()
+  const knownPlugin = (id: string) => Object.keys(options.actions ?? {}).some((k) => k.startsWith(`${id}/`))
 
   const handle = async (req: FakeRequest): Promise<FakeResponse> => {
     if (!options.runnerKey) return json(503, { error: 'The plugin runner has no key configured.', code: 'runner_not_configured' })
@@ -100,7 +107,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
     }
     if (req.method === 'POST' && p === '/runner/v1/reload') {
       record.reloads++
-      return json(200, { ok: true })
+      return json(200, { ok: options.state === 'ok', state: options.state, workers: (options.workers ?? []).length })
     }
     let m = /^\/runner\/v1\/plugins\/([^/]+)\/actions\/([^/]+)$/.exec(p)
     if (req.method === 'POST' && m) {
@@ -113,19 +120,31 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
       }
       const call = { pluginId, action, body }
       record.actionCalls.push(call)
+      if (!knownPlugin(pluginId)) {
+        return json(404, { error: `Plugin ${pluginId} is not running.`, code: 'unknown_plugin' })
+      }
       const script = options.actions?.[`${pluginId}/${action}`]
-      if (!script) return json(404, { error: `Unknown action ${pluginId}/${action}.`, code: 'unknown_action' })
+      if (!script) return json(404, { error: `Plugin ${pluginId} declares no action ${action}.`, code: 'unknown_action' })
       if (body.async === true) {
+        const jobId = typeof body.jobId === 'string' ? body.jobId : randomUUID()
+        const key = `${pluginId}/${jobId}`
+        running.add(key)
         // The job's outcome is the caller's to observe; a rejection must not crash the test run.
-        void Promise.resolve(script(call)).catch(() => undefined)
-        return json(202, { jobId: typeof body.jobId === 'string' ? body.jobId : randomUUID() })
+        void Promise.resolve(script(call))
+          .catch(() => undefined)
+          .finally(() => running.delete(key))
+        return json(202, { jobId })
       }
       const out = await script(call)
       return 'result' in out ? json(200, { ok: true, result: out.result }) : out
     }
     m = /^\/runner\/v1\/plugins\/([^/]+)\/jobs\/([^/]+)\/cancel$/.exec(p)
     if (req.method === 'POST' && m) {
-      record.cancels.push({ pluginId: decodeURIComponent(m[1]), jobId: decodeURIComponent(m[2]) })
+      const [pluginId, jobId] = [decodeURIComponent(m[1]), decodeURIComponent(m[2])]
+      if (!running.has(`${pluginId}/${jobId}`)) {
+        return json(404, { error: `Job ${jobId} is not running.`, code: 'unknown_job' })
+      }
+      record.cancels.push({ pluginId, jobId })
       return json(200, { ok: true })
     }
     m = /^\/runner\/v1\/plugins\/([^/]+)\/logs$/.exec(p)

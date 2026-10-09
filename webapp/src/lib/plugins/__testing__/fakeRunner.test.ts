@@ -86,17 +86,31 @@ describe('fakeRunner: the supervisor routes', () => {
     finish()
   })
 
-  test('an unknown plugin or action answers 404 unknown_action', async () => {
-    const r = await startFakeRunner({ runnerKey: KEY })
-    const res = await post(`${r.baseUrl}/runner/v1/plugins/nope/actions/run`, {})
-    expect(res.status).toBe(404)
-    expect((await res.json()).code).toBe('unknown_action')
+  // As the real supervisor answers (services/plugin_runner/tests/runner_contract_cases.json).
+  test('an unknown plugin answers 404 unknown_plugin, an undeclared action 404 unknown_action', async () => {
+    const r = await startFakeRunner({ runnerKey: KEY, actions: { 'demo/run': () => ({ result: {} }) } })
+    const plugin = await post(`${r.baseUrl}/runner/v1/plugins/nope/actions/run`, {})
+    expect(plugin.status).toBe(404)
+    expect((await plugin.json()).code).toBe('unknown_plugin')
+    const action = await post(`${r.baseUrl}/runner/v1/plugins/demo/actions/other`, {})
+    expect(action.status).toBe(404)
+    expect((await action.json()).code).toBe('unknown_action')
   })
 
-  test('cancel is recorded', async () => {
-    const r = await startFakeRunner({ runnerKey: KEY })
+  test('cancel of a running job is accepted and recorded; an unknown job is 404 unknown_job', async () => {
+    let finish!: () => void
+    const r = await startFakeRunner({
+      runnerKey: KEY,
+      actions: { 'demo/run': () => new Promise((resolve) => { finish = () => resolve({ result: {} }) }) },
+    })
+    await post(`${r.baseUrl}/runner/v1/plugins/demo/actions/run`, { async: true, jobId: 'job-9' })
     expect((await post(`${r.baseUrl}/runner/v1/plugins/demo/jobs/job-9/cancel`, {})).status).toBe(200)
     expect(r.cancels).toEqual([{ pluginId: 'demo', jobId: 'job-9' }])
+    const unknown = await post(`${r.baseUrl}/runner/v1/plugins/demo/jobs/job-0/cancel`, {})
+    expect(unknown.status).toBe(404)
+    expect((await unknown.json()).code).toBe('unknown_job')
+    expect(r.cancels).toHaveLength(1)
+    finish()
   })
 
   test('logs return the last N lines, N capped at 1000', async () => {

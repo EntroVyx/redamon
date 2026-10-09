@@ -251,3 +251,40 @@ describe('MCP path separation (plan 9.1/9.2)', () => {
     expect((await middleware(makeRequest('/api/mcpserver'))).status).toBe(401)
   })
 })
+
+describe('plugin token-auth prefixes (RV-33)', () => {
+  // Plugin code calls the Gateway with a call token and the runner calls the run list
+  // with its key; neither has a session cookie. The handlers authenticate themselves
+  // and never honour the cookie, X-Internal-Key or getEffectiveUser.
+  test.each([
+    '/api/plugin-gateway/v1/data/get',
+    '/api/plugin-gateway/v1/session/read',
+    '/api/plugin-runner/v1/run-list',
+  ])('%s passes the middleware with no cookie', async (path) => {
+    const res = await middleware(makeRequest(path))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('location')).toBeNull()
+  })
+
+  test.each([
+    '/api/plugin-gateway/v10/data/get',
+    '/api/plugin-gateway/v1',
+    '/api/plugin-gateway',
+    '/api/plugin-gatewayx/v1/data/get',
+    '/api/plugin-runner/v2/run-list',
+    '/api/plugin-runnerx/v1/run-list',
+    '/api/plugins/status',
+    '/api/plugins',
+    '/api/internal/plugins/reconcile',
+  ])('%s still needs a session', async (path) => {
+    const res = await middleware(makeRequest(path))
+    expect(res.status).toBe(401)
+  })
+
+  test('a token route never gets user headers from the middleware', async () => {
+    // A cookie-less request passes untouched: nothing injects x-user-id, so a handler
+    // that read it would read only what the caller sent, which is why none does.
+    const res = await middleware(makeRequest('/api/plugin-gateway/v1/data/get'))
+    expect(res.headers.get('x-middleware-request-x-user-id')).toBeNull()
+  })
+})

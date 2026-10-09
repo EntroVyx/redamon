@@ -14,6 +14,13 @@ const AUTH_COOKIE_NAME = 'redamon-auth'
 // the OUTBOUND plugin-admin routes (/api/mcp/manifest|reload|test) public too.
 const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/api/health', '/api/version/check', '/api/global/tunnel-config/sync', '/api/mcp-server']
 
+// Plugin platform routes that authenticate with their own credential and no cookie:
+// plugin code calls the Gateway with a call token, the runner fetches its run list with
+// the runner key. Their handlers never honour X-Internal-Key, getSession or the
+// effective user (RV-33). Each entry is an exact prefix ending at the version segment's
+// `/`: without it, `/api/plugin-gateway/v10/` or `/api/plugin-gatewayx` would be public.
+const TOKEN_AUTH_PREFIXES = ['/api/plugin-gateway/v1/', '/api/plugin-runner/v1/']
+
 // S2/E2: the internal-key bypass is scoped to exactly the routes that internal
 // services (agent / orchestrator / recon) legitimately reach with X-Internal-Key.
 // A valid key on ANY OTHER route no longer skips JWT once enforcement is on.
@@ -124,6 +131,9 @@ export async function middleware(request: NextRequest) {
 
   // Allow public paths
   if (PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))) {
+    return NextResponse.next()
+  }
+  if (TOKEN_AUTH_PREFIXES.some(p => pathname.startsWith(p))) {
     return NextResponse.next()
   }
 
