@@ -155,7 +155,8 @@ def test_the_temp_dir_is_the_workers_own(runner, plugins_dir):
 @root_only
 def test_a_uid_is_released_when_its_worker_goes(runner, plugins_dir):
     from tests.support import run_list
-    h = runner([install_plugin(plugins_dir)])
+    # One UID only: the next worker can start only once the first one released it.
+    h = runner([install_plugin(plugins_dir)], uid_range=(TEST_UID_RANGE[0], TEST_UID_RANGE[0]))
     uid = h.health()["workers"][0]["uid"]
     h.run_list = run_list([])
     h.reload()

@@ -1383,6 +1383,9 @@ services:
     cap_drop: [ALL]
     # SETUID/SETGID to start each worker under its own UID, KILL to stop them.
     cap_add: [SETUID, SETGID, KILL]
+    # An init as PID 1 reaps what a plugin left behind once it is killed: as zombies they
+    # would keep counting against the next worker's process limit under the same UID.
+    init: true
     # NOTE: no `no-new-privileges` here: on the reference host (experiment E2) it stops
     # every container from exec'ing its first process. The image strips every
     # setuid/setgid bit instead (services/plugin_runner/Dockerfile).

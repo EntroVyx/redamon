@@ -26,6 +26,7 @@ class Manager:
         self.workers: dict = {}
         self.desired: set = set()
         self._uids: set = set()
+        self._next_uid = settings.uid_range[0]
         self._lock = asyncio.Lock()
         self.job_tasks: set = set()
 
@@ -35,12 +36,17 @@ class Manager:
     # -- uids ------------------------------------------------------------------
 
     def _allocate_uid(self) -> Optional[int]:
+        """The next free UID after the last one handed out: a released UID is the last to
+        be reused, by then long scrubbed."""
         if not self.settings.spawn_as_user:
             return None
         low, high = self.settings.uid_range
-        for uid in range(low, high + 1):
+        span = high - low + 1
+        for i in range(span):
+            uid = low + (self._next_uid - low + i) % span
             if uid not in self._uids:
                 self._uids.add(uid)
+                self._next_uid = uid + 1
                 return uid
         raise RuntimeError("no free worker UID")
 
@@ -78,23 +84,31 @@ class Manager:
         for key in [k for k in self.workers if k not in wanted]:
             del self.workers[key]
         starts = []
-        for key, entry in wanted.items():
-            handle = self.workers.get(key)
-            if handle is not None:
-                handle.entry = entry  # the same version: only the action list may differ
-                if handle.state == "failed":
-                    starts.append(handle.start())
-                continue
-            handle = WorkerHandle(settings=self.settings, logs=self.logs, clock=self.clock, entry=entry,
-                                  uid=self._allocate_uid(), should_run=self._should_run,
-                                  release_uid=self._release_uid)
-            self.workers[key] = handle
-            starts.append(handle.start())
-        # New versions first, then the replaced ones go: an update never leaves a gap.
-        if starts:
-            await asyncio.gather(*starts)
-        if removed:
-            await asyncio.gather(*(h.stop() for h in removed))
+        # The removed workers are stopped whatever happens to the new ones: they are no
+        # longer tracked anywhere else.
+        try:
+            for key, entry in wanted.items():
+                handle = self.workers.get(key)
+                if handle is not None:
+                    handle.entry = entry  # the same version: only the action list may differ
+                    if handle.state == "failed":
+                        starts.append(handle.start())
+                    continue
+                try:
+                    uid = self._allocate_uid()
+                except RuntimeError as e:
+                    self.log(f"{key[0]} {key[1]} not started, retried at the next reload: {e}")
+                    continue
+                handle = WorkerHandle(settings=self.settings, logs=self.logs, clock=self.clock, entry=entry,
+                                      uid=uid, should_run=self._should_run, release_uid=self._release_uid)
+                self.workers[key] = handle
+                starts.append(handle.start())
+            # New versions first, then the replaced ones go: an update never leaves a gap.
+            if starts:
+                await asyncio.gather(*starts, return_exceptions=True)
+        finally:
+            if removed:
+                await asyncio.gather(*(h.stop() for h in removed), return_exceptions=True)
 
     async def periodic(self) -> None:
         while True:

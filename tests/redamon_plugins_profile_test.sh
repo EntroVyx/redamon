@@ -90,6 +90,8 @@ eq "mounts the plugins volume read-only at /plugins" \
 eq "read-only root filesystem" "$(q "$C" "$R.get('read_only')")" "True"
 eq "drops every capability" "$(q "$C" "$R.get('cap_drop')")" "['ALL']"
 eq "adds back only SETUID, SETGID, KILL" "$(q "$C" "sorted($R.get('cap_add',[]))")" "['KILL', 'SETGID', 'SETUID']"
+eq "an init reaps what killed plugin processes leave (zombies count against a UID's nproc)" \
+   "$(q "$C" "$R.get('init')")" "True"
 eq "has a /tmp tmpfs for the workers" "$(q "$C" "any(t.startswith('/tmp') for t in $R.get('tmpfs',[]))")" "True"
 eq "memory, pids and cpu limits" "$(q "$C" "all(k in $R for k in ('mem_limit','pids_limit','cpus'))")" "True"
 eq "the runner key comes from .env" "$(q "$C" "'PLUGIN_RUNNER_KEY' in $R['environment']")" "True"

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
 
 import httpx
 from fastapi import FastAPI, Request
@@ -158,10 +159,21 @@ def create_app(settings: Settings, *, clock=SYSTEM_CLOCK, logs: LogBuffer | None
     return app
 
 
+def listening_socket(port: int) -> socket.socket:
+    """The API's socket, listening before the lifespan starts any worker. Workers share
+    this network namespace, and uvicorn binds only after the lifespan: a plugin that
+    listened on the port first would receive the webapp's calls and the runner key."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", port))
+    sock.listen(2048)
+    return sock
+
+
 def main() -> None:
     import uvicorn
-    uvicorn.run(create_app(Settings.from_env()), host="0.0.0.0", port=DEFAULT_PORT,
-                log_level="warning", access_log=False)
+    config = uvicorn.Config(create_app(Settings.from_env()), log_level="warning", access_log=False)
+    uvicorn.Server(config).run(sockets=[listening_socket(DEFAULT_PORT)])
 
 
 if __name__ == "__main__":

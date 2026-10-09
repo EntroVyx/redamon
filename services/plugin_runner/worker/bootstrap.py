@@ -29,6 +29,8 @@ import os
 import queue
 import re
 import resource
+import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -94,12 +96,83 @@ class Protocol:
 
 def _parse_args(argv):
     p = argparse.ArgumentParser(add_help=False)
-    p.add_argument("--root", required=True)
-    p.add_argument("--sdk", required=True)
-    p.add_argument("--mem-mb", type=int, required=True)
-    p.add_argument("--nproc", type=int, required=True)
-    p.add_argument("--proto-fd", type=int, required=True)
-    return p.parse_args(argv)
+    p.add_argument("--root")
+    p.add_argument("--sdk")
+    p.add_argument("--mem-mb", type=int)
+    p.add_argument("--nproc", type=int)
+    p.add_argument("--proto-fd", type=int)
+    # Given by the supervisor when the worker has a UID of its own (see _scrub).
+    p.add_argument("--scrub", action="store_true")
+    p.add_argument("--scrub-only", action="store_true")
+    args = p.parse_args(argv)
+    if not args.scrub_only:
+        missing = [n for n in ("root", "sdk", "mem_mb", "nproc", "proto_fd") if getattr(args, n) is None]
+        if missing:
+            p.error("missing " + ", ".join("--" + n.replace("_", "-") for n in missing))
+    return args
+
+
+# Where a worker can leave something behind: the container's shared writable places.
+SCRUB_DIRS = ("/tmp", "/dev/shm", "/dev/mqueue")
+# /proc/sysvipc/<kind>: the column holding the owner's UID, and the libc call removing it.
+SYSV_IPC = (("shm", 7, "shmctl"), ("msg", 7, "msgctl"), ("sem", 4, "semctl"))
+IPC_RMID = 0
+
+
+def _rmtree_as_owner(path: str) -> None:
+    def retry(func, p, _exc):
+        # A directory its creator made unreadable: the owner may open it up again.
+        try:
+            os.chmod(p if func is not os.rmdir else os.path.dirname(p), 0o700)
+            func(p)
+        except OSError:
+            pass
+    shutil.rmtree(path, onerror=retry)
+
+
+def _scrub() -> int:
+    """Deletes everything this UID owns in the container's shared writable places.
+
+    UIDs are released and later given to another plugin's worker: whatever the previous
+    worker left (its temp dir, files in /tmp or /dev/shm, message queues, SysV IPC objects)
+    would be readable by the next owner of the UID. Runs as that UID: the supervisor holds
+    no capability to enter another user's 0700 directory, but the owner may delete it."""
+    uid = os.getuid()
+    if uid == 0:
+        return 0
+    removed = 0
+    for d in SCRUB_DIRS:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(d, name)
+            try:
+                st = os.lstat(path)
+                if st.st_uid != uid:
+                    continue
+                if stat.S_ISDIR(st.st_mode):
+                    _rmtree_as_owner(path)
+                else:
+                    os.unlink(path)
+                removed += 1
+            except OSError:
+                pass
+    libc = ctypes.CDLL(None, use_errno=True)
+    for kind, uid_col, call in SYSV_IPC:
+        try:
+            with open(f"/proc/sysvipc/{kind}") as f:
+                rows = [line.split() for line in f.readlines()[1:]]
+        except OSError:
+            continue
+        for row in rows:
+            if len(row) > uid_col and row[uid_col] == str(uid):
+                ident = int(row[1])
+                rc = (libc.semctl(ident, 0, IPC_RMID) if call == "semctl"
+                      else getattr(libc, call)(ident, IPC_RMID, None))
+                removed += rc == 0
+    return removed
 
 
 def _lower(limit: int, value: int) -> None:
@@ -128,6 +201,12 @@ def _harden(args) -> str:
     libc.mallopt(M_ARENA_MAX, MALLOC_ARENAS)
     # No unprivileged per-process CPU cap exists; the container's `cpus:` is the hard bound.
     os.nice(10)
+    # Before this worker's own temp dir exists: what a crashed predecessor under the same
+    # UID left behind goes first.
+    if args.scrub:
+        _scrub()
+    # Nothing this worker writes in the shared /tmp or /dev/shm is readable by another one.
+    os.umask(0o077)
     # Created by the worker itself, so it is 0700 and its own without CAP_CHOWN.
     tmp = tempfile.mkdtemp(prefix="plugin-", dir="/tmp")
     os.environ["HOME"] = tmp
@@ -286,6 +365,11 @@ class Worker:
 
 def main(argv) -> None:
     args = _parse_args(argv)
+    if args.scrub_only:
+        # The supervisor's clean-up before it hands this UID to another worker.
+        removed = _scrub()
+        sys.stderr.write(f"worker: scrubbed {removed} item(s)\n")
+        os._exit(0)
     try:
         proto = Protocol(args.proto_fd)
     except OSError as e:

@@ -17,6 +17,7 @@ from typing import Optional
 
 # The protocol line limit: a 2 MB result plus its envelope.
 PROTO_LINE_LIMIT = 2 * 1024 * 1024 + 64 * 1024
+SCRUB_TIMEOUT = 30.0
 
 
 def worker_env(settings) -> dict:
@@ -29,10 +30,12 @@ def worker_env(settings) -> dict:
     }
 
 
-def worker_argv(settings, root: str, proto_fd: int) -> list:
+def worker_argv(settings, root: str, proto_fd: int, scrub: bool = False) -> list:
+    # --scrub only with a UID of its own: under the supervisor's (a test run) it would
+    # delete that user's files.
     return [settings.python, "-I", "-S", settings.bootstrap, "--root", root,
             "--sdk", settings.sdk_dir, "--mem-mb", str(settings.worker_mem_mb),
-            "--nproc", str(settings.worker_nproc), "--proto-fd", str(proto_fd)]
+            "--nproc", str(settings.worker_nproc), "--proto-fd", str(proto_fd)] + (["--scrub"] if scrub else [])
 
 
 async def spawn(settings, root: str, uid: Optional[int]):
@@ -44,7 +47,8 @@ async def spawn(settings, root: str, uid: Optional[int]):
     if uid is not None:
         kwargs.update(user=uid, group=uid, extra_groups=[])
     try:
-        proc = await asyncio.create_subprocess_exec(*worker_argv(settings, root, write_fd), **kwargs)
+        proc = await asyncio.create_subprocess_exec(*worker_argv(settings, root, write_fd, uid is not None),
+                                                    **kwargs)
     except BaseException:
         os.close(read_fd)
         raise
@@ -61,3 +65,24 @@ async def spawn(settings, root: str, uid: Optional[int]):
             os.killpg(proc.pid, signal.SIGKILL)
         raise
     return proc, reader
+
+
+async def scrub(settings, uid: int) -> str:
+    """Deletes what `uid` left in the shared temp places (worker/bootstrap.py --scrub-only,
+    run as that UID: the supervisor holds no capability to enter its 0700 directories).
+    Returns the scrub's report; raises when it did not finish."""
+    proc = await asyncio.create_subprocess_exec(
+        settings.python, "-I", "-S", settings.bootstrap, "--scrub-only",
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        env=worker_env(settings), cwd="/", process_group=0, close_fds=True,
+        user=uid, group=uid, extra_groups=[])
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), SCRUB_TIMEOUT)
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        raise
+    report = err.decode("utf-8", "replace").strip()[-300:]
+    if proc.returncode != 0:
+        raise OSError(f"the scrub exited with code {proc.returncode}: {report}")
+    return report

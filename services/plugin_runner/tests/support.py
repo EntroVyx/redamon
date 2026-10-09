@@ -237,8 +237,26 @@ RUNNER_KEY = "test-runner-key-0123456789abcdef"
 IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 # The gate runs test files in parallel processes, each with its own supervisor. A
 # supervisor kills every process left under a UID it releases, so two of them must never
-# hand out the same UIDs: each test process gets its own slice of the worker range.
-_SLICE = 20000 + (os.getpid() % 99) * 100
+# hand out the same UIDs: each test process claims its own slice of the worker range, by
+# a lock the kernel drops when the process ends (a pid-derived slice can collide).
+_SLICE_LOCKS: list = []
+
+
+def _claim_uid_slice() -> int:
+    import fcntl
+    for i in range(99):
+        f = open(f"/tmp/redamon-test-uid-slice-{i}.lock", "a")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            continue
+        _SLICE_LOCKS.append(f)
+        return 20000 + i * 100
+    raise RuntimeError("every test UID slice is taken")
+
+
+_SLICE = _claim_uid_slice()
 TEST_UID_RANGE = (_SLICE, _SLICE + 99)
 
 

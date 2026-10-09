@@ -32,6 +32,27 @@ def test_a_long_line_is_cut():
     assert len(buf.tail("echo", 1)[0]) <= LINE_MAX_CHARS + 40
 
 
+def test_a_cut_made_by_the_reader_is_counted_with_the_buffers_own():
+    buf = LogBuffer(stream=io.StringIO())
+    buf.add("echo", "1.0.0", "x" * (LINE_MAX_CHARS + 10), cut=1000)
+    assert buf.tail("echo", 1)[0].endswith(" [... 1010 characters cut]")
+
+
+def test_control_characters_a_plugin_prints_are_escaped():
+    out = io.StringIO()
+    buf = LogBuffer(stream=out)
+    buf.add("echo", "1.0.0", "red \x1b[31mtext\rover\x00written\tok")
+    assert out.getvalue() == "[plugin:echo@1.0.0] red \\x1b[31mtext\\x0dover\\x00written\tok\n"
+
+
+def test_a_plugin_cannot_print_what_looks_like_a_supervisor_event():
+    buf = LogBuffer(stream=io.StringIO())
+    buf.add("echo", "1.0.0", "[runner] worker started: pid 1 uid 0")
+    buf.event("echo", "1.0.0", "worker exited")
+    assert buf.tail("echo", 2) == ["1.0.0 [plugin] [runner] worker started: pid 1 uid 0",
+                                   "1.0.0 [runner] worker exited"]
+
+
 def test_plugins_have_separate_buffers():
     buf = LogBuffer(stream=io.StringIO())
     buf.add("a", "1.0.0", "from a")
