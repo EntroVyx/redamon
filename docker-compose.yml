@@ -1105,6 +1105,9 @@ services:
       # Empty locally: the route then falls back to deriving it from the request,
       # which is correct when nothing sits in front of the app.
       MCP_ALLOWED_ORIGIN: ${MCP_ALLOWED_ORIGIN:-}
+      # Plugin platform switch, DEFAULT OFF: plugin code is third-party code, so the
+      # platform is turned on deliberately. Listed here because the webapp has NO env_file.
+      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}
       # Global row cap for every RedZone analytics query (was a per-route LIMIT
       # of 200/500/1000/2000). Passed through EMPTY so unset keeps the 200k code
       # default in webapp/src/app/api/analytics/redzone/rowCap.ts. Lower it on a

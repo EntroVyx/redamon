@@ -1956,6 +1956,13 @@ ensure_auth_secrets() {
         echo "MCP_SERVER_ENABLED=false" >> "$env_file"
         info "Initialized MCP_SERVER_ENABLED=false (inbound MCP server off by default)"
     fi
+    # Plugin platform. Written explicitly as false for the same reason: plugin code
+    # is third-party code, so the platform is switched on deliberately, never by
+    # upgrading. Also listed in the webapp's compose `environment` block.
+    if ! grep -q '^PLUGINS_ENABLED=' "$env_file" 2>/dev/null; then
+        echo "PLUGINS_ENABLED=false" >> "$env_file"
+        info "Initialized PLUGINS_ENABLED=false (plugin platform off by default)"
+    fi
 }
 
 # Refuse to run the inbound MCP server while the agent's auth is fail-open.
