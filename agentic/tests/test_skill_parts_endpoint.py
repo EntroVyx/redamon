@@ -118,11 +118,29 @@ def test_skill_filter_and_part_fields(api):
         "placeholders": sorted(registered.placeholders),
         "sha256": registered.sha256,
         "chars": len(registered.text),
+        "maxChars": max(2 * len(registered.text), len(registered.text) + 20_000),
         "order": 1,
         "gate": registered.gate,
         "text": registered.text,
     }
     assert parts[1]["kind"] == "plain" and parts[1]["placeholders"] == []
+
+
+def test_every_skill_and_part_carries_the_validators_limits(api):
+    """The plugin platform shows these limits to plugins (override.get) so a proposal can
+    stay within them; they must be the validator's own, not a copy that can drift."""
+    from prompts import skill_parts
+    for skill in _get(api).json()["skills"]:
+        assert skill["maxChars"] == skill_parts.skill_total_limit(skill["id"])
+        assert skill["maxChars"] == int(sum(len(p["text"]) for p in skill["parts"]) * 1.5)
+        for part in skill["parts"]:
+            assert part["maxChars"] == skill_parts.max_part_chars(_part(skill["id"], part["partId"]))
+
+
+def test_the_skill_limit_follows_the_growth_setting(api, monkeypatch):
+    monkeypatch.setenv("PLUGIN_SKILL_TEXT_MAX_GROWTH", "2")
+    skill = _get(api, "?skill=xxe").json()["skills"][0]
+    assert skill["maxChars"] == 2 * sum(len(p["text"]) for p in skill["parts"])
 
 
 def test_unknown_skill_is_a_404(api):

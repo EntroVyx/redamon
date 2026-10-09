@@ -29,7 +29,11 @@ const alice: ov.OverrideScope = { type: 'user', id: 'alice' }
 const p1: ov.OverrideScope = { type: 'project', id: 'p1' }
 const H = { 'sqli/workflow': sha(1), 'sqli/payloads': sha(1) }
 
-async function propose(scope: ov.OverrideScope, parts: Record<string, string>, opts: { pluginId?: string; base?: number; meta?: Prisma.InputJsonValue } = {}) {
+async function propose(
+  scope: ov.OverrideScope,
+  parts: Record<string, string>,
+  opts: { pluginId?: string; base?: number; meta?: Prisma.InputJsonValue; platformMeta?: ov.ProposeInput['platformMeta'] } = {},
+) {
   const { changeSetId } = await ov.propose(
     {
       pluginId: opts.pluginId ?? 'skiller',
@@ -38,6 +42,7 @@ async function propose(scope: ov.OverrideScope, parts: Record<string, string>, o
       targetGroup: 'sqli',
       parts: Object.entries(parts).map(([p, value]) => ({ targetKey: `sqli/${p}`, value, baseSha256: sha(opts.base ?? 1) })),
       meta: opts.meta,
+      platformMeta: opts.platformMeta,
       createdBy: 'alice',
     },
     db,
@@ -360,7 +365,11 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
     })
 
     test('meta round trip, staleness and re-approval re-basing on real rows', async () => {
-      const id = await propose(alice, { workflow: 'W', payloads: 'P' }, { meta: { summary: 's', lessons: ['a', 'b'], fromRevision: 1 } })
+      // fromRevision is the platform's (TD-19): it comes as platform meta, never from the plugin.
+      const id = await propose(alice, { workflow: 'W', payloads: 'P' }, {
+        meta: { summary: 's', lessons: ['a', 'b'], fromRevision: 7 },
+        platformMeta: { fromRevision: 1 },
+      })
       await ov.approve(id, 'alice', H, db)
       expect(await ov.markStale(id, 'factory_changed', db)).toEqual([id])
       const stale = await ov.getChangeSet(id, db)

@@ -96,6 +96,31 @@ describe('propose', () => {
     await ov.approve(id, 'alice', H)
   })
 
+  // TD-19: the platform records the revision a proposal was built on and the factory text of
+  // every part it changes. They are not the plugin's to set, and they do not count toward the
+  // plugin's 64 KB (the factory text of path_traversal alone is about 60 KB).
+  test("the platform's meta keys are set by the platform only and are not part of the plugin's 64 KB", async () => {
+    const { changeSetId } = await ov.propose({
+      ...base,
+      parts: [part('sqli/workflow')],
+      meta: { summary: 's', fromRevision: 99, baseFactoryText: { workflow: 'forged' }, staleReason: 'part_removed' },
+      platformMeta: { fromRevision: 3, baseFactoryText: { workflow: 'f'.repeat(70_000) } },
+    })
+    const set = await ov.getChangeSet(changeSetId)
+    expect(set!.meta).toEqual({ summary: 's', fromRevision: 3, baseFactoryText: { workflow: 'f'.repeat(70_000) } })
+    expect(set!.staleReason).toBeNull()
+  })
+
+  test('platform meta alone, without any meta from the plugin', async () => {
+    const { changeSetId } = await ov.propose({ ...base, parts: [part('sqli/workflow')], platformMeta: { fromRevision: 1 } })
+    expect((await ov.getChangeSet(changeSetId))!.meta).toEqual({ fromRevision: 1 })
+  })
+
+  test('the plugin meta is still capped at 64 KB on its own', async () => {
+    const meta = { blob: 'x'.repeat(70_000) }
+    expect(await code(ov.propose({ ...base, parts: [part('sqli/workflow')], meta, platformMeta: { fromRevision: 1 } }))).toBe('invalid_proposal')
+  })
+
   test('five pending change sets per scope and skill; the sixth is refused (sets, not rows)', async () => {
     for (let i = 0; i < 5; i++) await proposeParts(alice, 'sqli', { workflow: `W${i}`, payloads: `P${i}` })
     expect(await ov.pendingCount(alice, 'skill.text', 'sqli')).toBe(5)

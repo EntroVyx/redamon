@@ -1,0 +1,196 @@
+import prisma from '@/lib/prisma'
+import { builtinSkillName } from '@/lib/builtinSkills'
+import { auditPlugin } from './audit'
+import { BEHAVIOUR_EXTENSION_POINTS, POINT_PERMISSION, type BehaviourExtensionPoint } from './extensionPoints'
+import { GatewayError, type GatewayContext } from './gateway'
+import * as ov from './overrides'
+import type { PluginPermission } from './permissions'
+import { overridesQualify } from './registry'
+import { registrySkill, validateSkillParts, type RegistrySkill } from './skillPartsRegistry'
+
+/**
+ * The Gateway's override operations (`sdk.override.*`, README.PLUGINS.md §7.3/§7.6):
+ * read a skill's factory parts and the version that applies, propose a version, withdraw a
+ * pending one. The agent's registry is the only source of factory text and hashes; the
+ * plugin supplies text, a note and its own meta, nothing else.
+ *
+ * A proposal is a complete snapshot (TD-19): every part whose text differs from the
+ * factory text. Parts the plugin does not send are factory text in that version, so the
+ * agent validates exactly the parts sent, over the factory text of the rest; a plugin
+ * that builds on the active version reads its parts from `override.get` and sends them.
+ */
+const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
+const MAX_PARTS = 50
+
+const isPoint = (p: unknown): p is BehaviourExtensionPoint => (BEHAVIOUR_EXTENSION_POINTS as readonly unknown[]).includes(p)
+
+/** The permission an override call needs, from the point its body names (null: no such point). */
+export function overridePermission(body: Record<string, unknown>): PluginPermission | null {
+  return isPoint(body.point) ? POINT_PERMISSION[body.point] : null
+}
+
+async function target(ctx: GatewayContext): Promise<{ point: BehaviourExtensionPoint; group: string; skill: RegistrySkill }> {
+  const point = ctx.body.point as BehaviourExtensionPoint
+  const group = ctx.body.targetGroup
+  if (typeof group !== 'string' || !GROUP_RE.test(group)) {
+    throw new GatewayError(400, 'invalid_target', `invalid target group ${JSON.stringify(group ?? null)}`)
+  }
+  const skill = await registrySkill(group)
+  if (!skill) throw new GatewayError(404, 'invalid_target', `unknown skill '${group}'`)
+  return { point, group, skill }
+}
+
+const userScope = (ctx: GatewayContext): ov.OverrideScope => ({ type: 'user', id: ctx.userId })
+
+/** The version the agent runs for this call's project (or the user, outside one), or null for factory text. */
+async function appliedSet(ctx: GatewayContext, point: string, group: string): Promise<ov.ChangeSet | null> {
+  if (ctx.projectId) {
+    const set = await ov.effectiveForProject(ctx.projectId, group)
+    return set && set.applies ? set : null
+  }
+  const set = await ov.activeChangeSet(userScope(ctx), point, group)
+  if (!set) return null
+  const plugin = await prisma.pluginInstall.findUnique({ where: { pluginId: set.pluginId } })
+  return plugin && overridesQualify(plugin) ? set : null
+}
+
+export async function getOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
+  const { point, group, skill } = await target(ctx)
+  const [set, pendingCount] = await Promise.all([
+    appliedSet(ctx, point, group),
+    ov.pendingCount(userScope(ctx), point, group),
+  ])
+  return {
+    point,
+    targetGroup: group,
+    displayName: builtinSkillName(group),
+    parts: skill.parts.map((p) => ({ partId: p.partId, text: p.text, sha256: p.sha256, chars: p.chars, maxChars: p.maxChars })),
+    active: set
+      ? {
+          changeSetId: set.changeSetId,
+          scope: set.scope.type,
+          revision: set.revision,
+          decidedAt: set.decidedAt ? set.decidedAt.toISOString() : null,
+          pluginId: set.pluginId,
+          parts: Object.fromEntries(set.parts.map((p) => [p.partId, p.value])),
+        }
+      : null,
+    pendingCount,
+    limits: { skillMaxChars: skill.maxChars, parts: Object.fromEntries(skill.parts.map((p) => [p.partId, p.maxChars])) },
+  }
+}
+
+const invalidProposal = (status: number, message: string, extra: Record<string, unknown> = {}) =>
+  new GatewayError(status, 'invalid_proposal', message, extra)
+
+function proposalScope(ctx: GatewayContext): ov.OverrideScope {
+  const scope = ctx.body.scope
+  if (scope === 'user') return userScope(ctx)
+  if (scope === 'project' && ctx.projectId) return { type: 'project', id: ctx.projectId }
+  throw invalidProposal(400, 'scope is user, or project inside a project')
+}
+
+function proposedParts(ctx: GatewayContext, skill: RegistrySkill, group: string): Record<string, string> {
+  const raw = ctx.body.parts
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalidProposal(400, 'parts must be an object of part id to text')
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length === 0) throw invalidProposal(400, 'a proposal changes at least one part')
+  if (entries.length > MAX_PARTS) throw invalidProposal(400, `a proposal changes at most ${MAX_PARTS} parts`)
+  for (const [partId, text] of entries) {
+    if (typeof text !== 'string') throw invalidProposal(400, `the text of ${group}/${partId} must be a string`)
+  }
+  const known = new Map(skill.parts.map((p) => [p.partId, p]))
+  const unknown = entries.filter(([partId]) => !known.has(partId)).map(([partId]) => `unknown part ${group}/${partId}`)
+  if (unknown.length) throw invalidProposal(422, unknown.join('; '))
+  return Object.fromEntries(entries.filter(([partId, text]) => text !== known.get(partId)!.text)) as Record<string, string>
+}
+
+export async function proposeOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
+  const { point, group, skill } = await target(ctx)
+  const scope = proposalScope(ctx)
+  if (typeof ctx.body.note !== 'string') throw invalidProposal(400, 'a note is required')
+  const meta = ctx.body.meta
+  if (meta !== undefined && meta !== null && (typeof meta !== 'object' || Array.isArray(meta))) {
+    throw invalidProposal(400, 'meta must be an object')
+  }
+  const parts = proposedParts(ctx, skill, group)
+  if (Object.keys(parts).length === 0) {
+    throw invalidProposal(422, `This proposal changes no part of ${group}: every text equals the factory text.`)
+  }
+
+  const verdict = await validateSkillParts(group, parts)
+  if (!verdict.ok) {
+    const errors = [
+      ...Object.entries(verdict.parts).flatMap(([partId, r]) => r.errors.map((e) => `${group}/${partId}: ${e}`)),
+      ...verdict.skill.errors,
+    ]
+    throw invalidProposal(422, errors.join('; ') || 'The agent refused this proposal.', {
+      errors: { parts: Object.fromEntries(Object.entries(verdict.parts).map(([k, r]) => [k, r.errors])), skill: verdict.skill.errors },
+    })
+  }
+
+  const factory = new Map(skill.parts.map((p) => [p.partId, p]))
+  const active = await ov.activeChangeSet(scope, point, group)
+  const fromRevision = active?.revision ?? ov.FACTORY_REVISION
+  const { changeSetId } = await ov.propose({
+    pluginId: ctx.pluginId,
+    point,
+    scope,
+    targetGroup: group,
+    parts: Object.entries(parts).map(([partId, value]) => ({
+      targetKey: `${group}/${partId}`,
+      value,
+      baseSha256: factory.get(partId)!.sha256,
+    })),
+    note: ctx.body.note,
+    meta: (meta ?? undefined) as Record<string, string> | undefined,
+    platformMeta: {
+      fromRevision,
+      baseFactoryText: Object.fromEntries(Object.keys(parts).map((partId) => [partId, factory.get(partId)!.text])),
+    },
+    createdBy: ctx.userId,
+  })
+  await auditPlugin('plugin.override.propose', {
+    actorId: ctx.actorId ?? ctx.userId,
+    pluginId: ctx.pluginId,
+    targetType: 'plugin_change_set',
+    targetId: changeSetId,
+    after: {
+      point,
+      targetGroup: group,
+      scope: scope.type,
+      scopeId: scope.id,
+      parts: Object.keys(parts).sort(),
+      fromRevision,
+      ...(ctx.actorId ? { onBehalfOf: ctx.userId } : {}),
+    },
+  })
+  const next = (await ov.lastRevision(scope, point, group)) + 1
+  return { changeSetId, fromRevision, proposedRevisionLabel: `v${next}` }
+}
+
+export async function withdrawOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
+  const id = ctx.body.changeSetId
+  const notFound = new GatewayError(404, 'not_found', `No proposal ${typeof id === 'string' ? id : JSON.stringify(id)} of this plugin.`)
+  if (typeof id !== 'string') throw notFound
+  const set = await ov.getChangeSet(id)
+  const ownScope =
+    !!set &&
+    ((set.scope.type === 'user' && set.scope.id === ctx.userId) ||
+      (set.scope.type === 'project' && set.scope.id === ctx.projectId))
+  if (!set || set.pluginId !== ctx.pluginId || !ownScope) throw notFound
+  try {
+    await ov.withdraw(id, ctx.pluginId)
+  } catch (e) {
+    if (e instanceof ov.PluginOverrideError && e.code === 'not_found') throw notFound
+    throw e
+  }
+  await auditPlugin('plugin.override.withdraw', {
+    actorId: ctx.actorId ?? ctx.userId,
+    pluginId: ctx.pluginId,
+    targetType: 'plugin_change_set',
+    targetId: id,
+    after: { targetGroup: set.targetGroup, scope: set.scope.type, scopeId: set.scope.id, ...(ctx.actorId ? { onBehalfOf: ctx.userId } : {}) },
+  })
+  return { withdrawn: true }
+}

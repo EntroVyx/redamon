@@ -42,6 +42,7 @@ def _part_json(part: skill_parts.SkillPart) -> dict:
         "placeholders": sorted(part.placeholders),
         "sha256": part.sha256,
         "chars": len(part.text),
+        "maxChars": skill_parts.max_part_chars(part),
         "order": part.order,
         "gate": part.gate,
         "text": part.text,
@@ -50,7 +51,11 @@ def _part_json(part: skill_parts.SkillPart) -> dict:
 
 @router.get("/skill-parts")
 async def list_skill_parts(skill: Optional[str] = Query(default=None)):
-    """Every overridable built-in skill part, or one skill's with ?skill=<id>."""
+    """Every overridable built-in skill part, or one skill's with ?skill=<id>.
+
+    `maxChars` are the validator's own limits (per part, and for the whole skill under
+    PLUGIN_SKILL_TEXT_MAX_GROWTH), so a plugin can keep a proposal within them.
+    """
     if master_key_is_weak():
         return _weak_key_refusal()
     ids = skill_parts.skill_ids()
@@ -58,7 +63,8 @@ async def list_skill_parts(skill: Optional[str] = Query(default=None)):
         if skill not in ids:
             return _unknown_skill(skill)
         ids = (skill,)
-    return {"skills": [{"id": s, "parts": [_part_json(p) for p in skill_parts.parts_of(s)]}
+    return {"skills": [{"id": s, "maxChars": skill_parts.skill_total_limit(s),
+                        "parts": [_part_json(p) for p in skill_parts.parts_of(s)]}
                        for s in ids]}
 
 

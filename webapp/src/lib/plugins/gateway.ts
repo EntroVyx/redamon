@@ -9,6 +9,7 @@ import { PluginOverrideError } from './overrides'
 import type { PluginPermission } from './permissions'
 import { hasPermission, servesActions } from './registry'
 import { gatewayCallsPerToken } from './settings'
+import { SkillPartsRegistryError } from './skillPartsRegistry'
 import { pluginsDisabledResponse, pluginsEnabled } from './switch'
 
 /**
@@ -78,7 +79,11 @@ export interface GatewayContext {
 
 export interface GatewayOptions {
   op: string
-  permission?: PluginPermission
+  /**
+   * The permission the call needs; a function when the body names it (the override
+   * operations: `override:<point>`). It returns null for a point that does not exist.
+   */
+  permission?: PluginPermission | ((body: Record<string, unknown>) => PluginPermission | null)
   kinds?: readonly CallTokenKind[]
 }
 
@@ -177,6 +182,9 @@ const OVERRIDE_STATUS: Record<string, number> = {
 
 function errorResponse(e: unknown, op: string, pluginId: string): NextResponse {
   if (e instanceof GatewayError) return gatewayError(e.status, e.code, e.message, e.extra)
+  if (e instanceof SkillPartsRegistryError) {
+    return e.code === 'unknown_skill' ? gatewayError(404, 'invalid_target', e.message) : gatewayError(503, e.code, e.message)
+  }
   if (e instanceof PluginDataError) return dataErrorResponse(e)
   if (e instanceof PluginOverrideError) return gatewayError(OVERRIDE_STATUS[e.code] ?? 400, e.code, e.message)
   console.error(`[plugins] gateway ${op} plugin=${pluginId} failed:`, e)
@@ -321,7 +329,11 @@ async function run(
   }
 
   const plugin = await checkPlugin(claims)
-  if (opts.permission) checkPermission(plugin, opts.permission)
+  if (opts.permission) {
+    const permission = typeof opts.permission === 'function' ? opts.permission(body as Record<string, unknown>) : opts.permission
+    if (!permission) throw new GatewayError(400, 'invalid_target', `unknown extension point ${JSON.stringify((body as Record<string, unknown>).point)}`)
+    checkPermission(plugin, permission)
+  }
   const conversation = await checkTenancy(claims)
 
   const out = await handler({

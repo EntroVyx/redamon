@@ -48,7 +48,8 @@ export const PART_VALUE_MAX_CHARS = 100_000
 export const NOTE_MAX_CHARS = 4_000
 export const META_MAX_BYTES = 65_536
 // Keys of `meta` the platform writes itself; a plugin's values for them are dropped.
-const PLATFORM_META_KEYS = ['staleReason']
+// fromRevision and baseFactoryText come with the proposal (TD-19), staleReason later.
+const PLATFORM_META_KEYS = ['staleReason', 'fromRevision', 'baseFactoryText']
 
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 // Change set ids are crypto.randomUUID() values.
@@ -252,7 +253,10 @@ export interface ProposeInput {
   targetGroup: string
   parts: ProposedPart[]
   note?: string | null
+  /** The plugin's own meta: a plain object of at most META_MAX_BYTES. */
   meta?: Prisma.InputJsonValue
+  /** What the platform records with the proposal; not counted toward the plugin's bytes. */
+  platformMeta?: { fromRevision?: number; baseFactoryText?: Record<string, string> }
   createdBy: string
 }
 
@@ -281,12 +285,20 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
     invalid(`the note is at most ${NOTE_MAX_CHARS} characters`)
   }
   if (typeof input.createdBy !== 'string' || !input.createdBy) invalid('createdBy is required')
-  let meta: Prisma.InputJsonValue | undefined
+  let meta: Record<string, unknown> | undefined
   if (input.meta !== undefined && input.meta !== null) {
     if (typeof input.meta !== 'object' || Array.isArray(input.meta)) invalid('meta must be an object')
     const own = Object.fromEntries(Object.entries(input.meta).filter(([k]) => !PLATFORM_META_KEYS.includes(k)))
     if (Buffer.byteLength(JSON.stringify(own), 'utf8') > META_MAX_BYTES) invalid(`meta is at most ${META_MAX_BYTES} bytes of JSON`)
-    meta = own as Prisma.InputJsonValue
+    meta = own
+  }
+  if (input.platformMeta) {
+    const { fromRevision, baseFactoryText } = input.platformMeta
+    meta = {
+      ...meta,
+      ...(fromRevision !== undefined ? { fromRevision } : {}),
+      ...(baseFactoryText !== undefined ? { baseFactoryText } : {}),
+    }
   }
 
   const changeSetId = randomUUID()
@@ -314,7 +326,7 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
         baseSha256: p.baseSha256,
         status: 'proposed',
         note: input.note ?? null,
-        meta: meta ?? Prisma.DbNull,
+        meta: meta ? (meta as Prisma.InputJsonValue) : Prisma.DbNull,
         createdBy: input.createdBy,
       })),
     })
