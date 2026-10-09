@@ -74,6 +74,10 @@ RUN mkdir -p /data/js-recon-custom && chown nextjs:nodejs /data/js-recon-custom
 #   EACCES: permission denied, mkdir '/data/supply-chain-uploads/<project>'
 # surfaced to the operator only as "Failed to upload file".
 RUN mkdir -p /data/supply-chain-uploads && chown nextjs:nodejs /data/supply-chain-uploads
+# Installed plugins (docker-compose.plugins.yml mounts the `plugins` volume here). The
+# runner image pre-creates its /plugins for uid 1001 too: Docker copies the first mounting
+# image's ownership onto an empty volume, and either service may mount it first.
+RUN mkdir -p /data/plugins && chown nextjs:nodejs /data/plugins
 
 # Leverage output traces to reduce image size
 # https://nextjs.org/docs/advanced-features/output-file-tracing

@@ -4594,6 +4594,7 @@ _TEST_SECTIONS=(
     "ai_attack_surface|redamon-ai-attack-surface|/repo/scanners/ai_attack_surface_scan|/repo/scanners/ai_attack_surface_scan:/repo|tests adapters|.|"
     "capture_proxy|redamon-capture-proxy|/repo/scanners/capture_proxy|/repo/scanners/capture_proxy:/repo|tests|.|"
     "docker_broker|redamon-docker-broker|/repo/services/docker_broker|/repo/services/docker_broker:/repo|.|.|"
+    "plugin_runner|redamon-plugin-runner|/repo/services/plugin_runner|/repo/services/plugin_runner:/repo/services/plugin_runner/sdk|tests|.|"
 )
 
 # For the root-recon section we run ONLY the recon-oriented files, not the whole

@@ -1108,6 +1108,30 @@ services:
       # Plugin platform switch, DEFAULT OFF: plugin code is third-party code, so the
       # platform is turned on deliberately. Listed here because the webapp has NO env_file.
       PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}
+      # The rest of the plugin platform's settings. Inert while the switch is off; the
+      # volume and the network they refer to come from docker-compose.plugins.yml, which
+      # redamon.sh loads only while the switch is on. The two secrets are generated into
+      # .env by redamon.sh; empty, every plugin route fails closed.
+      PLUGINS_DIR: /data/plugins
+      PLUGIN_RUNNER_URL: http://plugin-gateway:7072
+      PLUGIN_RUNNER_KEY: ${PLUGIN_RUNNER_KEY:-}
+      PLUGIN_CALL_TOKEN_SECRET: ${PLUGIN_CALL_TOKEN_SECRET:-}
+      PLUGINS_CATALOG_URL: ${PLUGINS_CATALOG_URL:-https://raw.githubusercontent.com/samugit83/redamon-plugins/main/catalog.json}
+      PLUGINS_DOWNLOAD_HOSTS: ${PLUGINS_DOWNLOAD_HOSTS:-github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,raw.githubusercontent.com}
+      PLUGINS_EXTRA_TRUSTED_KEYS: ${PLUGINS_EXTRA_TRUSTED_KEYS:-}
+      # The public origin the plugin routes' same-origin check accepts. Empty locally;
+      # behind the single-host nginx, deploy.sh seeds it (nginx drops the port from Host).
+      PLUGINS_ALLOWED_ORIGIN: ${PLUGINS_ALLOWED_ORIGIN:-}
+      PLUGIN_ACTION_MAX_TIMEOUT: ${PLUGIN_ACTION_MAX_TIMEOUT:-900}
+      PLUGIN_ARCHIVE_MAX_BYTES: ${PLUGIN_ARCHIVE_MAX_BYTES:-20971520}
+      PLUGIN_TRANSCRIPT_MAX_BYTES: ${PLUGIN_TRANSCRIPT_MAX_BYTES:-2097152}
+      PLUGIN_DATA_MAX_ROWS: ${PLUGIN_DATA_MAX_ROWS:-10000}
+      PLUGIN_DATA_MAX_BYTES: ${PLUGIN_DATA_MAX_BYTES:-52428800}
+      PLUGIN_DATA_MAX_VALUE_BYTES: ${PLUGIN_DATA_MAX_VALUE_BYTES:-1048576}
+      PLUGIN_DATA_MAX_ROWS_PER_OWNER: ${PLUGIN_DATA_MAX_ROWS_PER_OWNER:-2000}
+      PLUGIN_GATEWAY_CALLS_PER_TOKEN: ${PLUGIN_GATEWAY_CALLS_PER_TOKEN:-600}
+      PLUGIN_LLM_DAILY_CALL_CAP: ${PLUGIN_LLM_DAILY_CALL_CAP:-100}
+      PLUGIN_SKILL_TEXT_MAX_GROWTH: ${PLUGIN_SKILL_TEXT_MAX_GROWTH:-1.5}
       # Global row cap for every RedZone analytics query (was a per-route LIMIT
       # of 200/500/1000/2000). Passed through EMPTY so unset keeps the 200k code
       # default in webapp/src/app/api/analytics/redzone/rowCap.ts. Lower it on a
@@ -1326,6 +1350,92 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # ===========================================================================
+  # Plugin platform (README.PLUGINS.md §5). Both services are in the `plugins`
+  # profile and are started or removed only by redamon.sh's plugins_converge,
+  # while PLUGINS_ENABLED is on; a plain `docker compose up` never starts them.
+  # plugin-runner runs third-party plugin code, one worker process per plugin
+  # version under its own UID. plugin-gateway is the only door between the
+  # plugins network and the rest of the stack: workers reach the webapp's
+  # /api/plugin-gateway|runner/v1/* through it, the webapp reaches the runner.
+  # ===========================================================================
+  plugin-runner:
+    build: ./services/plugin_runner
+    image: redamon-plugin-runner:latest
+    container_name: redamon-plugin-runner
+    profiles: ["plugins"]
+    environment:
+      PLUGIN_RUNNER_KEY: ${PLUGIN_RUNNER_KEY:-}
+      PLUGIN_GATEWAY_URL: http://plugin-gateway:7071
+      PLUGIN_ACTION_MAX_TIMEOUT: ${PLUGIN_ACTION_MAX_TIMEOUT:-900}
+      PLUGIN_MAX_CONCURRENT_ACTIONS: ${PLUGIN_MAX_CONCURRENT_ACTIONS:-4}
+      PLUGIN_WORKER_MEM_MB: ${PLUGIN_WORKER_MEM_MB:-512}
+      PLUGIN_WORKER_NPROC: ${PLUGIN_WORKER_NPROC:-64}
+    # Read-only: only the webapp's plugin manager writes plugin files.
+    volumes:
+      - plugins:/plugins:ro
+    # No internet, no redamon network: the proxy is the only way out.
+    networks:
+      - plugins-net
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    # SETUID/SETGID to start each worker under its own UID, KILL to stop them.
+    cap_add: [SETUID, SETGID, KILL]
+    # NOTE: no `no-new-privileges` here: on the reference host (experiment E2) it stops
+    # every container from exec'ing its first process. The image strips every
+    # setuid/setgid bit instead (services/plugin_runner/Dockerfile).
+    mem_limit: ${PLUGIN_RUNNER_MEM:-1g}     # sized from host RAM by redamon.sh
+    pids_limit: ${PLUGIN_RUNNER_PIDS:-256}
+    cpus: ${PLUGIN_RUNNER_CPUS:-2}
+    healthcheck:
+      test: ["CMD", "python", "-m", "supervisor.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Worker output can carry target text a plugin printed; keep it bounded.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  plugin-gateway:
+    # Same build as plugin-runner (the capture-proxy/traffic-ingest precedent): without
+    # it a missing image makes compose try Docker Hub and fail with `pull access denied`.
+    build: ./services/plugin_runner
+    image: redamon-plugin-runner:latest
+    container_name: redamon-plugin-gateway
+    profiles: ["plugins"]
+    command: ["python", "-m", "gateway_proxy.proxy"]
+    environment:
+      PLUGIN_GATEWAY_UPSTREAM: http://webapp:3000
+      PLUGIN_RUNNER_UPSTREAM: http://plugin-runner:7080
+    # Never `redamon`: there a compromised proxy would reach Postgres, Neo4j and the
+    # agent's unauthenticated routes. On plugins-edge it reaches only the webapp.
+    networks:
+      - plugins-edge
+      - plugins-net
+    read_only: true
+    cap_drop: [ALL]
+    # NOTE: no `no-new-privileges` here, for the same reason as plugin-runner.
+    mem_limit: 128m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "-m", "gateway_proxy.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
 # =============================================================================
 # Networks
 # =============================================================================
@@ -1361,6 +1471,23 @@ networks:
   codefix-net:
     name: redamon-codefix-net
     driver: bridge
+  # Plugin platform. Used only by the `plugins` profile and the overlay
+  # docker-compose.plugins.yml, so compose creates neither while plugins are off.
+  # `internal`: no route out. `gateway_mode_ipv4: isolated` (Docker Engine >= 28.0.0)
+  # removes the bridge's own address on the host, without which a worker reaches every
+  # host service listening on all interfaces (experiment E1).
+  plugins-net:
+    name: redamon-plugins-net
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  plugins-edge:
+    name: redamon-plugins-edge
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
 
 # =============================================================================
 # Volumes
@@ -1447,3 +1574,6 @@ volumes:
   # the webapp (writes) and the spawned scan container (reads, read-only).
   supply_chain_uploads:
     name: redamon_supply_chain_uploads
+  # Installed plugin versions: the webapp writes (through the overlay), the runner reads.
+  # Kept when plugins are switched off; removed by `./redamon.sh purge`.
+  plugins:
