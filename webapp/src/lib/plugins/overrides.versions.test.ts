@@ -182,6 +182,39 @@ describe('resolveForProject: per skill, never per part (TD-18, RV-05, X7)', () =
     expect(await ov.resolveForProject('p1')).toEqual({})
   })
 
+  test("a stale project version keeps that skill on factory text, not on the owner's version", async () => {
+    await approveNew(alice, { workflow: 'U' })
+    await approveNew(alice, { workflow: 'UX' }, 'skiller', 'xss')
+    const p = await approveNew(p1, { workflow: 'P' })
+    await ov.markStale(p.id, 'factory_changed')
+    const r = await ov.resolveForProject('p1')
+    expect(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v.value]))).toEqual({ 'xss/workflow': 'UX' })
+    const e = await ov.effectiveForProject('p1', 'sqli')
+    expect(e).toMatchObject({ scope: p1, status: 'stale', applies: false, staleReason: 'factory_changed' })
+  })
+
+  test('a project with a stale and a newer active version runs the active one', async () => {
+    await approveNew(alice, { workflow: 'U' })
+    const v2 = await approveNew(p1, { workflow: 'P2' })
+    await ov.markStale(v2.id, 'factory_changed')
+    await approveNew(p1, { workflow: 'P3' })
+    expect((await ov.resolveForProject('p1'))['sqli/workflow']).toMatchObject({ value: 'P3', revision: 3 })
+  })
+
+  test('a re-approved project version applies again', async () => {
+    const p = await approveNew(p1, { workflow: 'P' })
+    await ov.markStale(p.id, 'factory_changed')
+    await ov.approve(p.id, 'alice', hashes('sqli', ['workflow'], 2))
+    expect((await ov.resolveForProject('p1'))['sqli/workflow']?.value).toBe('P')
+  })
+
+  test("a project version reset to factory hands the skill back to the owner's user scope (TD-18)", async () => {
+    await approveNew(alice, { workflow: 'U' })
+    await approveNew(p1, { workflow: 'P' })
+    await ov.reset(p1, 'skill.text', 'sqli', 'alice')
+    expect((await ov.resolveForProject('p1'))['sqli/workflow']?.value).toBe('U')
+  })
+
   test('an unknown project resolves to nothing', async () => {
     await approveNew(alice)
     expect(await ov.resolveForProject('nope')).toEqual({})

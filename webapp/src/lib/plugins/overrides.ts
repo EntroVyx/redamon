@@ -602,7 +602,10 @@ export interface ResolvedPart {
 }
 
 export interface EffectiveSet extends ChangeSet {
-  /** False when the set's plugin is disabled, not ready, revoked or lacks the permission. */
+  /**
+   * False when the set is stale (factory text runs until it is reviewed again) or its
+   * plugin is disabled, not ready, revoked or lacks the permission.
+   */
   applies: boolean
   plugin: Pick<PluginInstall, 'pluginId' | 'status' | 'enabled' | 'revokedReason' | 'grantedPermissions'>
 }
@@ -610,11 +613,13 @@ export interface EffectiveSet extends ChangeSet {
 type RowWithPlugin = PluginOverride & { plugin: PluginInstall }
 
 /**
- * The active set that governs each skill of a project: the project's own version if it
- * has one, otherwise the user-scope version of the project's OWNER (read from the
- * project row, never from the caller). Chosen per skill, before the plugin check: a
- * project version whose plugin is disabled leaves that skill on factory text rather
- * than falling back to a user version nobody chose for this project.
+ * The set that governs each skill of a project: the project's own version if it has
+ * one (active, else stale), otherwise the active user-scope version of the project's
+ * OWNER (read from the project row, never from the caller). Chosen per skill, before
+ * the plugin check: a project version that is stale, or whose plugin is disabled,
+ * leaves that skill on factory text rather than falling back to a user version nobody
+ * chose for this project. A project version that was reset (cleared) no longer
+ * governs, so the skill follows the owner's user scope again (TD-18).
  */
 async function governingSets(projectId: string, db: Db, group?: string): Promise<EffectiveSet[]> {
   if (typeof projectId !== 'string' || projectId.length === 0 || projectId.length > 128) return []
@@ -623,11 +628,10 @@ async function governingSets(projectId: string, db: Db, group?: string): Promise
   const rows = (await db.pluginOverride.findMany({
     where: {
       extensionPoint: 'skill.text',
-      status: 'active',
       ...(group ? { targetGroup: group } : {}),
       OR: [
-        { scopeType: 'project', scopeId: projectId },
-        { scopeType: 'user', scopeId: project.userId },
+        { scopeType: 'project', scopeId: projectId, status: { in: ['active', 'stale'] } },
+        { scopeType: 'user', scopeId: project.userId, status: 'active' },
       ],
     },
     include: { plugin: true },
@@ -638,8 +642,13 @@ async function governingSets(projectId: string, db: Db, group?: string): Promise
 
   const out: EffectiveSet[] = []
   for (const groupRows of byGroup.values()) {
-    const projectRows = groupRows.filter((r) => r.scopeType === 'project')
-    const chosenScope = projectRows.length ? projectRows : groupRows.filter((r) => r.scopeType === 'user')
+    const projectActive = groupRows.filter((r) => r.scopeType === 'project' && r.status === 'active')
+    const projectStale = groupRows.filter((r) => r.scopeType === 'project' && r.status === 'stale')
+    const chosenScope = projectActive.length
+      ? projectActive
+      : projectStale.length
+        ? projectStale
+        : groupRows.filter((r) => r.scopeType === 'user')
     // One active set per scope and skill is the invariant; if it was ever broken, take the
     // newest version whole rather than mixing parts of two.
     const sets = groupBySet(chosenScope).sort((a, b) => (b[0].revision ?? 0) - (a[0].revision ?? 0))
@@ -647,7 +656,7 @@ async function governingSets(projectId: string, db: Db, group?: string): Promise
     const plugin = set[0].plugin
     out.push({
       ...toChangeSet(set),
-      applies: overridesQualify(plugin),
+      applies: set[0].status === 'active' && overridesQualify(plugin),
       plugin: {
         pluginId: plugin.pluginId,
         status: plugin.status,
