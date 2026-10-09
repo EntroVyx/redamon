@@ -21,6 +21,8 @@ import { STALE_SAVE_MESSAGE } from '@/lib/projectVersion'
 import { validateCrossFieldRules, writeFireteamAudit } from '@/lib/reconSettings/crossField'
 import { JEV_ENGINE_SELECT, validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
 import { seedProjectDomains } from '@/lib/graphSeedDomains'
+import { computeSkillTextOverrides } from '@/lib/plugins/overrideDelivery'
+import type { ResolvedPart } from '@/lib/plugins/overrides'
 
 // Path to output directories (fallback for local deletion)
 const RECON_OUTPUT_PATH = process.env.RECON_OUTPUT_PATH || '/home/samuele/Progetti didattici/RedAmon/recon/output'
@@ -136,6 +138,20 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         : {}),
     }
 
+    // Approved plugin overrides of built-in skill text go to the agent's own settings
+    // fetch only: its separate flag on the MASTER key. includeSkillContent alone is also
+    // sent by text-to-cypher and accepted from the scanner key, which must not get them.
+    // Kept out of projectWithoutBinary, and a failure leaves the payload as it was.
+    let skillOverridesField: { skillTextOverrides?: Record<string, ResolvedPart> } = {}
+    if (request.nextUrl.searchParams.get('includeSkillOverrides') === 'true' && isInternalRequest(request)) {
+      try {
+        const overrides = await computeSkillTextOverrides(id)
+        if (overrides && Object.keys(overrides).length) skillOverridesField = { skillTextOverrides: overrides }
+      } catch (err) {
+        console.warn('[plugins] skill overrides omitted:', err)
+      }
+    }
+
     // If ?includeSkillContent=true, fetch enabled user skill contents for agent consumption
     // Skills default to ON when not present in config.user (matching frontend behaviour).
     const includeSkillContent = request.nextUrl.searchParams.get('includeSkillContent') === 'true'
@@ -170,10 +186,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         ...projectWithoutBinary,
         userAttackSkills: skills,
         userMcpServers,
+        ...skillOverridesField,
       })
     }
 
-    return NextResponse.json(projectWithoutBinary)
+    return NextResponse.json({ ...projectWithoutBinary, ...skillOverridesField })
   } catch (error) {
     console.error('Failed to fetch project:', error)
     return NextResponse.json(
