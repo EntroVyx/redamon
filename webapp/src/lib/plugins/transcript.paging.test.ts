@@ -122,10 +122,11 @@ describe('a 20,000-event session', () => {
   // Read once: each read masks 5,000 outputs of 20,000 characters.
   beforeAll(async () => {
     takes = []
+    // ~2 s alone; more when the suite runs files in parallel.
     h.findMany = syntheticFindMany
     t = await readTranscript(conversation, { running: false })
     pages = [...takes]
-  })
+  }, 30_000)
 
   test('is read in pages of at most 500 rows, once', () => {
     expect(Math.max(...pages)).toBeLessThanOrEqual(500)
@@ -196,7 +197,7 @@ describe('a 20,000-event session', () => {
 })
 
 describe('the cap', () => {
-  test('a small cap keeps the priority events, then the first and the last of the rest', async () => {
+  test('a small cap keeps the priority events, then the first and the last of the rest', { timeout: 30_000 }, async () => {
     vi.stubEnv('PLUGIN_TRANSCRIPT_MAX_BYTES', '200000')
     const t = await readTranscript(conversation, { running: 'unverified' })
     expect(Buffer.byteLength(JSON.stringify(t), 'utf8')).toBeLessThanOrEqual(200_000)
