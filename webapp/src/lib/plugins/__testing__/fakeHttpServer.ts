@@ -61,7 +61,10 @@ function send(res: ServerResponse, r: FakeResponse): void {
     else if (r.body instanceof Uint8Array) body = Buffer.from(r.body)
     else {
       body = Buffer.from(JSON.stringify(r.body), 'utf8')
-      headers['Content-Type'] ??= 'application/json'
+      // Header names are case-insensitive: a caller's `content-type` must not gain a second value.
+      if (!Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'application/json'
+      }
     }
   }
   headers['Content-Length'] = String(body.length)

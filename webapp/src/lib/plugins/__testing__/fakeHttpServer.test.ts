@@ -24,6 +24,13 @@ describe('fakeHttpServer', () => {
     expect(await res.json()).toEqual({ serial: 4 })
   })
 
+  test('an explicit content-type wins over the JSON default, whatever its case', async () => {
+    const s = await startFakeServer({ '/x': { headers: { 'content-type': 'application/vnd.test+json' }, body: { a: 1 } } })
+    const res = await fetch(`${s.baseUrl}/x`)
+    expect(res.headers.get('content-type')).toBe('application/vnd.test+json')
+    expect(await res.json()).toEqual({ a: 1 })
+  })
+
   test('serves bytes unchanged', async () => {
     const bytes = Buffer.from([0x1f, 0x8b, 0x00, 0xff])
     const s = await startFakeServer({ '/a.tar.gz': { body: bytes } })

@@ -9,7 +9,8 @@ import { readdirSync, readFileSync } from 'fs'
 import path from 'path'
 
 const SRC = path.resolve(__dirname, '../../..')
-const IMPORT_RE = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"][^'"]*__testing__[^'"]*['"]/
+// `import\s+` covers the side-effect form (`import './__testing__/x'`), which has no `from`.
+const IMPORT_RE = /(?:from\s+|import\s+|import\s*\(\s*|require\s*\(\s*)['"][^'"]*__testing__[^'"]*['"]/
 
 function* sourceFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -45,9 +46,14 @@ describe('__testing__ stays out of production code', () => {
       "import x from '@/lib/plugins/__testing__/fakeRunner'",
       "const m = await import('../__testing__/clock')",
       "const r = require('./__testing__/x')",
+      "import './__testing__/setup'",
+      'import "../__testing__/setup";',
+      "export { makeKeyPair } from './__testing__/ed25519'",
+      "export * from './__testing__/catalogBuilder'",
     ]) {
       expect(IMPORT_RE.test(line), line).toBe(true)
     }
     expect(IMPORT_RE.test("// see __testing__ for the doubles")).toBe(false)
+    expect(IMPORT_RE.test("const doc = 'the doubles live in ./__testing__/'")).toBe(false)
   })
 })
