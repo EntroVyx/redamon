@@ -1,6 +1,7 @@
 import { Prisma, type PluginData } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { now } from './clock'
+import { isValidPluginId } from './ids'
 import { dataLimits } from './settings'
 
 /**
@@ -62,6 +63,7 @@ export type PluginDataErrorCode =
   | 'invalid_value'
   | 'invalid_ttl'
   | 'invalid_namespace'
+  | 'invalid_plugin'
 
 export class PluginDataError extends Error {
   constructor(
@@ -132,7 +134,14 @@ function checkKey(key: string) {
   }
 }
 
+// Before any query: Prisma drops a `where` key whose value is undefined, so a missing
+// plugin id would otherwise reach every plugin's rows.
+function checkPluginId(pluginId: unknown) {
+  if (!isValidPluginId(pluginId)) throw new PluginDataError('invalid_plugin', `invalid plugin id ${String(pluginId)}`)
+}
+
 function prepareCollection(scope: DataScope, owner: PluginOwner, collection: string) {
+  checkPluginId(scope?.pluginId)
   checkOwner(owner)
   checkCollection(scope, collection)
   const namespace = checkNamespace(scope.namespace ?? LIVE_NAMESPACE)
@@ -300,7 +309,8 @@ export async function remove(
 
 export { remove as delete }
 
-function checkPair(from: string, to: string) {
+function checkPair(pluginId: string, from: string, to: string) {
+  checkPluginId(pluginId)
   checkNamespace(from)
   checkNamespace(to)
   if (from === to) throw new PluginDataError('invalid_namespace', 'source and target namespace are the same')
@@ -311,7 +321,7 @@ function checkPair(from: string, to: string) {
  * what was there: the first half of a copy-and-swap data migration. Returns the count.
  */
 export async function copyNamespace(pluginId: string, from: string, to: string, db: Db = prisma): Promise<number> {
-  checkPair(from, to)
+  checkPair(pluginId, from, to)
   return db.$transaction(async (tx) => {
     await tx.pluginData.deleteMany({ where: { AND: [{ pluginId, namespace: to }, notReserved] } })
     const rows = await tx.pluginData.findMany({
@@ -342,7 +352,7 @@ export async function copyNamespace(pluginId: string, from: string, to: string, 
  * copy becomes live at once or not at all. Platform rows of `to` are left alone.
  */
 export async function swapNamespace(pluginId: string, from: string, to: string, db: Db = prisma): Promise<void> {
-  checkPair(from, to)
+  checkPair(pluginId, from, to)
   await db.$transaction(async (tx) => {
     await tx.pluginData.deleteMany({ where: { AND: [{ pluginId, namespace: to }, notReserved] } })
     await tx.pluginData.updateMany({

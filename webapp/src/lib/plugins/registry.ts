@@ -82,6 +82,19 @@ type Db = Pick<typeof prisma, 'pluginInstall'>
 
 const leaseEnd = () => new Date(now().getTime() + LEASE_MS)
 
+// Before any write: Prisma drops a `where` key whose value is undefined, so a missing
+// plugin id would let one updateMany move every plugin in the expected status.
+function checkPluginId(pluginId: unknown) {
+  if (!isValidPluginId(pluginId)) throw new Error(`Invalid plugin id: ${JSON.stringify(pluginId)}`)
+}
+
+function checkOperation(op: Operation) {
+  checkPluginId(op?.pluginId)
+  if (typeof op.operationId !== 'string' || op.operationId.length === 0) {
+    throw new Error('An operation needs its operationId')
+  }
+}
+
 export interface TransitionArgs {
   from: readonly PluginStatus[]
   to: PluginStatus
@@ -91,6 +104,7 @@ export interface TransitionArgs {
 }
 
 export async function transition(pluginId: string, args: TransitionArgs, db: Db = prisma): Promise<void> {
+  checkPluginId(pluginId)
   for (const f of args.from) if (!canTransition(f, args.to)) throw new PluginTransitionError(f, args.to)
   // Built conditionally on purpose: Prisma drops a key whose value is undefined, so an
   // unconditional `{operationId: args.operationId}` would match EVERY row and let any
@@ -141,7 +155,7 @@ export async function createForInstall(
   args?: Prisma.InputJsonValue,
   db: Db = prisma,
 ): Promise<Operation> {
-  if (!isValidPluginId(pluginId)) throw new Error(`Invalid plugin id: ${JSON.stringify(pluginId)}`)
+  checkPluginId(pluginId)
   const operationId = randomUUID()
   try {
     await db.pluginInstall.create({
@@ -165,6 +179,7 @@ export async function createForInstall(
 
 /** Extends the lease of a long operation; fails once the lease was lost. */
 export async function heartbeat(op: Operation, db: Db = prisma): Promise<void> {
+  checkOperation(op)
   const { count } = await db.pluginInstall.updateMany({
     where: { pluginId: op.pluginId, operationId: op.operationId, status: op.status },
     data: { leaseExpiresAt: leaseEnd() },
@@ -178,6 +193,7 @@ export async function endOperation(
   patch: Prisma.PluginInstallUpdateManyMutationInput = {},
   db: Db = prisma,
 ): Promise<void> {
+  checkOperation(op)
   await transition(
     op.pluginId,
     {

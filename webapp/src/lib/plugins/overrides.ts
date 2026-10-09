@@ -48,6 +48,8 @@ export const PART_VALUE_MAX_CHARS = 100_000
 export const NOTE_MAX_CHARS = 4_000
 
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
+// Change set ids are crypto.randomUUID() values.
+const CHANGE_SET_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PART_RE = /^[a-z][a-z0-9_]{0,63}$/
 const SHA256_RE = /^[0-9a-f]{64}$/
 
@@ -65,6 +67,7 @@ export type OverrideErrorCode =
   | 'stale_proposal'
   | 'wrong_state'
   | 'active_not_deletable'
+  | 'invalid_target'
 
 export class PluginOverrideError extends Error {
   constructor(
@@ -192,6 +195,33 @@ async function lockedSet(tx: Tx, changeSetId: string): Promise<PluginOverride[]>
 
 const setStatus = (rows: PluginOverride[]) => rows[0].status as OverrideStatus
 
+// Every entry point checks its ids before any query: Prisma drops a `where` key whose
+// value is undefined, so a missing id would otherwise select every row.
+const isChangeSetId = (id: unknown): id is string => typeof id === 'string' && CHANGE_SET_ID_RE.test(id)
+
+function checkChangeSetId(id: unknown) {
+  if (!isChangeSetId(id)) throw new PluginOverrideError('not_found', `No change set ${String(id)}`)
+}
+
+function checkActor(actor: unknown) {
+  if (typeof actor !== 'string' || actor.length === 0) {
+    throw new PluginOverrideError('invalid_target', 'the user deciding is required')
+  }
+}
+
+/** The key of every scope-and-skill query: point, scope and target group. */
+function checkTarget(point: unknown, scope: OverrideScope, group: unknown) {
+  if (!(BEHAVIOUR_EXTENSION_POINTS as readonly unknown[]).includes(point)) {
+    throw new PluginOverrideError('invalid_target', `unknown behaviour point ${String(point)}`)
+  }
+  if (!scope || (scope.type !== 'user' && scope.type !== 'project') || typeof scope.id !== 'string' || !scope.id) {
+    throw new PluginOverrideError('invalid_target', 'the scope must be a user or a project with an id')
+  }
+  if (typeof group !== 'string' || !GROUP_RE.test(group)) {
+    throw new PluginOverrideError('invalid_target', `invalid target group ${String(group)}`)
+  }
+}
+
 function checkScope(scope: OverrideScope) {
   if (!scope || (scope.type !== 'user' && scope.type !== 'project') || typeof scope.id !== 'string' || !scope.id) {
     throw new PluginOverrideError('invalid_proposal', 'the scope must be a user or a project with an id')
@@ -299,6 +329,9 @@ export async function approve(
   currentHashes: Record<string, string>,
   db: Db = prisma,
 ): Promise<ApproveResult> {
+  checkChangeSetId(changeSetId)
+  checkActor(decidedBy)
+  if (!currentHashes || typeof currentHashes !== 'object') currentHashes = {}
   return db.$transaction(async (tx) => {
     const rows = await lockedSet(tx, changeSetId)
     const status = setStatus(rows)
@@ -395,6 +428,10 @@ async function decideProposed(
   decidedBy: string | null,
   pluginId?: string,
 ) {
+  checkChangeSetId(changeSetId)
+  if (pluginId !== undefined && !isValidPluginId(pluginId)) {
+    throw new PluginOverrideError('not_found', `No change set ${changeSetId}`)
+  }
   await db.$transaction(async (tx) => {
     const rows = await lockedSet(tx, changeSetId)
     // A plugin may only withdraw its own proposals; another plugin's set does not exist for it.
@@ -412,11 +449,13 @@ async function decideProposed(
 }
 
 export async function reject(changeSetId: string, decidedBy: string, db: Db = prisma): Promise<void> {
+  checkActor(decidedBy)
   await decideProposed(db, changeSetId, 'rejected', decidedBy)
 }
 
 export async function withdraw(changeSetId: string, pluginId: string, db: Db = prisma): Promise<void> {
-  await decideProposed(db, changeSetId, 'withdrawn', null, pluginId)
+  // An undefined plugin must not read as "no plugin check".
+  await decideProposed(db, changeSetId, 'withdrawn', null, pluginId ?? '')
 }
 
 /**
@@ -430,7 +469,8 @@ export async function reset(
   decidedBy: string,
   db: Db = prisma,
 ): Promise<{ changeSetId: string; revision: number | null } | null> {
-  checkScope(scope)
+  checkTarget(point, scope, group)
+  checkActor(decidedBy)
   return db.$transaction(async (tx) => {
     await lockScope(tx, point, scope, group)
     const active = await tx.pluginOverride.findFirst({ where: { ...scopeWhere(point, scope, group), status: 'active' } })
@@ -445,6 +485,7 @@ export async function reset(
 
 /** Deletes a whole change set. The active version cannot be deleted: reset it first. */
 export async function deleteChangeSet(changeSetId: string, db: Db = prisma): Promise<{ deleted: number }> {
+  checkChangeSetId(changeSetId)
   return db.$transaction(async (tx) => {
     const rows = await lockedSet(tx, changeSetId)
     if (rows.some((r) => r.status === 'active')) {
@@ -466,7 +507,7 @@ export async function markStale(
 ): Promise<string[]> {
   if (!(STALE_REASONS as readonly string[]).includes(reason)) throw new Error(`Unknown stale reason ${reason}`)
   const marked: string[] = []
-  for (const id of Array.isArray(changeSetIds) ? changeSetIds : [changeSetIds]) {
+  for (const id of (Array.isArray(changeSetIds) ? changeSetIds : [changeSetIds]).filter(isChangeSetId)) {
     const done = await db.$transaction(async (tx) => {
       let rows: PluginOverride[]
       try {
@@ -502,10 +543,12 @@ async function countPending(tx: Pick<Tx, 'pluginOverride'>, scope: OverrideScope
 
 /** Pending change sets (not rows) for a scope and skill. */
 export async function pendingCount(scope: OverrideScope, point: string, group: string, db: Db = prisma): Promise<number> {
+  checkTarget(point, scope, group)
   return countPending(db, scope, point, group)
 }
 
 export async function getChangeSet(changeSetId: string, db: Db = prisma): Promise<ChangeSet | null> {
+  if (!isChangeSetId(changeSetId)) return null
   const rows = await db.pluginOverride.findMany({ where: { changeSetId } })
   return rows.length ? toChangeSet(rows) : null
 }
@@ -516,12 +559,14 @@ export async function activeChangeSet(
   group: string,
   db: Db = prisma,
 ): Promise<ChangeSet | null> {
+  checkTarget(point, scope, group)
   const rows = await db.pluginOverride.findMany({ where: { ...scopeWhere(point, scope, group), status: 'active' } })
   return rows.length ? toChangeSet(rows) : null
 }
 
 /** The highest version number handed out for this scope and skill (1 = factory only). */
 export async function lastRevision(scope: OverrideScope, point: string, group: string, db: Db = prisma): Promise<number> {
+  checkTarget(point, scope, group)
   const state = await db.pluginPlatformState.findUnique({ where: { key: revisionCounterKey(point, scope, group) } })
   return readCounter(state?.value)
 }
@@ -539,6 +584,7 @@ export async function listVersions(
   group: string,
   db: Db = prisma,
 ): Promise<VersionList> {
+  checkTarget(point, scope, group)
   const rows = await db.pluginOverride.findMany({ where: scopeWhere(point, scope, group) })
   const sets = groupBySet(rows)
     .map(toChangeSet)
@@ -571,6 +617,7 @@ type RowWithPlugin = PluginOverride & { plugin: PluginInstall }
  * than falling back to a user version nobody chose for this project.
  */
 async function governingSets(projectId: string, db: Db, group?: string): Promise<EffectiveSet[]> {
+  if (typeof projectId !== 'string' || projectId.length === 0 || projectId.length > 128) return []
   const project = await db.project.findUnique({ where: { id: projectId }, select: { userId: true } })
   if (!project) return []
   const rows = (await db.pluginOverride.findMany({
@@ -638,6 +685,7 @@ export async function effectiveForProject(
   group: string,
   db: Db = prisma,
 ): Promise<EffectiveSet | null> {
+  if (typeof group !== 'string' || !GROUP_RE.test(group)) return null
   const [set] = await governingSets(projectId, db, group)
   return set ?? null
 }

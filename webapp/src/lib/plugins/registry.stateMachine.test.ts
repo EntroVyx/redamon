@@ -60,20 +60,20 @@ describe('the status machine of design §9.1', () => {
   })
 
   test.each(pairs.filter(([a, b]) => allowed.has(`${a}>${b}`)))('%s -> %s is allowed', async (from, to) => {
-    db.seed('pluginInstall', [{ pluginId: 'p', status: from }])
-    await transition('p', { from: [from], to })
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: from }])
+    await transition('demo', { from: [from], to })
     expect(db.rows('pluginInstall')[0].status).toBe(to)
   })
 
   test.each(pairs.filter(([a, b]) => !allowed.has(`${a}>${b}`)))('%s -> %s raises', async (from, to) => {
-    db.seed('pluginInstall', [{ pluginId: 'p', status: from }])
-    await expect(transition('p', { from: [from], to })).rejects.toBeInstanceOf(PluginTransitionError)
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: from }])
+    await expect(transition('demo', { from: [from], to })).rejects.toBeInstanceOf(PluginTransitionError)
     expect(db.rows('pluginInstall')[0].status).toBe(from)
   })
 
   test('a transition carries its patch in the same write', async () => {
-    db.seed('pluginInstall', [{ pluginId: 'p', status: 'ready' }])
-    await transition('p', { from: ['ready'], to: 'failed', patch: { lastError: 'worker_exited' } })
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'ready' }])
+    await transition('demo', { from: ['ready'], to: 'failed', patch: { lastError: 'worker_exited' } })
     expect(db.rows('pluginInstall')[0]).toMatchObject({ status: 'failed', lastError: 'worker_exited' })
   })
 })
