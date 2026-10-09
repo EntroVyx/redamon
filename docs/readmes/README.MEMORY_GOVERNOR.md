@@ -500,8 +500,8 @@ above ~40 GB nothing scaled at all. The allocator holds them at a constant share
 of the machine at every size.
 
 **Weights** are per-mille of the services pool and are `REDAMON_WEIGHT_<SVC>`
-overridable. Enabling the GVM or KB profile *adds* weight and renormalises, so
-everyone else shrinks proportionally instead of over-committing the host.
+overridable. Enabling the GVM or KB profile, or the plugin platform, *adds* weight and
+renormalises, so everyone else shrinks proportionally instead of over-committing the host.
 
 | Service | Weight | Floor | Tier |
 |---|---|---|---|
@@ -520,6 +520,16 @@ everyone else shrinks proportionally instead of over-committing the host.
 | `GVM_POSTGRES` (gvm profile) | 50 | 256 MB | burst |
 | `GVM_DATA` (gvm profile) | 40 | 192 MB (512 MB per container) | transient |
 | `KB_REFRESH` (kb profile) | 150 | 512 MB | burst |
+| `PLUGIN_RUNNER` (`PLUGINS_ENABLED=true`) | 60 | 256 MB | burst |
+
+**The plugin runner** is budgeted only while the plugin platform is on. Its floor
+fits the supervisor and one worker at rest; each worker is also capped on its own
+with `RLIMIT_AS` (`PLUGIN_WORKER_MEM_MB`, 512 MB by default), so one plugin cannot
+take the runner's whole share. The governor runs before the platform's preflight
+decides (`_plugins_prepare` needs the secrets, which are generated later in the
+same command), so a run whose preflight turns plugins off still budgets the
+runner: everyone else's ceiling is a little lower for that run, never higher. The
+proxy, `plugin-gateway`, has a fixed `mem_limit` of 128 MB and is not governed.
 
 **GVM is a stack, not a service.** Sizing only `gvmd` left ospd-openvas (the
 actual scanner), redis (which holds the whole VT feed and is routinely
