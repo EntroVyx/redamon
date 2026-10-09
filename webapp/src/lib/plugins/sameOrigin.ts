@@ -10,7 +10,9 @@ import { NextRequest, NextResponse } from 'next/server'
  * - PLUGINS_ALLOWED_ORIGIN set: the whole origin (scheme, host, port) must equal it.
  *   nginx forwards `Host $host`, which drops a non-default port, so behind the
  *   single-host proxy the request's own host cannot be trusted; deploy.sh seeds it;
- * - otherwise the origin's host must equal the request's host.
+ * - otherwise the origin's host must equal the request's `Host` header: the host the
+ *   browser addressed. Not `request.url`, which the standalone Next.js server builds from its
+ *   bind address (HOSTNAME=0.0.0.0 in the image).
  */
 export function sameOrigin(request: NextRequest): boolean {
   const origin = request.headers.get('origin')
@@ -37,7 +39,7 @@ export function sameOrigin(request: NextRequest): boolean {
     return candidate.origin === allowed.origin
   }
   try {
-    return candidate.host === new URL(request.url).host
+    return candidate.host === (request.headers.get('host') || new URL(request.url).host)
   } catch {
     return false
   }

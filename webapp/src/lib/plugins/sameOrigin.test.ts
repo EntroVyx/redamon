@@ -33,6 +33,18 @@ describe('without PLUGINS_ALLOWED_ORIGIN', () => {
       expect(sameOrigin(req('http://localhost:3000/api/plugins/x', origin))).toBe(false)
     },
   )
+
+  // The standalone Next.js server builds request.url from its bind address (HOSTNAME=0.0.0.0
+  // in the image), not from the host the browser addressed: found on the live stack, where
+  // every browser POST was refused. The browser-visible host is the Host header.
+  test('the Host header is what the browser addressed, not the server bind address in request.url', () => {
+    const withHost = (origin: string, host: string) =>
+      new NextRequest('http://0.0.0.0:3000/api/plugins/echo/actions/run', { method: 'POST', headers: { origin, host } })
+    expect(sameOrigin(withHost('http://localhost:3000', 'localhost:3000'))).toBe(true)
+    expect(sameOrigin(withHost('http://192.0.2.10:3000', '192.0.2.10:3000'))).toBe(true)
+    expect(sameOrigin(withHost('http://evil.example', 'localhost:3000'))).toBe(false)
+    expect(sameOrigin(withHost('http://localhost:3000', 'localhost:3001'))).toBe(false)
+  })
 })
 
 describe('with PLUGINS_ALLOWED_ORIGIN (behind nginx)', () => {
