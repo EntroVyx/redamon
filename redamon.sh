@@ -1979,15 +1979,17 @@ ensure_auth_secrets() {
     # Plugin platform secrets, generated whatever the switch says so that turning it on
     # needs no other step. The runner key authenticates the webapp and the plugin runner
     # to each other; the token secret signs plugin call tokens and never reaches the
-    # runner (a compromised runner must not mint tokens). Both stateless.
-    if ! grep -q '^PLUGIN_RUNNER_KEY=' "$env_file" 2>/dev/null; then
-        echo "PLUGIN_RUNNER_KEY=$(openssl rand -hex 32)" >> "$env_file"
-        info "Generated PLUGIN_RUNNER_KEY"
-    fi
-    if ! grep -q '^PLUGIN_CALL_TOKEN_SECRET=' "$env_file" 2>/dev/null; then
-        echo "PLUGIN_CALL_TOKEN_SECRET=$(openssl rand -hex 32)" >> "$env_file"
-        info "Generated PLUGIN_CALL_TOKEN_SECRET"
-    fi
+    # runner (a compromised runner must not mint tokens). Both stateless. An empty
+    # value (a .env copied from an older .env.example) counts as missing; compose
+    # reads the last assignment, so that is the one checked.
+    local key
+    for key in PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET; do
+        if [[ -z "$(grep -E "^${key}=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]')" ]]; then
+            _env_strip_var "$env_file" "$key"
+            echo "${key}=$(openssl rand -hex 32)" >> "$env_file"
+            info "Generated ${key}"
+        fi
+    done
 }
 
 # Refuse to run the inbound MCP server while the agent's auth is fail-open.

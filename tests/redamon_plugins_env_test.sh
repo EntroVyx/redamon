@@ -72,8 +72,25 @@ hasF "$D/.env" "PLUGINS_ENABLED=true" "an existing opt-in is kept"
 rm -rf "$D"
 
 echo
+echo "== an empty plugin secret (a .env copied from an older .env.example) is generated =="
+D="$(mktemp -d)"
+printf 'PLUGINS_ENABLED=true\nPLUGIN_RUNNER_KEY=\nPLUGIN_CALL_TOKEN_SECRET=   \n' > "$D/.env"
+seed "$D"
+for key in PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET; do
+    eq "$key is generated, once" "$(grep -cE "^$key=[0-9a-f]{64}\$" "$D/.env"):$(grep -c "^$key=" "$D/.env")" "1:1"
+done
+KEY_BEFORE="$(grep '^PLUGIN_RUNNER_KEY=' "$D/.env")"
+seed "$D"
+eq "a generated key is kept by the next run" "$(grep '^PLUGIN_RUNNER_KEY=' "$D/.env")" "$KEY_BEFORE"
+rm -rf "$D"
+
+echo
 echo "== .env.example documents the switch =="
 hasF "$REPO_ROOT/.env.example" "PLUGINS_ENABLED=false" ".env.example ships it OFF"
+# compose reads `KEY=   # note` as the text of the note, and a typed field (pids_limit)
+# then fails every compose command, plugins on or off.
+eq "no plugin key's value is a comment" \
+   "$(grep -cE '^PLUGINS?_[A-Z_]*=[[:space:]]*#' "$REPO_ROOT/.env.example")" "0"
 
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"

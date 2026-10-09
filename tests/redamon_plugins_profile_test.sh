@@ -73,6 +73,15 @@ eq "plugins-net has a fixed name" "$(q "$C" "c['networks']['plugins-net']['name'
 eq "plugins-edge has a fixed name" "$(q "$C" "c['networks']['plugins-edge']['name']")" "redamon-plugins-edge"
 
 echo
+echo "== a .env copied from .env.example =="
+# Every compose command reads the whole file, profiles or not: one value compose cannot
+# use breaks `up` for every operator who copied the example.
+EXAMPLE="$(docker compose --env-file "$REPO_ROOT/.env.example" --project-directory "$REPO_ROOT" -f - --profile plugins \
+    config --format json < "$REPO_ROOT/docker-compose.yml" 2>&1)"
+eq "resolves, plugins profile included" "$(q "$EXAMPLE" "'ok'" 2>/dev/null || echo "${EXAMPLE:0:300}")" "ok"
+eq "the runner keeps its default pids limit" "$(q "$EXAMPLE" "c['services']['plugin-runner']['pids_limit']" 2>/dev/null)" "256"
+
+echo
 echo "== the runner =="
 R="c['services']['plugin-runner']"
 eq "joins only plugins-net" "$(q "$C" "sorted($R['networks'])")" "['plugins-net']"
