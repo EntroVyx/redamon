@@ -1,0 +1,220 @@
+{
+  "about": [
+    "Shared cases for agentic/cypherfix_triage/evidence.py redact_secret_shapes and its",
+    "TypeScript port webapp/src/lib/plugins/redact.ts (TD-25, R-32). Synthetic values only;",
+    "`expected` was produced once by the Python function in the agent image and reviewed by eye.",
+    "Both test files assert every case: change the Python, regenerate, and the port must follow."
+  ],
+  "vectors": [
+    {
+      "name": "plain text is unchanged",
+      "input": "GET https://example.com/login from 192.0.2.10 returned 200 for user bob",
+      "expected": "GET https://example.com/login from 192.0.2.10 returned 200 for user bob"
+    },
+    {
+      "name": "empty string",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "name": "AWS access key id (documented example)",
+      "input": "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+      "expected": "aws_access_key_id = AKIA[REDACTED 20 chars]"
+    },
+    {
+      "name": "AWS secret in an assignment",
+      "input": "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "expected": "aws_secret_access_key=wJal[REDACTED 40 chars]"
+    },
+    {
+      "name": "ASIA key glued to a word is not a match",
+      "input": "keyASIAM3IVFM83OG3QQVT8",
+      "expected": "keyASIAM3IVFM83OG3QQVT8"
+    },
+    {
+      "name": "ASIA key inside parentheses",
+      "input": "(ASIAYY4C73ZM21M7RV93)",
+      "expected": "(ASIA[REDACTED 20 chars])"
+    },
+    {
+      "name": "JWT (jwt.io example)",
+      "input": "token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c end",
+      "expected": "token=eyJh[REDACTED 155 chars] end"
+    },
+    {
+      "name": "sk- style key",
+      "input": "OPENAI key sk-URy_0lB9T3Xm1pm0bX2zdSVkKwOcaWQnzLkprYEV used",
+      "expected": "OPENAI key sk-U[REDACTED 43 chars] used"
+    },
+    {
+      "name": "Google API key shape",
+      "input": "key=AIzaejWMMDTADOXC_ZprfU_wPhttU44yHpaoMqE",
+      "expected": "key=AIza[REDACTED 39 chars]"
+    },
+    {
+      "name": "GitHub classic and fine-grained tokens",
+      "input": "ghp_EyCNFbzd5DTVDpIcgEQZ0E64NXJeC2PsmvG1 and github_pat_MkSio_JyHDrW5vRGlMfaixxMYORNYvz7kcS0CjYUKGUAJztqobp9aoa1fCRJ92f0WpT8OW",
+      "expected": "ghp_[REDACTED 40 chars] and gith[REDACTED 81 chars]"
+    },
+    {
+      "name": "GitLab, Slack, Hugging Face, Stripe-like",
+      "input": "glpat-BoStJ6LXnRpysAN0Fq7n xoxb-NnonMWgGbiwRssDJkDNgFVdzjwA84X hf_tmLZKi3qDcYK51FMMQnN7atMaXu4Hv7Mi0 sk_live_VcXQrF6epz23Gvh0YtpH6bNj rk_test_4iOxLqET0qWP0wOa1OgI",
+      "expected": "glpa[REDACTED 26 chars] xoxb[REDACTED 35 chars] hf_t[REDACTED 37 chars] sk_l[REDACTED 32 chars] rk_t[REDACTED 28 chars]"
+    },
+    {
+      "name": "private key block with its END line",
+      "input": "before\n-----BEGIN RSA PRIVATE KEY-----\nYLa7UCsI6g3XZ2Rgq3BEKfoQQbagiVTHKhR1n3/42jCB2RgBcpfqGnVLD8w24PTC\nSnzmYAeGuqiViiIfqn0lsY/wjTfgUemCpVUZ37nNz70tyOlXwWGLNfDY1vUPMIyq\n-----END RSA PRIVATE KEY-----\nafter",
+      "expected": "before\n----[REDACTED 191 chars]\nafter"
+    },
+    {
+      "name": "private key block cut before END, trailing newline",
+      "input": "-----BEGIN PRIVATE KEY-----\n8zTHXoQBX9ExJBi/+AtT/M62KcE3XxvXGsfQnY2DmMjWnoL04+oObpythg5iCuzH\n",
+      "expected": "----[REDACTED 92 chars]\n"
+    },
+    {
+      "name": "private key block cut before END, more lines",
+      "input": "-----BEGIN EC PRIVATE KEY-----\n9wBWgcIMMRUHuZrniU51d943TWjarRuvIdswwQcm\nline two\nline three",
+      "expected": "----[REDACTED 91 chars]"
+    },
+    {
+      "name": "Bearer token in a header",
+      "input": "Authorization: Bearer objaszNdvZ1oY6J45.NjVnvdZAIoUhos",
+      "expected": "Authorization: Bearer obja[REDACTED 32 chars]"
+    },
+    {
+      "name": "Basic credentials",
+      "input": "authorization: Basic dXNlcjpwYXNzd29yZDEyMw==",
+      "expected": "authorization: Basic dXNl[REDACTED 24 chars]"
+    },
+    {
+      "name": "lower-case token scheme",
+      "input": "token Y7G8ghQYA29U",
+      "expected": "token Y7G8[REDACTED 12 chars]"
+    },
+    {
+      "name": "cookie header, CRLF request",
+      "input": "GET / HTTP/1.1\r\nHost: example.com\r\nCookie: session=G3MBRbpfp1enjUekd9OjTKLg; theme=dark; id=xy; csrftoken=qiVVV0yIbEi5930J\r\nAccept: */*\r\n\r\n",
+      "expected": "GET / HTTP/1.1\r\nHost: example.com\r\nCookie: session=G3MB[REDACTED 24 chars]; theme=dark; id=xy; csrftoken=qiVV[REDACTED 16 chars]\r\nAccept: */*\r\n\r\n"
+    },
+    {
+      "name": "a Set-Cookie line is not a Cookie header (the original's rule)",
+      "input": "Set-Cookie: sid=vvcNguIuTZWrEgnyiSFp; Path=/; HttpOnly",
+      "expected": "Set-Cookie: sid=vvcNguIuTZWrEgnyiSFp; Path=/; HttpOnly"
+    },
+    {
+      "name": "credential headers by name; WWW-Authenticate kept",
+      "input": "X-Api-Key: tLTCKXp3aWcPxNVkagvT\nWWW-Authenticate: Basic realm=\"example.com\"\nX-Session: m8MOc8so6cRrHrdn\nX-Request-Id: 12345678",
+      "expected": "X-Api-Key: tLTC[REDACTED 20 chars]\nWWW-Authenticate: Basic realm=\"example.com\"\nX-Session: m8MO[REDACTED 16 chars]\nX-Request-Id: 12345678"
+    },
+    {
+      "name": "raw token without a scheme",
+      "input": "Authorization: fc5abef2dba9bfd72edc95de",
+      "expected": "Authorization: fc5a[REDACTED 24 chars]"
+    },
+    {
+      "name": "assigned secrets in a query string and JSON",
+      "input": "password=qjzVZLTcin31kR&user=bob {\"api_key\": \"ObR5gspN7SDG9ewH9G\", \"client-secret\": \"txLisYeUc9CifjLOGqSlEu\"}",
+      "expected": "password=qjzV[REDACTED 14 chars]&user=bob {\"api_key\": \"ObR5[REDACTED 18 chars]\", \"client-secret\": \"txLi[REDACTED 22 chars]\"}"
+    },
+    {
+      "name": "upper-case assignment",
+      "input": "PASSWD='gRwLGxy087' PWD: egJGECl0",
+      "expected": "PASSWD='gRwL[REDACTED 10 chars]' PWD: egJG[REDACTED 8 chars]"
+    },
+    {
+      "name": "short values are kept",
+      "input": "password=abc token x Authorization: abc Cookie: a=b",
+      "expected": "password=abc token x Authorization: abc Cookie: a=b"
+    },
+    {
+      "name": "already redacted text is left as it is",
+      "input": "password=abcd[REDACTED 12 chars] X-Token: abcd[REDACTED 30 chars]",
+      "expected": "password=abcd[REDACTED 12 chars] X-Token: abcd[REDACTED 30 chars]"
+    },
+    {
+      "name": "redacting twice changes nothing",
+      "input": "Authorization: Bearer iAqY[REDACTED 30 chars]\nCookie: s=Ls5u[REDACTED 20 chars]\npassword=aE0Q[REDACTED 12 chars]",
+      "expected": "Authorization: Bearer iAqY[REDACTED 30 chars]\nCookie: s=Ls5u[REDACTED 20 chars]\npassword=aE0Q[REDACTED 12 chars]"
+    },
+    {
+      "name": "a word character before AKIA (Unicode word boundary)",
+      "input": "éAKIAIOSFODNN7EXAMPLE",
+      "expected": "éAKIAIOSFODNN7EXAMPLE"
+    },
+    {
+      "name": "a combining mark before AKIA is not a word character",
+      "input": "éAKIAIOSFODNN7EXAMPLE",
+      "expected": "éAKIA[REDACTED 20 chars]"
+    },
+    {
+      "name": "superscript digit after the key keeps it inside a word",
+      "input": "AKIAIOSFODNN7EXAMPLE²",
+      "expected": "AKIAIOSFODNN7EXAMPLE²"
+    },
+    {
+      "name": "long s matches s case-insensitively",
+      "input": "Baſic X99H8fv6A2dEFa9L",
+      "expected": "Baſic X99H[REDACTED 16 chars]"
+    },
+    {
+      "name": "dotted capital I matches i case-insensitively",
+      "input": "apİ_key=WEOk8JbgNxTyi4",
+      "expected": "apİ_key=WEOk[REDACTED 14 chars]"
+    },
+    {
+      "name": "dotless i matches i case-insensitively",
+      "input": "x-apı-key: dheyMPp2paziLi",
+      "expected": "x-apı-key: dhey[REDACTED 14 chars]"
+    },
+    {
+      "name": "Kelvin sign matches k case-insensitively",
+      "input": "ToKen n3Fsm63tqKWPq2",
+      "expected": "ToKen n3Fs[REDACTED 14 chars]"
+    },
+    {
+      "name": "information separator is whitespace",
+      "input": "Bearer\u001cJdJgDH4FXYF1H8AC",
+      "expected": "Bearer\u001cJdJg[REDACTED 16 chars]"
+    },
+    {
+      "name": "byte order mark is not whitespace",
+      "input": "password=﻿N0TghnCahZ",
+      "expected": "password=﻿N0T[REDACTED 11 chars]"
+    },
+    {
+      "name": "next line (U+0085) is whitespace",
+      "input": "password=zLgQhEhzmore",
+      "expected": "password=zLgQ[REDACTED 8 chars]more"
+    },
+    {
+      "name": "carriage return inside a header line",
+      "input": "X-Token: abc\rbVWQnd3xgN\nnext",
+      "expected": "X-Token: abc\r[REDACTED 14 chars]\nnext"
+    },
+    {
+      "name": "line separator does not end a header line",
+      "input": "X-Auth-Token: byDr9ITFQO z1g4nl\nnext: line",
+      "expected": "X-Auth-Token: byDr[REDACTED 17 chars]\nnext: line"
+    },
+    {
+      "name": "astral characters are counted as one",
+      "input": "password=😀😀😀😀😀QFnUiV",
+      "expected": "password=😀😀😀😀[REDACTED 11 chars]"
+    },
+    {
+      "name": "token in a git URL",
+      "input": "git clone https://ghp_9i3sz0pPxqiDKz6NFvASfElkQEC3vnKwn4KP@github.com/example/repo.git",
+      "expected": "git clone https://ghp_[REDACTED 40 chars]@github.com/example/repo.git"
+    },
+    {
+      "name": "mixed case header and assignment",
+      "input": "PASSWORD: R6D7GrsaEaMX\nx-csrf-token: 3hIsQCxRJE1eYokroGPN",
+      "expected": "PASSWORD: R6D7[REDACTED 12 chars]\nx-csrf-token: 3hIs[REDACTED 20 chars]"
+    },
+    {
+      "name": "a long tool output with several secrets",
+      "input": "nuclei found:\n[0] http://example.com/p0 Authorization: Bearer 8yg74IwfjGipritb7JezUwWs api_key=UtkYvSXfcWFrreNB\n[1] http://example.com/p1 Authorization: Bearer 1C9wln4SF03fSoOOuUnGBHHf api_key=29yqd8zR9fkkfjc0\n[2] http://example.com/p2 Authorization: Bearer uusRIQyxuS1vXDxsj1NGh9Ts api_key=LFXVcpNXpwBex9TS\n[3] http://example.com/p3 Authorization: Bearer lO9iD73k5NDwzXjz5EAZ0xhg api_key=8rvQnOPpHwwDjCX8\n[4] http://example.com/p4 Authorization: Bearer pfG5VDaTrF2wCNRui0Hz1kJb api_key=bgEuGD1bMv9lZ4Qm",
+      "expected": "nuclei found:\n[0] http://example.com/p0 Authorization: Bearer 8yg7[REDACTED 24 chars] api_key=UtkY[REDACTED 16 chars]\n[1] http://example.com/p1 Authorization: Bearer 1C9w[REDACTED 24 chars] api_key=29yq[REDACTED 16 chars]\n[2] http://example.com/p2 Authorization: Bearer uusR[REDACTED 24 chars] api_key=LFXV[REDACTED 16 chars]\n[3] http://example.com/p3 Authorization: Bearer lO9i[REDACTED 24 chars] api_key=8rvQ[REDACTED 16 chars]\n[4] http://example.com/p4 Authorization: Bearer pfG5[REDACTED 24 chars] api_key=bgEu[REDACTED 16 chars]"
+    }
+  ]
+}

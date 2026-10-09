@@ -21,6 +21,11 @@ export function gatewayCallsPerToken(): number {
   return positiveInt('PLUGIN_GATEWAY_CALLS_PER_TOKEN', 600)
 }
 
+/** The most a plugin receives of one session transcript, as JSON bytes (TD-25). */
+export function transcriptMaxBytes(): number {
+  return positiveInt('PLUGIN_TRANSCRIPT_MAX_BYTES', 2_097_152)
+}
+
 export interface DataLimits {
   maxRows: number
   maxBytes: number
