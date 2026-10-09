@@ -188,6 +188,60 @@ expect_eq "the deleted plugin owned rows" "1" "$(field plugin_rows_before)"
 expect_eq "deleting a plugin_installs row deletes its data and overrides" "0" "$(field plugin_rows_after)"
 expect_eq "another plugin's rows survive" "3" "$(field other_plugin_kept)"
 
+# --- Races between two real sessions ------------------------------------------
+# Copies of the plugin tables (indexes and CHECKs included) in a throwaway schema,
+# committed so two sessions can see them, dropped on exit.
+S="plugins_dbtest_$$"
+cleanup() { "${PSQL[@]}" -c "DROP SCHEMA IF EXISTS $S CASCADE" >/dev/null 2>&1; }
+trap cleanup EXIT
+"${PSQL[@]}" -c "CREATE SCHEMA $S;
+  CREATE TABLE $S.plugin_installs (LIKE public.plugin_installs INCLUDING ALL);
+  CREATE TABLE $S.plugin_overrides (LIKE public.plugin_overrides INCLUDING ALL);
+  CREATE TABLE $S.plugin_platform_state (LIKE public.plugin_platform_state INCLUDING ALL);" >/dev/null
+
+# race <name> <sql-first> <sql-second>: runs the first statement block in session A,
+# holding its transaction open for 3 s; starts session B once A is sleeping, and
+# records whether B then waited on a lock. Each block prints `A:...`/`B:...` lines.
+race() {
+  local name=$1 sqlA=$2 sqlB=$3 outA outB
+  outA=$(mktemp); outB=$(mktemp)
+  docker compose exec -T -e PGAPPNAME="pdbt_A_$$" postgres psql -U redamon -d redamon -qtAX \
+    -v ON_ERROR_STOP=1 -c "BEGIN" -c "$sqlA" -c "SELECT pg_sleep(3)" -c "COMMIT" >"$outA" 2>&1 &
+  local pidA=$!
+  for _ in $(seq 1 50); do
+    [ "$("${PSQL[@]}" -c "select count(*) from pg_stat_activity where application_name = 'pdbt_A_$$' and query like '%pg_sleep%'")" = 1 ] && break
+    sleep 0.2
+  done
+  docker compose exec -T -e PGAPPNAME="pdbt_B_$$" postgres psql -U redamon -d redamon -qtAX \
+    -v ON_ERROR_STOP=1 -c "BEGIN" -c "$sqlB" -c "COMMIT" >"$outB" 2>&1 &
+  local pidB=$! waited=no
+  for _ in $(seq 1 25); do
+    if [ "$("${PSQL[@]}" -c "select count(*) from pg_stat_activity where application_name = 'pdbt_B_$$' and wait_event_type = 'Lock'")" = 1 ]; then
+      waited=yes; break
+    fi
+    sleep 0.2
+  done
+  wait $pidA; wait $pidB
+  RACE_OUT="$(cat "$outA" "$outB")
+${name}_waited:$waited"
+  rm -f "$outA" "$outB"
+}
+rfield() { printf '%s\n' "$RACE_OUT" | sed -n "s/^$1://p" | head -1; }
+
+# Two installs of one plugin, the registry's compare-and-swap: one UPDATE per side.
+"${PSQL[@]}" -c "INSERT INTO $S.plugin_installs (plugin_id, status, updated_at) VALUES ('race', 'available', now())" >/dev/null
+CAS="UPDATE $S.plugin_installs SET status = 'installing', operation_id = '%s',
+  lease_expires_at = now() + interval '10 minutes', updated_at = now()
+  WHERE plugin_id = 'race' AND status IN ('available')
+    AND (operation_id IS NULL OR lease_expires_at < now()) RETURNING 1"
+race cas "WITH u AS ($(printf "$CAS" A)) SELECT 'A:' || count(*) FROM u" \
+         "WITH u AS ($(printf "$CAS" B)) SELECT 'B:' || count(*) FROM u"
+expect_eq "install race: session B waited on A's row lock" "yes" "$(rfield cas_waited)"
+expect_eq "install race: the first compare-and-swap updates the row" "1" "$(rfield A)"
+expect_eq "install race: the second, re-checked after A commits, updates nothing" "0" "$(rfield B)"
+expect_eq "install race: the row belongs to the winner" "A" \
+  "$("${PSQL[@]}" -c "select operation_id from $S.plugin_installs where plugin_id = 'race'")"
+
 COUNTS_AFTER=$("${PSQL[@]}" -c "$COUNTS_SQL")
 expect_eq "existing tables' row counts are unchanged" "$COUNTS_BEFORE" "$COUNTS_AFTER"
 
