@@ -75,7 +75,7 @@ def test_a_crash_is_502_and_the_worker_comes_back(runner, plugins_dir):
     before = h.health()["workers"][0]
     r = h.act("echo", "crash")
     assert r.status_code == 502 and r.json()["code"] == "worker_crashed"
-    wait_until(lambda: h.restarted_from(before["pid"]))
+    wait_until(lambda: h.restarted_from(before["pid"]), timeout=45)
     after = h.health()["workers"][0]
     assert after["restarts"] == before["restarts"] + 1
     assert not pid_alive(before["pid"])
@@ -130,3 +130,42 @@ def test_stopping_during_a_restart_leaves_no_worker(runner, plugins_dir):
         h.__exit__(None, None, None)
         assert time.time() - started < 10
         wait_until(lambda: not _worker_processes(str(plugins_dir / f"echo-{_}")))
+
+
+def test_a_restart_that_fails_to_start_is_retried(runner, plugins_dir, monkeypatch):
+    """A crashed worker whose replacement cannot start (a busy or memory-starved host)
+    must keep being retried, not stay down until the next run-list reload."""
+    import supervisor.workers as workers
+    h = runner([install_plugin(plugins_dir)])
+    before = h.health()["workers"][0]
+    real = workers.spawn
+    failures = {"left": 2}
+
+    async def flaky(*args, **kwargs):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("simulated: the host could not start the process")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(workers, "spawn", flaky)
+    assert h.act("echo", "crash").status_code == 502
+    wait_until(lambda: h.restarted_from(before["pid"]), timeout=45)
+    assert failures["left"] == 0
+    assert h.act("echo", "echo").json()["ok"] is True
+
+
+def test_a_worker_too_slow_to_start_fails_cleanly(runner, plugins_dir, caplog):
+    """A worker that does not say `ready` in time is killed and reported, and the
+    abandoned readiness future leaves no 'exception was never retrieved' behind."""
+    import gc
+    import sys
+    slow = plugins_dir / "slow-python"
+    slow.write_text(f"#!/bin/sh\nsleep 3\nexec {sys.executable} \"$@\"\n")
+    slow.chmod(0o755)
+    h = runner([install_plugin(plugins_dir)], python=str(slow), ready_timeout=0.5)
+    w = h.health()["workers"][0]
+    assert w["state"] == "failed" and w["pid"] is None
+    time.sleep(3.5)
+    gc.collect()
+    h.__exit__(None, None, None)
+    assert "exception was never retrieved" not in caplog.text

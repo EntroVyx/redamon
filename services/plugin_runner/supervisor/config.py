@@ -50,7 +50,8 @@ class Settings:
     kill_grace: float = 5.0
     # Waits before the 2nd, 3rd and 4th attempt to report a finished job.
     job_report_delays: tuple = field(default=(1.0, 2.0, 4.0))
-    ready_timeout: float = 15.0
+    # How long a new worker may take to say `ready`; generous for a loaded host.
+    ready_timeout: float = 30.0
     log_lines: int = 1000
 
     @property

@@ -120,6 +120,8 @@ class WorkerHandle:
         self._kill_reason = None
         loop = asyncio.get_running_loop()
         ready = loop.create_future()
+        # A start that gave up waiting leaves this future to fail later, unawaited.
+        ready.add_done_callback(lambda f: f.cancelled() or f.exception())
         try:
             self.proc, reader = await spawn(self.settings, self.entry.root, self.uid)
         except OSError as e:
@@ -280,6 +282,12 @@ class WorkerHandle:
         self.restarts += 1
         if await self.start():
             self._task(self._forget_crashes())
+        elif not self._stopping and self._should_run(self):
+            # A replacement that cannot start (a starved host) is retried with the same
+            # backoff instead of staying down until the next run-list reload.
+            self._recent_crashes += 1
+            self.state = "restarting"
+            self._restart_task = self._task(self._restart())
 
     async def _forget_crashes(self) -> None:
         await self.clock.sleep(60)

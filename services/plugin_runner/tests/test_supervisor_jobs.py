@@ -18,7 +18,7 @@ STUBBORN = (
 )
 
 
-def _done(h, n=1, timeout=10.0):
+def _done(h, n=1, timeout=30.0):
     wait_until(lambda: len(h.completions) >= n, timeout=timeout)
     return h.completions[n - 1]
 
@@ -53,8 +53,9 @@ def test_a_crash_is_reported_as_failed(runner, plugins_dir):
 
 def test_a_timeout_is_reported_as_failed(runner, plugins_dir):
     h = runner([install_plugin(plugins_dir)])
-    h.act("echo", "sleep", {"seconds": 30}, async_=True, job_id="j4", timeout=1)
-    assert _done(h, timeout=10).json()["error"]["code"] == "action_timeout"
+    h.act("echo", "sleep", {"seconds": 60}, async_=True, job_id="j4", timeout=1)
+    # Well before the 60 s sleep would end on its own.
+    assert _done(h, timeout=25).json()["error"]["code"] == "action_timeout"
 
 
 def test_the_report_is_retried_on_a_server_error(runner, plugins_dir):
@@ -88,11 +89,11 @@ def test_a_refused_report_is_not_retried(runner, plugins_dir):
 
 def test_cancel_stops_a_running_job(runner, plugins_dir):
     h = runner([install_plugin(plugins_dir)])
-    h.act("echo", "sleep", {"seconds": 30}, async_=True, job_id="j8")
+    h.act("echo", "sleep", {"seconds": 60}, async_=True, job_id="j8")
     wait_until(lambda: h.health()["workers"][0]["inFlight"] == 1)
     r = h.post("/runner/v1/plugins/echo/jobs/j8/cancel")
     assert r.status_code == 200 and r.json() == {"ok": True}
-    assert _done(h, timeout=5).json() == {"status": "failed", "error": {
+    assert _done(h, timeout=25).json() == {"status": "failed", "error": {
         "code": "cancelled", "message": "The action was cancelled."}}
 
 
@@ -111,8 +112,8 @@ def test_a_job_that_ignores_cancel_is_killed_after_the_grace_period(runner, plug
     h.act("echo", "stubborn", async_=True, job_id="j9")
     wait_until(lambda: h.health()["workers"][0]["inFlight"] == 1)
     h.post("/runner/v1/plugins/echo/jobs/j9/cancel")
-    assert _done(h, timeout=5).json()["error"]["code"] == "cancelled"
-    wait_until(lambda: h.restarted_from(pid))
+    assert _done(h, timeout=25).json()["error"]["code"] == "cancelled"
+    wait_until(lambda: h.restarted_from(pid), timeout=45)
 
 
 def test_a_job_id_already_running_is_refused(runner, plugins_dir):

@@ -102,7 +102,7 @@ def test_the_list_is_reloaded_periodically(runner, plugins_dir):
     h = runner([], reload_interval=0.3)
     assert h.health()["workers"] == []
     h.run_list = run_list([install_plugin(plugins_dir)])
-    wait_until(lambda: h.health()["workers"], timeout=10)
+    wait_until(lambda: h.health()["workers"], timeout=30)
 
 
 def test_two_plugins_get_two_workers(runner, plugins_dir):
