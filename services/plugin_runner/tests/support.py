@@ -4,6 +4,7 @@ shared Gateway contract cases. No test here touches a real network."""
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 import time
@@ -228,3 +229,73 @@ class WorkerProcess:
                 except OSError:
                     pass
         return self.proc.returncode
+
+
+# --- the supervisor under test ------------------------------------------------------------
+
+RUNNER_KEY = "test-runner-key-0123456789abcdef"
+IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# The gate runs test files in parallel processes, each with its own supervisor. A
+# supervisor kills every process left under a UID it releases, so two of them must never
+# hand out the same UIDs: each test process gets its own slice of the worker range.
+_SLICE = 20000 + (os.getpid() % 99) * 100
+TEST_UID_RANGE = (_SLICE, _SLICE + 99)
+
+
+def make_plugins_dir() -> Path:
+    """A plugins volume stand-in that worker UIDs can traverse and read: pytest's own
+    tmp_path is 0700 and owned by the test user, so a worker under its own UID could not
+    reach a plugin inside it."""
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="plugins-", dir="/tmp"))
+    d.chmod(0o755)
+    return d
+
+
+def install_plugin(plugins_dir: Path, plugin_id: str = "echo", version: str = "1.0.0", *,
+                   manifest_changes: Optional[dict] = None, extra_files: Optional[dict] = None,
+                   action_changes: Optional[dict] = None) -> dict:
+    """Copies the echo fixture to <plugins>/<id>/versions/<v> and returns its run-list entry."""
+    import shutil
+    root = plugins_dir / plugin_id / "versions" / version
+    shutil.copytree(ECHO_ROOT, root)
+    for rel, text in (extra_files or {}).items():
+        (root / rel).write_text(text)
+    manifest = json.loads(json.dumps(ECHO_MANIFEST))
+    manifest.update({"id": plugin_id, "version": version}, **(manifest_changes or {}))
+    for action in manifest["actions"]:
+        action.update((action_changes or {}).get(action["id"], {}))
+    for p in [root, *root.rglob("*")]:
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    for p in (plugins_dir / plugin_id, plugins_dir / plugin_id / "versions"):
+        p.chmod(0o755)
+    return {"id": plugin_id, "version": version, "manifest": manifest, "root": str(root)}
+
+
+def run_list(entries: list, platform: str = "1.0.0") -> dict:
+    return {"platformVersion": platform, "plugins": entries}
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie still answers kill(0); check its state.
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            return "\nState:\tZ" not in f.read()
+    except OSError:
+        return False
+
+
+def wait_until(predicate, timeout: float = 10.0, interval: float = 0.05):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")

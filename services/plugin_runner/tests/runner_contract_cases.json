@@ -1,0 +1,136 @@
+{
+  "contract": "redamon-plugin-runner",
+  "about": [
+    "The supervisor's HTTP API as the webapp sees it (phase 03 'Supervisor API'). Run against",
+    "the real app by services/plugin_runner/tests/test_supervisor_contract.py and against the",
+    "webapp's fake runner by webapp/src/lib/plugins/runnerClient.contract.test.ts, so the double",
+    "behind runnerClient.ts cannot drift from the real thing. Setup on both sides: runner key",
+    "`runnerKey`, the `echo` fixture plugin running at 1.0.0. `key`: \"valid\" sends the runner",
+    "key, null sends no header, any other string is sent as it is. `expect`: `status`, plus",
+    "`body` (exact), `bodyIncludes` (these top-level fields equal), `keys` (exact top-level key",
+    "set) or `code` (body.code). `jobsComplete` is the body the supervisor posts to the",
+    "Gateway's /api/plugin-gateway/v1/jobs/complete with the job's own bearer token."
+  ],
+  "runnerKey": "contract-runner-key-0123456789abcdef",
+  "platformVersion": "1.0.0",
+  "cases": [
+    {
+      "name": "health with the key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": "valid" },
+      "expect": { "status": 200, "keys": ["bootId", "platformVersion", "state", "workers"],
+                  "bodyIncludes": { "platformVersion": "1.0.0", "state": "ok" } }
+    },
+    {
+      "name": "health without a key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": null },
+      "expect": { "status": 401, "body": { "error": "Invalid or missing runner key.", "code": "unauthorized" } }
+    },
+    {
+      "name": "health with a wrong key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": "not-the-key" },
+      "expect": { "status": 401, "body": { "error": "Invalid or missing runner key.", "code": "unauthorized" } }
+    },
+    {
+      "name": "reload",
+      "request": { "method": "POST", "path": "/runner/v1/reload", "key": "valid" },
+      "expect": { "status": 200, "bodyIncludes": { "ok": true } }
+    },
+    {
+      "name": "a sync action",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": {
+          "token": "call-token",
+          "params": { "hello": "world" },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+          "timeoutSeconds": 30,
+          "async": false
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "result": { "echo": { "hello": "world" }, "plugin": "echo", "version": "1.0.0", "user": "user-1",
+                      "project": null, "session": null, "job": null }
+        }
+      }
+    },
+    {
+      "name": "a sync action that raises a PluginError",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/raise_plugin_error",
+        "key": "valid",
+        "body": {
+          "token": "call-token",
+          "params": { "code": "no_target", "message": "Pick a target first." },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+          "timeoutSeconds": 30,
+          "async": false
+        }
+      },
+      "expect": { "status": 200, "body": { "ok": false, "error": { "code": "no_target", "message": "Pick a target first." } } }
+    },
+    {
+      "name": "an async action",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": {
+          "token": "job-token",
+          "params": { "seconds": 0.1 },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "contract-job-1" },
+          "timeoutSeconds": 30,
+          "async": true,
+          "jobId": "contract-job-1"
+        }
+      },
+      "expect": { "status": 202, "body": { "jobId": "contract-job-1" } }
+    },
+    {
+      "name": "an action the manifest does not declare",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/not_declared",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_action" }
+    },
+    {
+      "name": "a plugin that is not running",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/nobody/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "nobody", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_plugin" }
+    },
+    {
+      "name": "cancel of a job that is not running",
+      "request": { "method": "POST", "path": "/runner/v1/plugins/echo/jobs/no-such-job/cancel", "key": "valid" },
+      "expect": { "status": 404, "code": "unknown_job" }
+    },
+    {
+      "name": "the plugin log",
+      "request": { "method": "GET", "path": "/runner/v1/plugins/echo/logs?lines=5", "key": "valid" },
+      "expect": { "status": 200, "keys": ["lines"] }
+    }
+  ],
+  "unconfigured": {
+    "name": "a runner with no key configured",
+    "request": { "method": "GET", "path": "/runner/v1/health", "key": "anything" },
+    "expect": { "status": 503, "code": "runner_not_configured" }
+  },
+  "jobsComplete": {
+    "succeeded": { "status": "succeeded", "result": { "slept": 0.1 } },
+    "failed": { "status": "failed", "error": { "code": "action_timeout", "message": "The action did not finish within 30 seconds." } }
+  }
+}
