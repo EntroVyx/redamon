@@ -10,6 +10,9 @@
  * - `startsWith` / `contains` are SQL `LIKE` patterns, as Prisma 6 sends them to
  *   Postgres: it does NOT escape `_` and `%`, so `startsWith: '__'` matches any value of
  *   two or more characters. A store must escape its own patterns (likePrefix);
+ * - a JSON path filter (`{path: [field], equals: v}`) follows jsonb: a missing path never
+ *   matches, `Prisma.JsonNull` matches a JSON null, a boolean never equals a number, and an
+ *   object or array never equals a scalar;
  * - unique keys raise the real `PrismaClientKnownRequestError` P2002, missing rows P2025;
  * - `$transaction(fn)` rolls back only its own writes when `fn` throws, and
  *   `SELECT pg_advisory_xact_lock(hashtext(<key>))` through `$executeRaw` takes a real
@@ -163,8 +166,23 @@ function isOperatorObject(v: unknown): v is Record<string, unknown> {
   return keys.length > 0 && keys.every((k) => OPERATORS.has(k))
 }
 
+function jsonPathEquals(value: unknown, path: unknown[], expected: unknown): boolean {
+  let at: unknown = value
+  for (const key of path) {
+    if (!at || typeof at !== 'object' || Array.isArray(at) || !Object.hasOwn(at as object, String(key))) return false
+    at = (at as Record<string, unknown>)[String(key)]
+  }
+  if (expected === Prisma.JsonNull) return at === null
+  if (expected === null || typeof expected === 'object') throw new Error('fakePrisma: JSON path equals takes a scalar or JsonNull')
+  return typeof at === typeof expected && at === expected
+}
+
 function matchField(value: unknown, cond: unknown): boolean {
   if (cond === undefined) return true
+  if (cond && typeof cond === 'object' && Array.isArray((cond as Record<string, unknown>).path)) {
+    const { path, equals } = cond as { path: unknown[]; equals: unknown }
+    return jsonPathEquals(value, path, equals)
+  }
   if (!isOperatorObject(cond)) return eq(value, cond)
   for (const [op, arg] of Object.entries(cond)) {
     if (arg === undefined) continue

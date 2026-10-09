@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { Prisma, type PluginData } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { now } from './clock'
@@ -16,6 +17,10 @@ import { dataLimits } from './settings'
  *   quotas, so a full store never blocks a job or a counter.
  * - Quotas are checked by counting before writing; two concurrent writes can overshoot
  *   by one row each, which is accepted for a quota.
+ * - `query` pages with a keyset cursor (TD-28): the cursor holds the last row's sort
+ *   value and id, so writes between pages never skip or repeat a row, plus a hash of the
+ *   whole query, so a cursor never moves to another query. `where` compares top-level JSON
+ *   fields by jsonb equality through Prisma's JSON path filter, never raw SQL.
  * - A row past its `expiresAt` is invisible to every read. It still holds quota until it
  *   is deleted (otherwise short-lived rows could grow storage without bound before
  *   reconciliation deletes them), but a write that would exceed a quota first deletes
@@ -70,6 +75,8 @@ export type PluginDataErrorCode =
   | 'invalid_ttl'
   | 'invalid_namespace'
   | 'invalid_plugin'
+  | 'invalid_query'
+  | 'invalid_cursor'
 
 export class PluginDataError extends Error {
   constructor(
@@ -295,27 +302,185 @@ export async function put(
   return toRecord(row)
 }
 
+// ---------------------------------------------------------------------------
+// Queries (TD-28)
+// ---------------------------------------------------------------------------
+
+export const QUERY_ORDERS = ['-updated', 'updated', 'key', '-key'] as const
+export type QueryOrder = (typeof QUERY_ORDERS)[number]
+export type WhereValue = string | number | boolean | null
+export const WHERE_MAX_FIELDS = 5
+export const WHERE_TEXT_MAX_CHARS = 512
+const WHERE_FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+
+export interface QueryOptions {
+  keyPrefix?: string
+  where?: Record<string, WhereValue>
+  order?: QueryOrder
+  limit?: number
+  cursor?: string | null
+}
+
+export interface QueryPage {
+  items: DataRecord[]
+  /** Pass back as `cursor` for the next page; null on the last one. */
+  next: string | null
+}
+
+const invalidQuery = (message: string) => new PluginDataError('invalid_query', message)
+
+// The messages of the SDK client's own checks (redamon_plugin_sdk/client.py), so a
+// plugin sees one wording whether its SDK or the Gateway refused the query.
+function checkWhere(where: unknown): [string, WhereValue][] | null {
+  if (where === undefined || where === null) return null
+  if (typeof where !== 'object' || Array.isArray(where)) throw invalidQuery(`where takes 1 to ${WHERE_MAX_FIELDS} fields.`)
+  const entries = Object.entries(where as Record<string, unknown>)
+  if (entries.length < 1 || entries.length > WHERE_MAX_FIELDS) throw invalidQuery(`where takes 1 to ${WHERE_MAX_FIELDS} fields.`)
+  for (const [name, value] of entries) {
+    if (!WHERE_FIELD_RE.test(name)) throw invalidQuery(`where field '${name}' is not a valid name.`)
+    const scalar =
+      value === null ||
+      typeof value === 'boolean' ||
+      (typeof value === 'string' && value.length <= WHERE_TEXT_MAX_CHARS) ||
+      (typeof value === 'number' && Number.isFinite(value))
+    if (!scalar) {
+      throw invalidQuery(
+        `where value for '${name}' must be text of at most ${WHERE_TEXT_MAX_CHARS} characters, a finite number, true, false or null.`,
+      )
+    }
+  }
+  return entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) as [string, WhereValue][]
+}
+
+function checkPrefix(prefix: unknown): string | null {
+  if (prefix === undefined || prefix === null || prefix === '') return null
+  if (typeof prefix !== 'string' || prefix.length > KEY_MAX_CHARS || prefix.includes('\u0000')) {
+    throw invalidQuery(`prefix must be text of at most ${KEY_MAX_CHARS} characters.`)
+  }
+  return prefix
+}
+
+// A missing field never matches (`#>` gives SQL NULL); JsonNull, never AnyNull, so a
+// Python None matches only a stored JSON null, not a missing field.
+function filters(prefix: string | null, where: [string, WhereValue][] | null): Prisma.PluginDataWhereInput[] {
+  const out: Prisma.PluginDataWhereInput[] = []
+  if (prefix) out.push({ key: { startsWith: likePrefix(prefix) } })
+  for (const [field, value] of where ?? []) {
+    out.push({ value: { path: [field], equals: value === null ? Prisma.JsonNull : value } })
+  }
+  return out
+}
+
+interface CursorBody {
+  o: QueryOrder
+  v: string
+  i: string
+  h: string
+}
+
+function queryHash(base: ReturnType<typeof prepareCollection>, prefix: string | null, where: unknown, order: QueryOrder) {
+  return [base.pluginId, base.namespace, base.ownerType, base.ownerId, base.collection, prefix, where, order]
+}
+
+// Not a secret: it only stops a cursor from being used with another query, or after an
+// edit; whatever a cursor says, a query never leaves its plugin, owner and collection.
+function cursorHash(query: unknown[], o: string, v: string, i: string): string {
+  return createHash('sha256').update(JSON.stringify([...query, o, v, i])).digest('base64url').slice(0, 32)
+}
+
+function encodeCursor(query: unknown[], order: QueryOrder, row: PluginData): string {
+  const v = order.endsWith('updated') ? row.updatedAt.toISOString() : row.key
+  const body: CursorBody = { o: order, v, i: row.id, h: cursorHash(query, order, v, row.id) }
+  return Buffer.from(JSON.stringify(body), 'utf8').toString('base64url')
+}
+
+function decodeCursor(cursor: string, query: unknown[], order: QueryOrder): CursorBody {
+  let body: Partial<CursorBody> | null = null
+  try {
+    body = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))
+  } catch {
+    body = null
+  }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    typeof body.o !== 'string' ||
+    typeof body.v !== 'string' ||
+    typeof body.i !== 'string' ||
+    typeof body.h !== 'string'
+  ) {
+    throw new PluginDataError('invalid_cursor', 'This cursor is not valid.')
+  }
+  if (body.o !== order || body.h !== cursorHash(query, body.o, body.v, body.i)) {
+    throw new PluginDataError('invalid_cursor', 'This cursor belongs to another query.')
+  }
+  if (order.endsWith('updated') && Number.isNaN(Date.parse(body.v))) {
+    throw new PluginDataError('invalid_cursor', 'This cursor is not valid.')
+  }
+  return body as CursorBody
+}
+
+const ORDER_BY: Record<QueryOrder, Prisma.PluginDataOrderByWithRelationInput[]> = {
+  '-updated': [{ updatedAt: 'desc' }, { id: 'desc' }],
+  updated: [{ updatedAt: 'asc' }, { id: 'asc' }],
+  key: [{ key: 'asc' }, { id: 'asc' }],
+  '-key': [{ key: 'desc' }, { id: 'desc' }],
+}
+
+function after(order: QueryOrder, c: CursorBody): Prisma.PluginDataWhereInput {
+  const dir = order.startsWith('-') ? 'lt' : 'gt'
+  if (order.endsWith('updated')) {
+    const at = new Date(c.v)
+    return { OR: [{ updatedAt: { [dir]: at } }, { updatedAt: at, id: { [dir]: c.i } }] }
+  }
+  return { OR: [{ key: { [dir]: c.v } }, { key: c.v, id: { [dir]: c.i } }] }
+}
+
 export async function query(
   scope: DataScope,
   owner: PluginOwner,
   collection: string,
-  opts: { keyPrefix?: string; limit?: number } = {},
+  opts: QueryOptions = {},
   db: Db = prisma,
-): Promise<DataRecord[]> {
-  const where = prepareCollection(scope, owner, collection)
-  const take = Math.min(QUERY_LIMIT_MAX, Math.max(1, Math.floor(opts.limit ?? QUERY_LIMIT_DEFAULT) || 1))
+): Promise<QueryPage> {
+  const base = prepareCollection(scope, owner, collection)
+  const prefix = checkPrefix(opts.keyPrefix)
+  const where = checkWhere(opts.where)
+  const order = opts.order ?? '-updated'
+  if (!(QUERY_ORDERS as readonly unknown[]).includes(order)) throw invalidQuery(`order is one of ${QUERY_ORDERS.join(', ')}.`)
+  const limit = opts.limit ?? QUERY_LIMIT_DEFAULT
+  if (!Number.isInteger(limit) || limit < 1 || limit > QUERY_LIMIT_MAX) {
+    throw invalidQuery(`limit is a whole number from 1 to ${QUERY_LIMIT_MAX}.`)
+  }
+  if (opts.cursor !== undefined && opts.cursor !== null && typeof opts.cursor !== 'string') {
+    throw invalidQuery('cursor must be the string a previous page returned.')
+  }
+  const identity = queryHash(base, prefix, where, order)
+  const cursor = typeof opts.cursor === 'string' ? decodeCursor(opts.cursor, identity, order) : null
+
+  // One row more than asked: whether it exists decides `next`, so the last page says so.
   const rows = await db.pluginData.findMany({
-    where: {
-      AND: [
-        where,
-        opts.keyPrefix ? { key: { startsWith: likePrefix(opts.keyPrefix) } } : {},
-        liveRows(),
-      ],
-    },
-    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-    take,
+    where: { AND: [base, ...filters(prefix, where), liveRows(), ...(cursor ? [after(order, cursor)] : [])] },
+    orderBy: ORDER_BY[order],
+    take: limit + 1,
   })
-  return rows.map(toRecord)
+  const page = rows.slice(0, limit)
+  const next = rows.length > limit ? encodeCursor(identity, order, page[page.length - 1]) : null
+  return { items: page.map(toRecord), next }
+}
+
+/** How many live rows `query` would page through with the same prefix and where. */
+export async function count(
+  scope: DataScope,
+  owner: PluginOwner,
+  collection: string,
+  opts: Pick<QueryOptions, 'keyPrefix' | 'where'> = {},
+  db: Db = prisma,
+): Promise<number> {
+  const base = prepareCollection(scope, owner, collection)
+  const prefix = checkPrefix(opts.keyPrefix)
+  const where = checkWhere(opts.where)
+  return db.pluginData.count({ where: { AND: [base, ...filters(prefix, where), liveRows()] } })
 }
 
 export async function remove(

@@ -75,7 +75,7 @@ describe('separation', () => {
   test("a user-owned row is invisible to another user's owner", async () => {
     await store.put(S, alice, 'c', 'k', 'secret')
     expect(await store.get(S, bob, 'c', 'k')).toBeNull()
-    expect(await store.query(S, bob, 'c')).toEqual([])
+    expect((await store.query(S, bob, 'c')).items).toEqual([])
     expect(await store.remove(S, bob, 'c', 'k')).toBe(false)
     expect((await store.get(S, alice, 'c', 'k'))?.value).toBe('secret')
   })
@@ -239,6 +239,8 @@ describe('input checks', () => {
 })
 
 describe('query', () => {
+  // TD-28: a page is {items, next} and limit is 1 to 200; the store refuses other values
+  // (it clamped them before), as the Gateway answers them with 400 invalid_query.
   test('newest first, with a default and a maximum limit', async () => {
     let t = Date.parse('2026-01-01T00:00:00Z')
     const { setNowForTests } = await import('./clock')
@@ -248,16 +250,18 @@ describe('query', () => {
       await store.put(S, alice, 'c', `k${String(i).padStart(3, '0')}`, i)
     }
     setNowForTests(null)
-    const first = await store.query(S, alice, 'c')
+    const first = (await store.query(S, alice, 'c')).items
     expect(first).toHaveLength(store.QUERY_LIMIT_DEFAULT)
     expect(first[0].key).toBe('k229')
-    expect((await store.query(S, alice, 'c', { limit: 1000 })).length).toBe(store.QUERY_LIMIT_MAX)
-    expect((await store.query(S, alice, 'c', { limit: 0 })).length).toBe(1)
+    expect((await store.query(S, alice, 'c', { limit: store.QUERY_LIMIT_MAX })).items.length).toBe(store.QUERY_LIMIT_MAX)
+    expect(await code(store.query(S, alice, 'c', { limit: 1000 }))).toBe('invalid_query')
+    expect(await code(store.query(S, alice, 'c', { limit: 0 }))).toBe('invalid_query')
+    expect((await store.query(S, alice, 'c', { limit: 1 })).items.length).toBe(1)
   })
 
   test('keyPrefix is literal: _ and % are not wildcards', async () => {
     for (const k of ['a_1', 'ab1', 'a%1', 'a1']) await store.put(S, alice, 'c', k, k)
-    const keys = async (keyPrefix: string) => (await store.query(S, alice, 'c', { keyPrefix })).map((r) => r.key).sort()
+    const keys = async (keyPrefix: string) => (await store.query(S, alice, 'c', { keyPrefix })).items.map((r) => r.key).sort()
     expect(await keys('a_')).toEqual(['a_1'])
     expect(await keys('a%')).toEqual(['a%1'])
     expect(await keys('a')).toEqual(['a%1', 'a1', 'a_1', 'ab1'])

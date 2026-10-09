@@ -45,7 +45,7 @@ describe('ttlSeconds', () => {
     await store.put(S, alice, 'c', 'kept', 'v')
     t += 60_000
     expect(await store.get(S, alice, 'c', 'k')).toBeNull()
-    expect((await store.query(S, alice, 'c')).map((r) => r.key)).toEqual(['kept'])
+    expect((await store.query(S, alice, 'c')).items.map((r) => r.key)).toEqual(['kept'])
     expect(db.rows('pluginData')).toHaveLength(2) // still stored until reconciliation
   })
 

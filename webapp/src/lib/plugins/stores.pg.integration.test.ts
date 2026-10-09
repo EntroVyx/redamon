@@ -119,7 +119,7 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
     test('a key prefix with _ and % matches literally (real LIKE)', async () => {
       for (const k of ['a_1', 'ab1', 'a%1', 'a1']) await store.put(S, me, 'c', k, k, {}, db)
       const keys = async (keyPrefix: string) =>
-        (await store.query(S, me, 'c', { keyPrefix }, db)).map((r) => r.key).sort()
+        (await store.query(S, me, 'c', { keyPrefix }, db)).items.map((r) => r.key).sort()
       expect(await keys('a_')).toEqual(['a_1'])
       expect(await keys('a%')).toEqual(['a%1'])
       expect(await keys('a')).toEqual(['a%1', 'a1', 'a_1', 'ab1'])
@@ -133,7 +133,7 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
       expect((await store.get(S, me, 'c', 'k', db))?.value).toBe('v')
       setNowForTests(() => new Date(t0 + 60_000))
       expect(await store.get(S, me, 'c', 'k', db)).toBeNull()
-      expect(await store.query(S, me, 'c', {}, db)).toEqual([])
+      expect((await store.query(S, me, 'c', {}, db)).items).toEqual([])
     })
 
     test('copy and swap namespaces keep owners and leave platform rows in live', async () => {
@@ -182,6 +182,103 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
       await store.put(S, me, 'c', 'k', 1, {}, db)
       await db.user.delete({ where: { id: 'alice' } })
       expect(await db.pluginData.count()).toBe(0)
+    })
+
+    // TD-28 on real jsonb: what the double imitates (dataStore.query.test.ts) and Prisma's
+    // JSON path filter must agree on, with the cases of test_sdk_fake.py.
+    describe('where, order, cursor, count (TD-28)', () => {
+      const keys = (p: store.QueryPage) => p.items.map((r) => r.key)
+      let t = 0
+      const put = async (key: string, value: unknown, owner = me, collection = 'rows') => {
+        t += 1000
+        setNowForTests(() => new Date(Date.parse('2030-01-01T00:00:00Z') + t))
+        await store.put(S, owner, collection, key, value, {}, db)
+      }
+
+      test('jsonb equality: missing field, null, bool vs number, 1 vs 1.0, AND with the prefix', async () => {
+        const rows: Record<string, unknown> = {
+          'open-int': { status: 'open', n: 1, flag: true, gone: null },
+          'closed-float': { status: 'closed', n: 1.0, flag: false },
+          'bool-one': { status: 'open', n: true },
+          'text-one': { status: 'open', n: '1' },
+          'not-an-object': 'open',
+          'list-value': ['open'],
+        }
+        for (const [k, v] of Object.entries(rows)) await put(k, v)
+        // The float row as raw jsonb 1.0: JSON.parse would have made it 1 before Prisma saw it.
+        await db.$executeRaw`UPDATE plugin_data SET value = '{"status": "closed", "n": 1.0, "flag": false}'::jsonb WHERE key = 'closed-float'`
+        const where = async (w: Record<string, store.WhereValue>) =>
+          keys(await store.query(S, me, 'rows', { where: w }, db)).sort()
+        expect(await where({ status: 'open' })).toEqual(['bool-one', 'open-int', 'text-one'])
+        expect(await where({ n: 1 })).toEqual(['closed-float', 'open-int'])
+        expect(await where({ n: 1.0 })).toEqual(['closed-float', 'open-int'])
+        expect(await where({ n: true })).toEqual(['bool-one'])
+        expect(await where({ flag: false })).toEqual(['closed-float'])
+        expect(await where({ n: '1' })).toEqual(['text-one'])
+        expect(await where({ gone: null })).toEqual(['open-int'])
+        expect(await where({ missing: null })).toEqual([])
+        expect(await where({ status: 'open', n: 1 })).toEqual(['open-int'])
+        expect(keys(await store.query(S, me, 'rows', { keyPrefix: 'open', where: { status: 'open' } }, db))).toEqual(['open-int'])
+        expect(await store.count(S, me, 'rows', {}, db)).toBe(6)
+        expect(await store.count(S, me, 'rows', { where: { status: 'open' } }, db)).toBe(3)
+        expect(await store.count(S, me, 'rows', { keyPrefix: 'open', where: { status: 'open' } }, db)).toBe(1)
+      })
+
+      test.each(['-updated', 'updated', 'key', '-key'] as const)(
+        'order %s: 250 rows walked 50 at a time with writes between pages, each surviving row once',
+        async (order) => {
+          for (let i = 0; i < 250; i++) await put(`k${String(i).padStart(3, '0')}`, i)
+          await put('bob-row', 1, { type: 'user', id: 'bob' })
+          const seen: string[] = []
+          const deleted = new Set<string>()
+          let cursor: string | null = null
+          for (let page = 1; ; page++) {
+            const p: store.QueryPage = await store.query(S, me, 'rows', { order, limit: 50, cursor }, db)
+            seen.push(...keys(p))
+            if (!p.next) break
+            cursor = p.next
+            await put(`late${page}`, page)
+            const notYet = ['k100', 'k200', 'k001'].find((k) => !seen.includes(k) && !deleted.has(k))
+            if (notYet) {
+              deleted.add(notYet)
+              await store.remove(S, me, 'rows', notYet, db)
+            }
+          }
+          const originals = seen.filter((k) => /^k\d{3}$/.test(k)).sort()
+          const expected = Array.from({ length: 250 }, (_, i) => `k${String(i).padStart(3, '0')}`).filter((k) => !deleted.has(k))
+          expect(originals).toEqual(expected)
+          expect(new Set(seen).size).toBe(seen.length)
+          expect(seen).not.toContain('bob-row')
+        },
+        60_000,
+      )
+
+      test('a cursor fits only its own query; count equals a full walk; expired rows are invisible to both', async () => {
+        for (let i = 0; i < 12; i++) await put(`k${i}`, { even: i % 2 === 0 })
+        const { next } = await store.query(S, me, 'rows', { limit: 2 }, db)
+        for (const other of [{ where: { even: true } }, { order: 'key' as const }, { keyPrefix: 'k1' }]) {
+          await expect(store.query(S, me, 'rows', { limit: 2, ...other, cursor: next }, db)).rejects.toMatchObject({
+            code: 'invalid_cursor',
+          })
+        }
+        await expect(store.query(S, { type: 'user', id: 'bob' }, 'rows', { limit: 2, cursor: next }, db)).rejects.toMatchObject({
+          code: 'invalid_cursor',
+        })
+        t += 1000
+        setNowForTests(() => new Date(Date.parse('2030-01-01T00:00:00Z') + t))
+        await store.put(S, me, 'rows', 'short-lived', { even: true }, { ttlSeconds: 60 }, db)
+        t += 61_000
+        setNowForTests(() => new Date(Date.parse('2030-01-01T00:00:00Z') + t))
+        const walked: string[] = []
+        let cursor: string | null = null
+        do {
+          const p: store.QueryPage = await store.query(S, me, 'rows', { limit: 4, where: { even: true }, cursor }, db)
+          walked.push(...keys(p))
+          cursor = p.next
+        } while (cursor)
+        expect(walked.sort()).toEqual(['k0', 'k10', 'k2', 'k4', 'k6', 'k8'])
+        expect(await store.count(S, me, 'rows', { where: { even: true } }, db)).toBe(6)
+      })
     })
   })
 
