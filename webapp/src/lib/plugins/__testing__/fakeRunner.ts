@@ -1,0 +1,142 @@
+/**
+ * A fake plugin-runner supervisor (phase 03 "Supervisor API") for webapp tests:
+ * the same routes and key check, scripted answers, every call recorded. It is
+ * the double behind `runnerClient.ts` (rule T3); the contract suite of step 3.8
+ * runs the same cases against it and the real image.
+ *
+ *   GET  /runner/v1/health
+ *   POST /runner/v1/reload
+ *   POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId}
+ *   POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel
+ *   GET  /runner/v1/plugins/{id}/logs?lines=N
+ *
+ * Every route requires `X-Plugin-Runner-Key`; no key configured → 503
+ * `runner_not_configured` (fail closed, TD-08).
+ */
+import { randomUUID, timingSafeEqual } from 'crypto'
+import { startFakeServer, type FakeRequest, type FakeResponse, type FakeServer } from './fakeHttpServer'
+
+export const RUNNER_KEY_HEADER = 'x-plugin-runner-key'
+
+export interface FakeWorker {
+  id: string
+  version: string
+  pid: number
+  uid: number
+  inFlight: number
+  startedAt: string
+  restarts: number
+}
+
+export interface ActionCall {
+  pluginId: string
+  action: string
+  body: Record<string, unknown>
+}
+
+/** The scripted outcome of one action call; `result` is wrapped as `{ok: true, result}`. */
+export type ActionScript = (call: ActionCall) => FakeResponse | { result: unknown } | Promise<FakeResponse | { result: unknown }>
+
+export interface FakeRunnerOptions {
+  /** The key the fake demands; '' or undefined → every route 503 runner_not_configured. */
+  runnerKey?: string
+  platformVersion?: string
+  bootId?: string
+  state?: 'ok' | 'out_of_date' | 'degraded'
+  workers?: FakeWorker[]
+  /** Keyed `${pluginId}/${action}`; an unknown pair answers 404 unknown_action. */
+  actions?: Record<string, ActionScript>
+  /** Keyed by plugin id. */
+  logs?: Record<string, string[]>
+}
+
+export interface FakeRunner {
+  server: FakeServer
+  baseUrl: string
+  options: Required<Pick<FakeRunnerOptions, 'platformVersion' | 'bootId' | 'state'>> & FakeRunnerOptions
+  reloads: number
+  actionCalls: ActionCall[]
+  cancels: Array<{ pluginId: string; jobId: string }>
+  /** Calls refused for a missing or wrong key. */
+  refused: FakeRequest[]
+  close(): Promise<void>
+}
+
+function json(status: number, body: object): FakeResponse {
+  return { status, body }
+}
+
+function keyMatches(given: string | string[] | undefined, expected: string): boolean {
+  if (typeof given !== 'string') return false
+  const a = Buffer.from(given)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<FakeRunner> {
+  const options = {
+    platformVersion: '1.0.0',
+    bootId: randomUUID(),
+    state: 'ok' as const,
+    ...opts,
+  }
+  // What the routes record; it becomes the returned runner, so tests read live values.
+  const record = {
+    reloads: 0,
+    actionCalls: [] as ActionCall[],
+    cancels: [] as Array<{ pluginId: string; jobId: string }>,
+    refused: [] as FakeRequest[],
+  }
+
+  const handle = async (req: FakeRequest): Promise<FakeResponse> => {
+    if (!options.runnerKey) return json(503, { error: 'The plugin runner has no key configured.', code: 'runner_not_configured' })
+    if (!keyMatches(req.headers[RUNNER_KEY_HEADER], options.runnerKey)) {
+      record.refused.push(req)
+      return json(401, { error: 'Invalid or missing runner key.', code: 'unauthorized' })
+    }
+    const p = req.path
+    if (req.method === 'GET' && p === '/runner/v1/health') {
+      return json(200, { platformVersion: options.platformVersion, bootId: options.bootId, state: options.state, workers: options.workers ?? [] })
+    }
+    if (req.method === 'POST' && p === '/runner/v1/reload') {
+      record.reloads++
+      return json(200, { ok: true })
+    }
+    let m = /^\/runner\/v1\/plugins\/([^/]+)\/actions\/([^/]+)$/.exec(p)
+    if (req.method === 'POST' && m) {
+      const [pluginId, action] = [decodeURIComponent(m[1]), decodeURIComponent(m[2])]
+      let body: Record<string, unknown>
+      try {
+        body = JSON.parse(req.body.toString('utf8') || '{}')
+      } catch {
+        return json(400, { error: 'Body is not JSON.', code: 'bad_request' })
+      }
+      const call = { pluginId, action, body }
+      record.actionCalls.push(call)
+      const script = options.actions?.[`${pluginId}/${action}`]
+      if (!script) return json(404, { error: `Unknown action ${pluginId}/${action}.`, code: 'unknown_action' })
+      if (body.async === true) {
+        // The job's outcome is the caller's to observe; a rejection must not crash the test run.
+        void Promise.resolve(script(call)).catch(() => undefined)
+        return json(202, { jobId: typeof body.jobId === 'string' ? body.jobId : randomUUID() })
+      }
+      const out = await script(call)
+      return 'result' in out ? json(200, { ok: true, result: out.result }) : out
+    }
+    m = /^\/runner\/v1\/plugins\/([^/]+)\/jobs\/([^/]+)\/cancel$/.exec(p)
+    if (req.method === 'POST' && m) {
+      record.cancels.push({ pluginId: decodeURIComponent(m[1]), jobId: decodeURIComponent(m[2]) })
+      return json(200, { ok: true })
+    }
+    m = /^\/runner\/v1\/plugins\/([^/]+)\/logs$/.exec(p)
+    if (req.method === 'GET' && m) {
+      const lines = options.logs?.[decodeURIComponent(m[1])] ?? []
+      const n = Math.min(Math.max(parseInt(req.query.get('lines') ?? '200', 10) || 200, 1), 1000)
+      return json(200, { lines: lines.slice(-n) })
+    }
+    return json(404, { error: 'Not found.', code: 'not_found' })
+  }
+
+  const server = await startFakeServer({}, { fallback: handle })
+  return Object.assign(record, { server, baseUrl: server.baseUrl, options, close: () => server.close() })
+}
