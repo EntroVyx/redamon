@@ -456,6 +456,33 @@ GET /api/recon/[projectId]/download
 
 Downloads the recon output JSON file for the project.
 
+### Plugin platform API (plugin platform, off by default)
+
+Every route below answers **404 `plugins_disabled`** while `PLUGINS_ENABLED` is not `true`
+(see [README.PLUGINS.md](README.PLUGINS.md)). Errors are `{error, code}` with a stable `code`.
+
+**For the signed-in user** (session cookie; state-changing routes also require a JSON body and a
+same-origin request, checked against `PLUGINS_ALLOWED_ORIGIN` when it is set):
+
+| Route | What it does |
+|---|---|
+| `GET /api/plugins/status` | Platform version and whether the plugin runner is reachable (never a 5xx) |
+| `GET /api/plugins/llm-features` | The plugins the user can choose a model for in Models by feature: `[{featureId: "plugin:<id>", pluginId, label, description}]` |
+| `POST /api/plugins/[pluginId]/actions/[actionId]` | Runs a plugin action. Body `{context: {projectId?, sessionId?}, params}`; the project and session must be the user's. A sync action answers `{ok, result \| error}`; an async one `202 {jobId}` (a second click while it runs answers the same job). `409 model_required` when the action calls a model and none is chosen; `503 runner_unavailable` / `plugin_not_running` when the runner cannot run it |
+| `GET /api/plugins/jobs/[jobId]` | An async action's job: `{status: queued\|running\|succeeded\|failed\|cancelled, progress, result, error, ...}`; owner only |
+| `POST /api/plugins/jobs/[jobId]/cancel` | Cancels the owner's job |
+
+**For plugin code** (`/api/plugin-gateway/v1/*`, the Gateway): authenticated only by the call
+token the webapp mints per action (`Authorization: Bearer`), never by a cookie or the internal key;
+reached through the plugin-gateway proxy and denied at the single-host nginx. Every call re-checks
+the plugin (enabled, ready, at the token's version), the permission (granted and declared), and that
+the project and session still belong to the user. Operations: `session/read`, `llm/invoke`,
+`data/{get,put,query,count,delete}`, `override/{get,propose,withdraw}`, `jobs/{progress,complete}`.
+The wire format is `services/plugin_runner/sdk/contract_cases.json`.
+
+**For the plugin runner** (`/api/plugin-runner/v1/run-list`): the runner key (`X-Plugin-Runner-Key`)
+only.
+
 ---
 
 ## Environment Variables
@@ -473,6 +500,13 @@ Downloads the recon output JSON file for the project.
 | `INTERNAL_KEY_ALLOWLIST_ENFORCE` | When `true`, block internal-key requests to routes outside the allowlist; default is log-only | (unset = log-only) |
 | `NODE_ENV` | Environment mode | `development` |
 | `PORT` | Application port | `3000` |
+| `PLUGINS_ENABLED` | Turns the plugin platform on (`true`); off, every plugin route answers 404 | `false` |
+| `PLUGIN_RUNNER_KEY`, `PLUGIN_CALL_TOKEN_SECRET` | The webapp↔runner key and the secret that signs plugin call tokens (must differ from `AUTH_SECRET`); empty, plugin routes fail closed | (generated) |
+| `PLUGINS_ALLOWED_ORIGIN` | The public origin the same-origin check of plugin routes accepts (behind nginx, which drops the port from `Host`) | (unset: the request's host) |
+| `PLUGIN_ACTION_MAX_TIMEOUT` | Cap on any plugin action, seconds | `900` |
+| `PLUGIN_GATEWAY_CALLS_PER_TOKEN` | Gateway calls one call token may make | `600` |
+| `PLUGIN_LLM_DAILY_CALL_CAP` | Model calls one plugin may make per user and UTC day | `100` |
+| `PLUGIN_TRANSCRIPT_MAX_BYTES` | The most of one session transcript a plugin receives | `2097152` |
 
 ---
 
