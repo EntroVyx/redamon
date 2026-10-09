@@ -126,6 +126,16 @@ describe('the behaviour table of design §9.1, row by row', () => {
     expect(r.enabled).toBe(true)
   })
 
+  test('an empty revokedReason still counts as revoked (fail safe)', () => {
+    const r = row('ready', true, { revokedReason: '' })
+    expect([servesActions(r as never), showsContributions(r as never), overridesQualify(r as never)]).toEqual([
+      false,
+      false,
+      false,
+    ])
+    expect(dormantReason(r as never, { switchOn: true, agentSupportsSeam: true })).toBe('revoked')
+  })
+
   test('overrides need the override:skill.text permission granted', () => {
     expect(overridesQualify(row('ready', true, { grantedPermissions: ['session:read'] }) as never)).toBe(false)
     expect(overridesQualify(row('ready', true, { grantedPermissions: [] }) as never)).toBe(false)

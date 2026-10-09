@@ -177,11 +177,37 @@ export async function createForInstall(
   return { pluginId, operationId, kind: 'install', status: 'installing' }
 }
 
-/** Extends the lease of a long operation; fails once the lease was lost. */
+/**
+ * Claims the lease of a plugin that stays in `status`, when no live operation holds it:
+ * how reconciliation takes over a crashed operation (finish or roll back an update,
+ * heal a lost folder) before doing any work, so a second copy, or the crashed
+ * operation coming back, cannot work on the same plugin at the same time.
+ */
+export async function takeOverOperation(
+  pluginId: string,
+  status: PluginStatus,
+  kind: OperationKind,
+  args?: Prisma.InputJsonValue,
+  db: Db = prisma,
+): Promise<Operation> {
+  checkPluginId(pluginId)
+  const operationId = randomUUID()
+  const { count } = await db.pluginInstall.updateMany({
+    where: { pluginId, status, OR: [{ operationId: null }, { leaseExpiresAt: { lt: now() } }] },
+    data: { operationId, operationKind: kind, operationArgs: args ?? Prisma.DbNull, leaseExpiresAt: leaseEnd() },
+  })
+  if (count !== 1) throw new PluginConflictError(pluginId, `not ${status}, or another operation holds it`)
+  return { pluginId, operationId, kind, status }
+}
+
+/**
+ * Extends the lease of a long operation. Fails once the lease was lost, and also once
+ * it merely expired: by then reconciliation may have started recovering the plugin.
+ */
 export async function heartbeat(op: Operation, db: Db = prisma): Promise<void> {
   checkOperation(op)
   const { count } = await db.pluginInstall.updateMany({
-    where: { pluginId: op.pluginId, operationId: op.operationId, status: op.status },
+    where: { pluginId: op.pluginId, operationId: op.operationId, status: op.status, leaseExpiresAt: { gt: now() } },
     data: { leaseExpiresAt: leaseEnd() },
   })
   if (count !== 1) throw new PluginConflictError(op.pluginId, 'the operation lost its lease')
@@ -218,14 +244,16 @@ export async function findInstall(pluginId: string, db: Db = prisma): Promise<Pl
 
 // ---------------------------------------------------------------------------
 // What a row means (the behaviour table of design §9.1). Every predicate is false
-// while `revokedReason` is set: revocation stops a version without touching the
-// admin's `enabled`.
+// while `revokedReason` is set (even to an empty string): revocation stops a version
+// without touching the admin's `enabled`.
 // ---------------------------------------------------------------------------
+
+const isRevoked = (row: Pick<PluginInstall, 'revokedReason'>) => row.revokedReason != null
 
 type RowFacts = Pick<PluginInstall, 'status' | 'enabled' | 'revokedReason' | 'grantedPermissions'>
 
 export function servesActions(row: RowFacts): boolean {
-  return !row.revokedReason && row.enabled && row.status === 'ready'
+  return !isRevoked(row) && row.enabled && row.status === 'ready'
 }
 
 /**
@@ -234,7 +262,7 @@ export function servesActions(row: RowFacts): boolean {
  * a disabled plugin's buttons back while it is updated.
  */
 export function showsContributions(row: RowFacts): boolean {
-  return !row.revokedReason && row.enabled && (row.status === 'ready' || row.status === 'updating')
+  return !isRevoked(row) && row.enabled && (row.status === 'ready' || row.status === 'updating')
 }
 
 export function contributionsUpdating(row: RowFacts): boolean {
@@ -248,7 +276,7 @@ export function hasPermission(row: Pick<PluginInstall, 'grantedPermissions'>, pe
 /** Approved overrides are data, not code: they keep applying during an update. */
 export function overridesQualify(row: RowFacts): boolean {
   return (
-    !row.revokedReason &&
+    !isRevoked(row) &&
     row.enabled &&
     (row.status === 'ready' || row.status === 'updating') &&
     hasPermission(row, 'override:skill.text')
@@ -276,7 +304,7 @@ export function dormantReason(
 ): DormantReason | null {
   if (!env.switchOn) return 'switch_off'
   if (!row || row.status === 'available' || row.status === 'uninstalling') return 'uninstalled'
-  if (row.revokedReason) return 'revoked'
+  if (isRevoked(row)) return 'revoked'
   if (!row.enabled) return 'disabled'
   if (row.status !== 'ready' && row.status !== 'updating') return 'not_ready'
   if (!hasPermission(row, 'override:skill.text')) return 'permission_missing'

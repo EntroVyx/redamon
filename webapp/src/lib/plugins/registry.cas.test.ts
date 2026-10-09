@@ -20,6 +20,7 @@ import {
   endOperation,
   findInstall,
   heartbeat,
+  takeOverOperation,
   transition,
 } from './registry'
 
@@ -160,6 +161,44 @@ describe('leases', () => {
     const op = await beginOperation('demo', ['ready'], 'updating', 'update')
     await endOperation(op, 'ready', { activeVersion: '1.1.0' })
     expect(row()).toMatchObject({ status: 'ready', enabled: false, activeVersion: '1.1.0' })
+  })
+
+  test('an expired lease cannot be revived by its own heartbeat', async () => {
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'ready' }])
+    const op = await beginOperation('demo', ['ready'], 'updating', 'update')
+    at(t + LEASE_MS + 1)
+    await expect(heartbeat(op)).rejects.toBeInstanceOf(PluginConflictError)
+  })
+
+  test('takeOverOperation claims an expired lease without changing the status', async () => {
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'ready' }])
+    const crashed = await beginOperation('demo', ['ready'], 'updating', 'update', { to: '1.1.0' })
+    await expect(takeOverOperation('demo', 'updating', 'rollback')).rejects.toBeInstanceOf(PluginConflictError)
+    at(t + LEASE_MS + 1)
+    const recovery = await takeOverOperation('demo', 'updating', 'rollback', { reason: 'lease expired' })
+    expect(recovery).toMatchObject({ pluginId: 'demo', kind: 'rollback', status: 'updating' })
+    expect(row()).toMatchObject({
+      status: 'updating',
+      operationId: recovery.operationId,
+      operationKind: 'rollback',
+      operationArgs: { reason: 'lease expired' },
+    })
+    await expect(heartbeat(crashed)).rejects.toBeInstanceOf(PluginConflictError)
+    await expect(endOperation(crashed, 'ready')).rejects.toBeInstanceOf(PluginConflictError)
+    await heartbeat(recovery)
+    await endOperation(recovery, 'ready', { activeVersion: '1.0.0' })
+    expect(row()).toMatchObject({ status: 'ready', operationId: null, activeVersion: '1.0.0' })
+  })
+
+  test('takeOverOperation needs the expected status and a free or expired lease, once', async () => {
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'ready' }])
+    await expect(takeOverOperation('demo', 'updating', 'update')).rejects.toBeInstanceOf(PluginConflictError)
+    const [a, b] = await Promise.allSettled([
+      takeOverOperation('demo', 'ready', 'update'),
+      takeOverOperation('demo', 'ready', 'update'),
+    ])
+    expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected'])
+    await expect(takeOverOperation(undefined as unknown as string, 'ready', 'update')).rejects.toThrow(/Invalid plugin id/)
   })
 
   test('findInstall reads one row', async () => {
