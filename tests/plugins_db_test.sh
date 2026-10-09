@@ -101,6 +101,12 @@ SELECT 'scope_user_mismatch:' || pg_temp.try(\$q\$ $OV ('o8','pdbt-a','skill.tex
 SELECT 'scope_project_with_user:' || pg_temp.try(\$q\$ $OV ('o9','pdbt-a','skill.text','project','pdbt-project','pdbt-user','pdbt-project','xss','xss/workflow','cs9','x','$H','proposed','t',now()) \$q\$);
 SELECT 'scope_unknown_type:' || pg_temp.try(\$q\$ $OV ('o10','pdbt-a','skill.text','team','pdbt-user','pdbt-user',NULL,'xss','xss/workflow','cs10','x','$H','proposed','t',now()) \$q\$);
 SELECT 'override_bad_status:' || pg_temp.try(\$q\$ $OV ('o11','pdbt-a','skill.text','user','pdbt-user','pdbt-user',NULL,'xss','xss/workflow','cs11','x','$H','deleted','t',now()) \$q\$);
+-- A NULL makes a CHECK expression NULL, which Postgres lets through: the checks must
+-- say IS NOT NULL, or such a row would never cascade with its owner.
+SELECT 'scope_user_null_fk:' || pg_temp.try(\$q\$ $OV ('o12','pdbt-a','skill.text','user','pdbt-user',NULL,NULL,'xss','xss/workflow','cs12','x','$H','proposed','t',now()) \$q\$);
+SELECT 'scope_project_null_fk:' || pg_temp.try(\$q\$ $OV ('o13','pdbt-a','skill.text','project','pdbt-project',NULL,NULL,'xss','xss/workflow','cs13','x','$H','proposed','t',now()) \$q\$);
+SELECT 'lease_without_expiry:' || pg_temp.try(\$q\$ INSERT INTO plugin_installs (plugin_id, operation_id, updated_at) VALUES ('pdbt-d', 'op', now()) \$q\$);
+SELECT 'expiry_without_lease:' || pg_temp.try(\$q\$ INSERT INTO plugin_installs (plugin_id, lease_expires_at, updated_at) VALUES ('pdbt-e', now(), now()) \$q\$);
 SELECT 'install_bad_status:' || pg_temp.try(\$q\$ INSERT INTO plugin_installs (plugin_id, status, updated_at) VALUES ('pdbt-c', 'installed', now()) \$q\$);
 
 -- Owner columns of plugin data must name exactly the owner.
@@ -109,6 +115,8 @@ SELECT 'data_user_with_project:' || pg_temp.try(\$q\$ $DA ('d2','pdbt-a','user',
 SELECT 'data_user_mismatch:' || pg_temp.try(\$q\$ $DA ('d3','pdbt-a','user','pdbt-user','pdbt-other',NULL,'c','k3','{}',2,now()) \$q\$);
 SELECT 'data_project:' || pg_temp.try(\$q\$ $DA ('d4','pdbt-a','project','pdbt-project',NULL,'pdbt-project','c','k4','{}',2,now()) \$q\$);
 SELECT 'data_project_with_user:' || pg_temp.try(\$q\$ $DA ('d5','pdbt-a','project','pdbt-project','pdbt-user','pdbt-project','c','k5','{}',2,now()) \$q\$);
+SELECT 'data_user_null_fk:' || pg_temp.try(\$q\$ $DA ('d9','pdbt-a','user','pdbt-user',NULL,NULL,'c','k9','{}',2,now()) \$q\$);
+SELECT 'data_project_null_fk:' || pg_temp.try(\$q\$ $DA ('d10','pdbt-a','project','pdbt-project',NULL,NULL,'c','k10','{}',2,now()) \$q\$);
 SELECT 'data_duplicate_key:' || pg_temp.try(\$q\$ $DA ('d6','pdbt-a','user','pdbt-user','pdbt-user',NULL,'c','k1','{}',2,now()) \$q\$);
 SELECT 'data_other_user:' || pg_temp.try(\$q\$ $DA ('d7','pdbt-b','user','pdbt-other','pdbt-other',NULL,'c','k1','{}',2,now()) \$q\$);
 
@@ -153,8 +161,8 @@ field() { printf '%s\n' "$OUT" | sed -n "s/^$1://p" | head -1; }
 expect_eq "the one-active index exists, unique and partial on status active" \
   "CREATE UNIQUE INDEX plugin_overrides_one_active ON public.plugin_overrides USING btree (extension_point, scope_type, scope_id, target_key) WHERE (status = 'active'::text)" \
   "$(field index_def)"
-expect_eq "the four CHECK constraints exist" \
-  "plugin_data_owner_ck1,plugin_installs_status_ck1,plugin_overrides_scope_ck1,plugin_overrides_status_ck1" \
+expect_eq "the five CHECK constraints exist, owner and scope at version 2" \
+  "plugin_data_owner_ck2,plugin_installs_lease_ck1,plugin_installs_status_ck1,plugin_overrides_scope_ck2,plugin_overrides_status_ck1" \
   "$(field checks)"
 
 expect_eq "a first active override is accepted" "ok" "$(field active_first)"
@@ -170,12 +178,18 @@ expect_eq "a project-scope override carrying a user id is refused" "23514" "$(fi
 expect_eq "an unknown scope type is refused" "23514" "$(field scope_unknown_type)"
 expect_eq "an unknown override status is refused" "23514" "$(field override_bad_status)"
 expect_eq "an unknown install status is refused" "23514" "$(field install_bad_status)"
+expect_eq "a user-scope override with no user id is refused" "23514" "$(field scope_user_null_fk)"
+expect_eq "a project-scope override with no project id is refused" "23514" "$(field scope_project_null_fk)"
+expect_eq "an operation id without a lease expiry is refused" "23514" "$(field lease_without_expiry)"
+expect_eq "a lease expiry without an operation id is refused" "23514" "$(field expiry_without_lease)"
 
 expect_eq "a user-owned data row is accepted" "ok" "$(field data_user)"
 expect_eq "a user-owned data row carrying a project id is refused" "23514" "$(field data_user_with_project)"
 expect_eq "a user-owned data row whose user id is not its owner is refused" "23514" "$(field data_user_mismatch)"
 expect_eq "a project-owned data row is accepted" "ok" "$(field data_project)"
 expect_eq "a project-owned data row carrying a user id is refused" "23514" "$(field data_project_with_user)"
+expect_eq "a user-owned data row with no user id is refused" "23514" "$(field data_user_null_fk)"
+expect_eq "a project-owned data row with no project id is refused" "23514" "$(field data_project_null_fk)"
 expect_eq "the same plugin, namespace, owner, collection and key twice is refused" "23505" "$(field data_duplicate_key)"
 expect_eq "the same collection and key for another owner and plugin is accepted" "ok" "$(field data_other_user)"
 

@@ -2485,6 +2485,10 @@ model PluginData {
   @@unique([pluginId, namespace, ownerType, ownerId, collection, key])
   @@index([pluginId, namespace, collection])
   @@index([expiresAt])
+  // Postgres does not index a foreign key itself: without these, deleting one user or
+  // project scans the whole table for rows to cascade.
+  @@index([userId])
+  @@index([projectId])
   @@map("plugin_data")
 }
 
@@ -2521,6 +2525,9 @@ model PluginOverride {
 
   @@index([extensionPoint, scopeType, scopeId, targetGroup, status])
   @@index([changeSetId])
+  @@index([pluginId])
+  @@index([userId])
+  @@index([projectId])
   @@map("plugin_overrides")
 }
 

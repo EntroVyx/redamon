@@ -66,6 +66,15 @@ describe('the four plugin platform models', () => {
     expect(body).toMatch(/^\s+pluginOverrides\s+PluginOverride\[\]$/m)
   })
 
+  // Postgres does not index a foreign key by itself; without these, deleting one user or
+  // project scans the whole plugin table for rows to cascade.
+  test.each([
+    ['PluginData', ['userId', 'projectId']],
+    ['PluginOverride', ['pluginId', 'userId', 'projectId']],
+  ])('%s indexes its foreign keys', (m, cols) => {
+    for (const c of cols) expect(model(m)).toMatch(new RegExp(`@@(index|unique)\\(\\[${c}[,\\]]`))
+  })
+
   test('revokedReason exists and enabled defaults to false', () => {
     const body = model('PluginInstall')
     expect(body).toMatch(/^\s+revokedReason\s+String\?/m)
@@ -90,6 +99,17 @@ describe('the constraint script', () => {
   test('uses an index name Prisma never generates', () => {
     expect(script).toContain("const INDEX = 'plugin_overrides_one_active'")
     expect('plugin_overrides_one_active').not.toMatch(/_(key|idx|pkey|fkey)$/)
+  })
+
+  test('owner and scope checks also refuse a NULL foreign key (a NULL CHECK result passes)', () => {
+    expect(script).toContain("name: 'plugin_data_owner_ck2'")
+    expect(script).toContain("name: 'plugin_overrides_scope_ck2'")
+    expect(script).toMatch(/owner_type = 'user' AND user_id IS NOT NULL AND user_id = owner_id/)
+    expect(script).toMatch(/scope_type = 'project' AND project_id IS NOT NULL AND project_id = scope_id/)
+  })
+
+  test('an operation id and its lease are set and cleared together', () => {
+    expect(script).toContain("name: 'plugin_installs_lease_ck1'")
   })
 
   test('the one-active index is partial on status active, per point, scope and target', () => {
