@@ -322,6 +322,24 @@ def test_seam_never_mutates_settings():
     assert project_settings.DEFAULT_AGENT_SETTINGS == defaults_before
 
 
+def test_the_seam_makes_no_network_call():
+    """D-05: the prompt hot path never waits on the platform; overrides are data
+    already in the session's settings, and staleness is decided from local hashes."""
+    import socket
+    gopher = part("ssrf", "gopher_chains")
+    overrides = {gopher.key: entry(gopher, gopher.text + "\nMARK")}
+
+    def no_network(*_a, **_k):
+        raise AssertionError("network used on the skill.text hot path")
+
+    with patch.object(socket.socket, "connect", no_network), \
+         patch("requests.get", no_network), patch("requests.post", no_network):
+        got = in_session(overrides, lambda: render("ssrf"))
+        record = in_session(overrides, lambda: (render("ssrf"), seam.applied_skill_workflow.get())[1])
+    assert got[2].endswith("MARK")
+    assert record == {"skillId": "ssrf", "revision": 2}
+
+
 def test_usability_is_computed_once_per_snapshot(caplog):
     gopher = part("ssrf", "gopher_chains")
     overrides = {gopher.key: entry(gopher, gopher.text + "\nMARK", sha="f" * 64)}
