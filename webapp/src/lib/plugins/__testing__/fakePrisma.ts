@@ -1,6 +1,7 @@
 /**
- * An in-memory stand-in for the Prisma client, covering the four plugin tables and
- * `project`, with the semantics the plugin stores rely on:
+ * An in-memory stand-in for the Prisma client, covering the four plugin tables and the
+ * core rows the plugin platform reads (`project`, `user`, `userSettings`,
+ * `conversation`, `chatMessage`), with the semantics the plugin stores rely on:
  *
  * - `updateMany` / `deleteMany` return `{count}` and apply atomically, so a
  *   compare-and-swap test sees exactly one winner;
@@ -28,7 +29,16 @@ import { now } from '../clock'
 export type Row = Record<string, unknown>
 type Where = Record<string, unknown>
 
-export type TableName = 'pluginInstall' | 'pluginData' | 'pluginOverride' | 'pluginPlatformState' | 'project'
+export type TableName =
+  | 'pluginInstall'
+  | 'pluginData'
+  | 'pluginOverride'
+  | 'pluginPlatformState'
+  | 'project'
+  | 'user'
+  | 'userSettings'
+  | 'conversation'
+  | 'chatMessage'
 
 interface TableSpec {
   pk: string
@@ -88,9 +98,24 @@ const TABLES: Record<TableName, TableSpec> = {
   },
   pluginPlatformState: { pk: 'key', uniques: {}, defaults: () => ({}) },
   project: { pk: 'id', uniques: {}, defaults: () => ({}) },
+  user: { pk: 'id', uniques: { email: ['email'] }, defaults: () => ({ name: '', password: '', role: 'standard' }) },
+  userSettings: { pk: 'id', uniques: { userId: ['userId'] }, defaults: () => ({ featureModels: {} }) },
+  conversation: {
+    pk: 'id',
+    uniques: { sessionId: ['sessionId'] },
+    defaults: () => ({
+      title: '',
+      status: 'active',
+      agentRunning: false,
+      currentPhase: 'informational',
+      iterationCount: 0,
+      activeSkillId: '',
+    }),
+  },
+  chatMessage: { pk: 'id', uniques: {}, defaults: () => ({ memberIdKey: null, fireteamIdKey: null }) },
 }
-const HAS_UPDATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride', 'pluginPlatformState']
-const HAS_CREATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride']
+const HAS_UPDATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride', 'pluginPlatformState', 'conversation', 'userSettings']
+const HAS_CREATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride', 'conversation', 'chatMessage']
 
 const clone = <T>(v: T): T => (v === undefined ? v : structuredClone(v))
 

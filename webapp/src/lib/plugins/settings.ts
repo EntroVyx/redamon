@@ -16,6 +16,11 @@ export function actionMaxTimeoutSeconds(): number {
   return positiveInt('PLUGIN_ACTION_MAX_TIMEOUT', 900)
 }
 
+/** Gateway calls one call token may make (RV-39): a plugin cannot flood the webapp during a long action. */
+export function gatewayCallsPerToken(): number {
+  return positiveInt('PLUGIN_GATEWAY_CALLS_PER_TOKEN', 600)
+}
+
 export interface DataLimits {
   maxRows: number
   maxBytes: number
