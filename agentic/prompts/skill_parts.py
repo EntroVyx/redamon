@@ -24,6 +24,7 @@ import math
 import os
 import re
 import string
+import unicodedata
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -224,28 +225,105 @@ def get_part_by_key(key: str) -> SkillPart | None:
 # (base.py). A value holding one could fake the end of a fenced tool output or move the
 # cache boundary.
 RESERVED_MARKERS = ("<<<UNTRUSTED_", "<<<END_UNTRUSTED_", "<<REDAMON_CACHE_PREFIX_END>>")
+# Matched the way the agent reads them: prompt_safety._MARKER_PREFIX_RE allows whitespace
+# after "<<<", and the cache split is found by a plain search for its marker.
+_MARKER_RES = (
+    (re.compile(r"<<<\s*untrusted_", re.IGNORECASE), "<<<UNTRUSTED_"),
+    (re.compile(r"<<<\s*end_untrusted_", re.IGNORECASE), "<<<END_UNTRUSTED_"),
+    (re.compile(r"<<\s*redamon_cache_prefix_end\s*>>", re.IGNORECASE), "<<REDAMON_CACHE_PREFIX_END>>"),
+)
 
 # Headings of the sections the think node places AFTER the skill text (think_node.py,
 # base.build_roe_prompt_section). Skill text must not impersonate them: an override that
-# opened its own "SCOPE GUARDRAIL" could contradict the real one with equal authority.
+# opened its own "SCOPE GUARDRAIL" or "USER GUIDANCE" could contradict the real one with
+# equal authority.
 RESERVED_HEADINGS = (
     "SCOPE GUARDRAIL",
     "RULES OF ENGAGEMENT (MANDATORY)",
     "RoE TIMING WARNINGS",
+    "UNPRODUCTIVE STREAK DETECTED",
+    "PRODUCTIVITY HINT",
+    "Prior Productivity Claim Was Downgraded",
+    "USER GUIDANCE (IMPORTANT)",
     "SKILL FIT CHECK",
 )
-_ROE_HEADING_LINE = re.compile(r"^[ \t]*#{1,6}[ \t]*rules\s+of\s+engagement", re.IGNORECASE | re.MULTILINE)
+# A heading-like line naming the RoE: decorated (#, >, **, __, =, |) or written in capitals.
+# Prose that merely mentions the rules of engagement stays allowed.
+_ROE_LINE = re.compile(r"^(?P<lead>[\s#>*_=|-]*)(?P<words>rules[\W_]+of[\W_]+engagement)\b", re.IGNORECASE)
+_SETEXT_UNDERLINE = re.compile(r"^\s*(=+|-+)\s*$")
+
+# Invisible to the person who approves a version but read by the model: format characters
+# (zero-width, bidi controls, Unicode tag characters), private-use and surrogate code points,
+# line/paragraph separators, and control characters other than tab and line breaks.
+_HIDDEN_CATEGORIES = {"Cf", "Co", "Cs", "Zl", "Zp"}
+
+# Cyrillic and Greek letters that read as Latin ones and survive NFKC.
+_LOOKALIKES = str.maketrans(dict(zip(
+    "АВСЕНІЈКМОРЅТХУаеһіјорсѕхуԁԛԝΑΒΕΖΗΙΚΜΝΟΡΤΥΧαικνορτυχ",
+    "ABCEHIJKMOPSTXYaehijopcsxydqwABEZHIKMNOPTYXaikvoptux",
+)))
 _PLACEHOLDER_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 DEFAULT_SKILL_GROWTH = 1.5
 
 
+def max_chars_for(factory: str) -> int:
+    return max(2 * len(factory), len(factory) + 20_000)
+
+
 def max_part_chars(part: SkillPart) -> int:
-    return max(2 * len(part.text), len(part.text) + 20_000)
+    return max_chars_for(part.text)
 
 
-def _collapse(text: str) -> str:
-    return " ".join(text.split()).casefold()
+def _hidden_chars(text: str) -> set:
+    return {ch for ch in text
+            if unicodedata.category(ch) in _HIDDEN_CATEGORIES
+            or (unicodedata.category(ch) == "Cc" and ch not in "\t\n\r")}
+
+
+def _factory_counts(part: SkillPart) -> dict:
+    counts: dict = {}
+    for _literal, field, _spec, _conv in string.Formatter().parse(part.text):
+        if field:
+            counts[field] = counts.get(field, 0) + 1
+    return counts
+
+
+def _as_read(text: str) -> str:
+    """The text as a model reads it: compatibility forms folded (full-width letters),
+    invisible format characters dropped (zero-width space, word joiner, soft hyphen),
+    and common Cyrillic and Greek look-alikes mapped to Latin. Used only to detect
+    reserved strings; the value itself is never altered."""
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return text.translate(_LOOKALIKES)
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[^a-z]", "", text.casefold())
+
+
+def reserved_errors(value: str) -> list:
+    """The reserved markers and prompt-section headings `value` would show the model."""
+    errors = []
+    read = _as_read(value)
+    for pattern, marker in _MARKER_RES:
+        if pattern.search(read):
+            errors.append(f"value contains the reserved marker {marker!r}")
+    # Letters only: separators, spacing and punctuation cannot split a heading apart.
+    letters = _letters(read)
+    for heading in RESERVED_HEADINGS:
+        if _letters(heading) in letters:
+            errors.append(f"value contains the heading of the {heading!r} prompt section")
+    lines = read.splitlines()
+    for i, line in enumerate(lines):
+        match = _ROE_LINE.match(line)
+        underlined = i + 1 < len(lines) and _SETEXT_UNDERLINE.match(lines[i + 1])
+        if match and (re.search(r"[#*_=|]", match.group("lead")) or match.group("words").isupper()
+                      or underlined):
+            errors.append("value opens a 'Rules of Engagement' heading; that prompt section is the agent's own")
+            break
+    return errors
 
 
 def _template_errors(part: SkillPart, value: str) -> list:
@@ -265,6 +343,17 @@ def _template_errors(part: SkillPart, value: str) -> list:
         if spec:
             errors.append(f"placeholder {{{field}}} must not use a format spec (:{spec})")
         names.add(field)
+    factory_counts = _factory_counts(part)
+    used: dict = {}
+    for _literal, field, _spec, _conv in fields:
+        if field in part.placeholders:
+            used[field] = used.get(field, 0) + 1
+    for name, count in sorted(used.items()):
+        # A placeholder renders operator data of any size: repeating it multiplies the
+        # rendered prompt while the template stays small.
+        if count > 2 * factory_counts.get(name, 1):
+            errors.append(f"placeholder {{{name}}} appears {count} times; at most "
+                          f"{2 * factory_counts.get(name, 1)} (twice the factory text)")
     missing = sorted(part.placeholders - names)
     unknown = sorted(names - part.placeholders)
     if missing:
@@ -272,10 +361,18 @@ def _template_errors(part: SkillPart, value: str) -> list:
     if unknown:
         errors.append(f"unknown placeholders: {', '.join(unknown)}")
     if not errors:
-        try:
-            value.format(**{name: "x" for name in part.placeholders})
-        except Exception as exc:  # noqa: BLE001 - any render failure refuses the value
-            errors.append(f"not a valid template: {exc}")
+        for fill in ("", "x"):
+            try:
+                rendered = value.format(**{name: fill for name in part.placeholders})
+                factory = part.text.format(**{name: fill for name in part.placeholders})
+            except Exception as exc:  # noqa: BLE001 - any render failure refuses the value
+                errors.append(f"not a valid template: {exc}")
+                break
+            # A placeholder can render empty (dos_assessment_only_block by default), so a
+            # reserved string split around one must be judged once the placeholders are filled.
+            for error in reserved_errors(rendered):
+                if error not in reserved_errors(factory) and f"{error} (once its placeholders are filled)" not in errors:
+                    errors.append(f"{error} (once its placeholders are filled)")
     return errors
 
 
@@ -291,16 +388,12 @@ def validate_part_value(part: SkillPart, value) -> list:
     limit = max_part_chars(part)
     if len(value) > limit:
         errors.append(f"value is {len(value)} characters; the limit for {part.key} is {limit}")
-    folded = value.casefold()
-    for marker in RESERVED_MARKERS:
-        if marker.casefold() in folded:
-            errors.append(f"value contains the reserved marker {marker!r}")
-    collapsed = _collapse(value)
-    for heading in RESERVED_HEADINGS:
-        if _collapse(heading) in collapsed:
-            errors.append(f"value contains the heading of the {heading!r} prompt section")
-    if _ROE_HEADING_LINE.search(value):
-        errors.append("value opens a 'Rules of Engagement' heading; that prompt section is the agent's own")
+    hidden = sorted(_hidden_chars(value) - _hidden_chars(part.text))
+    if hidden:
+        shown = ", ".join(f"U+{ord(ch):04X}" for ch in hidden[:5])
+        errors.append(f"value contains invisible or control characters ({shown}); the person "
+                      "approving a version could not see them")
+    errors.extend(reserved_errors(value))
     if part.kind == TEMPLATE:
         errors.extend(_template_errors(part, value))
     return errors

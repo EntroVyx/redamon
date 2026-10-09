@@ -31,7 +31,9 @@ FACTORY_REVISION = 1
 SETTINGS_KEY = "SKILL_TEXT_OVERRIDES"
 _ENTRY_STR_FIELDS = ("value", "baseSha256", "overrideId", "changeSetId", "pluginId")
 
-# {skillId, revision} of the workflow the last build rendered in this context, or None.
+# {skillId, revision, changeSetId} of the workflow the last build rendered in this context,
+# or None. Revision numbers restart per scope (user, project), so the change set is what
+# identifies a version; it is None for factory text.
 # LangGraph runs each node in a copied context, so the root think node copies this into
 # its state update (_skill_workflow) for phase_update to carry; it never leaves the node
 # on its own.
@@ -47,6 +49,14 @@ _cache: "OrderedDict[int, tuple[dict, dict]]" = OrderedDict()
 
 def _reset_cache() -> None:
     _cache.clear()
+
+
+def _for_log(text, limit: int = 2000) -> str:
+    """One log line: line breaks and other unprintable characters escaped, so text taken
+    from an override can never start a forged line in the agent log."""
+    out = "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii")
+                  for ch in str(text))
+    return out if len(out) <= limit else out[:limit] + "..."
 
 
 def _session_overrides() -> dict:
@@ -107,11 +117,13 @@ def _usable_sets(overrides: dict) -> dict:
             ids = sorted({e.get("changeSetId") for e in entries.values()
                           if isinstance(e, dict) and isinstance(e.get("changeSetId"), str)})
             logger.warning("[skill.text] override %s for %s not used, factory text instead: %s",
-                           ",".join(ids) or "?", skill_id, "; ".join(problems))
+                           _for_log(",".join(ids) or "?"), _for_log(skill_id),
+                           _for_log("; ".join(problems)))
             continue
         first = next(iter(entries.values()))
         usable[skill_id] = {
             "revision": first["revision"],
+            "changeSetId": first["changeSetId"],
             "values": {key.split("/", 1)[1]: e["value"] for key, e in entries.items()},
         }
 
@@ -141,26 +153,42 @@ def resolve_skill_part(skill_id: str, part_id: str, factory_text: str,
         if (part.kind == skill_parts.TEMPLATE) != (fmt_kwargs is not None):
             raise ValueError(f"the call site renders a {part.kind} part the other way")
         value = usable["values"][part_id]
-        return value.format(**fmt_kwargs) if fmt_kwargs is not None else value
+        rendered = value.format(**fmt_kwargs) if fmt_kwargs is not None else value
+        # Judged again as the model will read it, with the real placeholder values: the
+        # validator only saw the template.
+        limit = skill_parts.max_chars_for(factory)
+        if len(rendered) > limit:
+            raise ValueError(f"the rendered override is {len(rendered)} characters; the limit is {limit}")
+        added = [e for e in skill_parts.reserved_errors(rendered)
+                 if e not in skill_parts.reserved_errors(factory)]
+        if added:
+            raise ValueError("the rendered override " + "; ".join(added))
+        return rendered
     except Exception as exc:  # noqa: BLE001 - the seam must never break a prompt
-        logger.warning("[skill.text] override for %s/%s not used: %s", skill_id, part_id, exc)
+        logger.warning("[skill.text] override for %s/%s not used: %s",
+                       _for_log(skill_id), _for_log(part_id), _for_log(exc))
         return factory
 
 
-def effective_revision(skill_id: str) -> int:
-    """The revision of the skill's version in effect for this session (1 = factory)."""
+def effective_version(skill_id: str) -> tuple:
+    """(revision, changeSetId) of the skill's version in effect for this session;
+    (1, None) for factory text."""
     try:
         overrides = _session_overrides()
         if overrides:
             usable = _usable_sets(overrides).get(skill_id)
             if usable is not None:
-                return usable["revision"]
+                return usable["revision"], usable["changeSetId"]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[skill.text] revision of %s unknown, recorded as factory: %s", skill_id, exc)
-    return FACTORY_REVISION
+        logger.warning("[skill.text] version of %s unknown, recorded as factory: %s",
+                       _for_log(skill_id), _for_log(exc))
+    return FACTORY_REVISION, None
 
 
 def record_applied(skill_id: Optional[str]) -> None:
     """Record which skill workflow (and version) the build rendered; None when none."""
-    applied_skill_workflow.set(
-        {"skillId": skill_id, "revision": effective_revision(skill_id)} if skill_id else None)
+    if not skill_id:
+        applied_skill_workflow.set(None)
+        return
+    revision, change_set_id = effective_version(skill_id)
+    applied_skill_workflow.set({"skillId": skill_id, "revision": revision, "changeSetId": change_set_id})

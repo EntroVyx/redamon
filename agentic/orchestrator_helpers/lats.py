@@ -1156,10 +1156,12 @@ def _full_think_context(state: dict) -> str:
         pass
 
     # 3. Rules of Engagement / scope guardrail (stay in bounds)
+    roe_at = None
     try:
         from prompts.base import build_roe_prompt_section
         roe = build_roe_prompt_section()
         if roe and roe.strip():
+            roe_at = len(parts)
             parts.append(roe.strip())
     except Exception:
         pass
@@ -1180,6 +1182,11 @@ def _full_think_context(state: dict) -> str:
         if wf:
             parts.append("## Active attack-skill workflow (follow this technique when choosing probes)\n"
                          + "\n\n".join(wf))
+            # A plugin-approved rewrite of the playbook must not be the last word on
+            # scope: as in the think node, the RoE section then follows it.
+            from prompts.skill_part_seam import applied_skill_workflow
+            if roe_at is not None and (applied_skill_workflow.get() or {}).get("revision", 1) > 1:
+                parts.append(parts.pop(roe_at))
     except Exception as _e:
         logger.debug("[lats full-ctx] skill workflow skipped: %s", _e)
 
