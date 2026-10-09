@@ -68,6 +68,7 @@ from prompts import (
     build_tool_args_section,
 )
 from prompts.base import build_fireteam_prompt_fragments, CACHE_PREFIX_END_MARKER
+from prompts.skill_part_seam import applied_skill_workflow
 from prompts.classification import build_skill_menu
 from prompt_safety import wrap_untrusted
 from utils import get_session_config_prompt
@@ -498,6 +499,8 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
         attack_path_type,
         execution_trace=state.get("execution_trace", []),
     )
+    # Read now: a later LATS build in this node would overwrite it.
+    skill_workflow = applied_skill_workflow.get()
 
     allowed_tools = get_allowed_tools_for_phase(phase)
 
@@ -1131,6 +1134,7 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
         "tokens_used": _new_input_tokens + _new_output_tokens,
         "_input_tokens_this_turn": input_tokens_this_turn,
         "_output_tokens_this_turn": output_tokens_this_turn,
+        "_skill_workflow": skill_workflow,
     }
 
     # LATS state pass-through (declared keys, or LangGraph strips them, §20.1).

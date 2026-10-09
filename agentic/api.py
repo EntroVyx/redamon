@@ -2062,7 +2062,8 @@ async def get_defaults():
     # (e.g. HYDRA_ENABLED -> hydraEnabled, not agentHydraEnabled)
     NO_PREFIX_KEYS = {k for k in DEFAULT_AGENT_SETTINGS if k.startswith(('HYDRA_', 'PHISHING_', 'ROE_', 'ATTACK_SKILL_', 'SHODAN_', 'DOS_', 'FIRETEAM_'))}
     # Exclude internal-only fireteam keys that the frontend should not see.
-    SKIP_KEYS = SKIP_KEYS | {'PERSISTENT_CHECKPOINTER'}
+    # SKILL_TEXT_OVERRIDES is runtime data from the plugin platform, not a project field.
+    SKIP_KEYS = SKIP_KEYS | {'PERSISTENT_CHECKPOINTER', 'SKILL_TEXT_OVERRIDES'}
 
     camel_case_defaults = {}
     for k, v in DEFAULT_AGENT_SETTINGS.items():
@@ -3002,7 +3003,7 @@ async def _build_cypher_manager(user_id: str, project_id: str):
     model_name = DEFAULT_AGENT_SETTINGS['OPENAI_MODEL']
     try:
         webapp_url = os.environ.get('WEBAPP_API_URL', 'http://webapp:3000')
-        settings = fetch_agent_settings(project_id, webapp_url)
+        settings = fetch_agent_settings(project_id, webapp_url, include_skill_overrides=False)
         if settings and settings.get('OPENAI_MODEL'):
             model_name = settings['OPENAI_MODEL']
     except Exception as e:

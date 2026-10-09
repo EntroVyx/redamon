@@ -1044,12 +1044,19 @@ class StreamingCallback:
         self._persist("lats_complete", payload)
         logger.info(f"LATS search {search_id} complete ({outcome}) for session {self.connection.session_id}")
 
-    async def on_phase_update(self, current_phase: str, iteration_count: int, attack_path_type: str = ""):
-        """Called when phase changes"""
+    async def on_phase_update(self, current_phase: str, iteration_count: int, attack_path_type: str = "",
+                              skill_workflow: Optional[dict] = None):
+        """Called when phase changes.
+
+        skill_workflow is {skillId, revision} of the built-in playbook the last think
+        turn rendered (revision 1 = factory text), or None when it rendered none. A
+        skill label alone does not prove its playbook was in the prompt.
+        """
         payload = {
             "current_phase": current_phase,
             "iteration_count": iteration_count,
-            "attack_path_type": attack_path_type
+            "attack_path_type": attack_path_type,
+            "skill_workflow": skill_workflow,
         }
         await self.connection.send_message(MessageType.PHASE_UPDATE, payload)
         # Persist phase update as message + update conversation metadata

@@ -605,7 +605,10 @@ def build_deserialization_parts(get_setting) -> list:
     shown_phar = "True" if phar_on else (
         "False (php is not among the runtimes)" if phar_asked else "False")
 
-    parts = [DESERIALIZATION_TOOLS.format(
+    # Imported here: the part registry imports this module.
+    from prompts import skill_part_seam as _seam
+
+    parts = [_seam.resolve_skill_part("deserialization", "tools", DESERIALIZATION_TOOLS, dict(
         deser_oob_callback_enabled=oob,
         deser_oob_provider=provider,
         deser_oob_channel=_OOB_CHANNEL_ON if oob else _OOB_CHANNEL_OFF,
@@ -615,25 +618,29 @@ def build_deserialization_parts(get_setting) -> list:
         deser_runtimes=", ".join(runtimes),
         deser_exec_gadgets_enabled=shown_exec,
         deser_phar_enabled=shown_phar,
-    )]
+    ))]
     if find:
-        parts.append(DESERIALIZATION_FIND_SINKS)
+        parts.append(_seam.resolve_skill_part(
+            "deserialization", "find_sinks", DESERIALIZATION_FIND_SINKS))
     if oob:
-        parts.append(DESERIALIZATION_OOB_WORKFLOW.format(deser_oob_provider=provider))
+        parts.append(_seam.resolve_skill_part(
+            "deserialization", "oob_workflow", DESERIALIZATION_OOB_WORKFLOW,
+            {"deser_oob_provider": provider}))
     if timing:
-        parts.append(DESERIALIZATION_TIMING)
+        parts.append(_seam.resolve_skill_part("deserialization", "timing", DESERIALIZATION_TIMING))
     oracles = [DESERIALIZATION_RUNTIME_HEADER]
     for runtime in runtimes:
         block = DESERIALIZATION_RUNTIME_ORACLES[runtime]
         oracles.append(block["base"] + (block["oob"] if oob else ""))
     parts.append("\n".join(oracles) + "\n")
     if phar_on:
-        parts.append(DESERIALIZATION_PHAR)
+        parts.append(_seam.resolve_skill_part("deserialization", "phar", DESERIALIZATION_PHAR))
     if exec_on:
         gadgets = [DESERIALIZATION_EXEC_GADGETS[r] for r in runtimes
                    if r in DESERIALIZATION_EXEC_GADGETS]
         parts.append(DESERIALIZATION_EXEC_STEP + "".join(gadgets) + "\n"
                      + DESERIALIZATION_EXEC_TAIL)
     if find:
-        parts.append(DESERIALIZATION_PAYLOAD_REFERENCE)
+        parts.append(_seam.resolve_skill_part(
+            "deserialization", "payload_reference", DESERIALIZATION_PAYLOAD_REFERENCE))
     return parts

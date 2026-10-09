@@ -427,6 +427,10 @@ DEFAULT_AGENT_SETTINGS: dict[str, Any] = {
         'user': {},
     },
     'USER_ATTACK_SKILLS': [],  # Populated from DB when user skills are enabled
+    # Approved plugin overrides of built-in skill parts ({"<skill>/<part>": entry}),
+    # delivered by the webapp only to the master key and only while the plugin
+    # platform is on. Read by prompts/skill_part_seam.py; never mutated.
+    'SKILL_TEXT_OVERRIDES': {},
 
     # Legacy (deprecated — kept for backward compat)
     'BRUTE_FORCE_MAX_WORDLIST_ATTEMPTS': 3,
@@ -472,13 +476,54 @@ DEFAULT_AGENT_SETTINGS: dict[str, Any] = {
 }
 
 
-def fetch_agent_settings(project_id: str, webapp_url: str) -> dict[str, Any]:
+_SKILL_OVERRIDE_STR_FIELDS = ('value', 'baseSha256', 'overrideId', 'changeSetId', 'pluginId')
+
+
+def _coerce_skill_text_overrides(raw: Any) -> dict[str, dict]:
+    """Keep only well-formed override entries, in a new dict.
+
+    One malformed entry drops every entry of its skill: a skill's entries form one
+    approved version, and keeping the rest would turn it into a partial one.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning("skillTextOverrides is not an object; no skill overrides used")
+        return {}
+    kept: dict[str, dict] = {}
+    poisoned: set[str] = set()
+    for key, entry in raw.items():
+        skill_id, sep, part_id = str(key).partition('/')
+        well_formed = (
+            sep and skill_id and part_id and '/' not in part_id
+            and isinstance(entry, dict)
+            and isinstance(entry.get('value'), str)
+            and all(isinstance(entry.get(f), str) and entry.get(f)
+                    for f in _SKILL_OVERRIDE_STR_FIELDS if f != 'value')
+            # v1 is the factory text and is never delivered.
+            and type(entry.get('revision')) is int and entry['revision'] >= 2
+        )
+        if not well_formed:
+            poisoned.add(skill_id)
+            continue
+        kept[key] = {f: entry[f] for f in (*_SKILL_OVERRIDE_STR_FIELDS, 'revision')}
+    if poisoned:
+        logger.warning("skillTextOverrides: malformed entries; factory text for %s",
+                       ", ".join(sorted(poisoned)))
+    return {k: v for k, v in kept.items() if k.partition('/')[0] not in poisoned}
+
+
+def fetch_agent_settings(project_id: str, webapp_url: str, *,
+                         include_skill_overrides: bool = True) -> dict[str, Any]:
     """
     Fetch agent settings from webapp API.
 
     Args:
         project_id: The project ID to fetch settings for
         webapp_url: Base URL of the webapp API (e.g., http://localhost:3000)
+        include_skill_overrides: Also ask for approved plugin overrides of built-in
+            skill text. A caller that never renders skill text (text-to-cypher) turns
+            it off, so the webapp does not compute or send them there.
 
     Returns:
         Dictionary of settings in SCREAMING_SNAKE_CASE format
@@ -486,6 +531,8 @@ def fetch_agent_settings(project_id: str, webapp_url: str) -> dict[str, Any]:
     import requests
 
     url = f"{webapp_url.rstrip('/')}/api/projects/{project_id}?includeSkillContent=true"
+    if include_skill_overrides:
+        url += "&includeSkillOverrides=true"
     logger.info(f"Fetching agent settings from {url}")
 
     response = requests.get(url, headers=INTERNAL_HEADERS, timeout=30)
@@ -609,6 +656,10 @@ def fetch_agent_settings(project_id: str, webapp_url: str) -> dict[str, Any]:
     settings['DESERIALIZATION_PHAR_ENABLED'] = project.get('deserializationPharEnabled', DEFAULT_AGENT_SETTINGS['DESERIALIZATION_PHAR_ENABLED'])
     settings['ATTACK_SKILL_CONFIG'] = project.get('attackSkillConfig', DEFAULT_AGENT_SETTINGS['ATTACK_SKILL_CONFIG'])
     settings['USER_ATTACK_SKILLS'] = project.get('userAttackSkills', DEFAULT_AGENT_SETTINGS['USER_ATTACK_SKILLS'])
+    settings['SKILL_TEXT_OVERRIDES'] = (
+        _coerce_skill_text_overrides(project.get('skillTextOverrides'))
+        if include_skill_overrides else {}
+    )
 
     # Target scope (used by guardrail checks inside the agent)
     settings['TARGET_DOMAIN'] = project.get('targetDomain', '')

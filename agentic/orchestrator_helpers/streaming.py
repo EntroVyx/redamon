@@ -112,12 +112,14 @@ async def emit_streaming_events(state: dict, callback) -> None:
     is re-created from checkpoint on resume and loses in-memory markers).
     """
     try:
-        # Phase update (includes attack_path_type for dynamic routing display)
+        # Phase update (includes attack_path_type for dynamic routing display, and
+        # which built-in playbook version the last think turn actually rendered)
         if "current_phase" in state:
             await callback.on_phase_update(
                 state.get("current_phase", "informational"),
                 state.get("current_iteration", 0),
-                state.get("attack_path_type", "")
+                state.get("attack_path_type", ""),
+                skill_workflow=state.get("_skill_workflow"),
             )
 
         # Todo list update
