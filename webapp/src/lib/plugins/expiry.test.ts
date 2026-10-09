@@ -49,13 +49,34 @@ describe('ttlSeconds', () => {
     expect(db.rows('pluginData')).toHaveLength(2) // still stored until reconciliation
   })
 
-  test('an expired row holds no quota, and writing its key again counts as a new row', async () => {
+  test('an expired row never blocks a write: reaching the quota first deletes expired rows', async () => {
     vi.stubEnv('PLUGIN_DATA_MAX_ROWS', '1')
     await store.put(S, alice, 'c', 'k', 'v', { ttlSeconds: 1 })
     expect((await store.put(S, alice, 'c', 'other', 1).catch((e) => e)).code).toBe('rows_exceeded')
     t += 1_000
     await store.put(S, alice, 'c', 'other', 1)
+    expect(db.rows('pluginData').map((r) => r.key)).toEqual(['other'])
     expect((await store.put(S, alice, 'c', 'k', 'again').catch((e) => e)).code).toBe('rows_exceeded')
+  })
+
+  test('short-lived rows cannot grow storage past the quota before reconciliation runs', async () => {
+    vi.stubEnv('PLUGIN_DATA_MAX_ROWS', '3')
+    vi.stubEnv('PLUGIN_DATA_MAX_BYTES', '40')
+    for (let i = 0; i < 20; i++) {
+      await store.put(S, alice, 'c', `k${i}`, 'x'.repeat(8), { ttlSeconds: 1 })
+      t += 2_000
+      const stored = db.rows('pluginData')
+      expect(stored.length).toBeLessThanOrEqual(3)
+      expect(stored.reduce((n, r) => n + (r.sizeBytes as number), 0)).toBeLessThanOrEqual(40)
+    }
+  })
+
+  test('replacing an expired row counts as a replacement, not a new row', async () => {
+    vi.stubEnv('PLUGIN_DATA_MAX_ROWS', '1')
+    await store.put(S, alice, 'c', 'k', 'v', { ttlSeconds: 1 })
+    t += 1_000
+    await store.put(S, alice, 'c', 'k', 'again')
+    expect((await store.get(S, alice, 'c', 'k'))?.value).toBe('again')
   })
 
   test('a put without ttlSeconds makes the row permanent again', async () => {

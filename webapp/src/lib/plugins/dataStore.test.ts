@@ -217,6 +217,12 @@ describe('input checks', () => {
     expect(await code(store.put(S, alice, 'c', 'a\u0000b', 1))).toBe('invalid_key')
   })
 
+  test('a literal backslash-u0000 in text is ordinary text, a real NUL is not', async () => {
+    await store.put(S, alice, 'c', 'k', { path: 'C:\\u0000dir' })
+    expect((await store.get(S, alice, 'c', 'k'))?.value).toEqual({ path: 'C:\\u0000dir' })
+    expect(await code(store.put(S, alice, 'c', 'k', { ['a\u0000b']: 1 }))).toBe('invalid_value')
+  })
+
   test('values JSON cannot hold, or Postgres cannot store', async () => {
     expect(await code(store.put(S, alice, 'c', 'k', undefined))).toBe('invalid_value')
     expect(await code(store.put(S, alice, 'c', 'k', () => 1))).toBe('invalid_value')
@@ -287,6 +293,23 @@ describe('namespaces for migrations', () => {
       ['a', 1, 'u-alice', null],
       ['b', 2, null, 'p-1'],
     ])
+  })
+
+  test('copyNamespace pages through a large namespace inside one transaction with a long timeout', async () => {
+    vi.stubEnv('PLUGIN_DATA_MAX_ROWS', '5000')
+    for (let i = 0; i < 1203; i++) db.seed('pluginData', [{ pluginId: 'skiller', ownerType: 'user', ownerId: 'u-alice', userId: 'u-alice', collection: 'c', key: `k${i}`, value: i, sizeBytes: 1 }])
+    const seen: unknown[] = []
+    const realTransaction = db.$transaction.bind(db)
+    db.$transaction = ((fn: (tx: FakePrisma) => Promise<unknown>, opts?: unknown) => {
+      seen.push(opts)
+      return realTransaction(fn)
+    }) as FakePrisma['$transaction']
+    expect(await store.copyNamespace('skiller', 'live', 'migrating:op1')).toBe(1203)
+    db.$transaction = realTransaction
+    expect(seen).toHaveLength(1)
+    expect((seen[0] as { timeout: number }).timeout).toBeGreaterThanOrEqual(60_000)
+    const copied = db.rows('pluginData').filter((r) => r.namespace === 'migrating:op1')
+    expect(new Set(copied.map((r) => r.key)).size).toBe(1203)
   })
 
   test('swapNamespace replaces live with the migrated rows in one transaction', async () => {

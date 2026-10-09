@@ -16,8 +16,10 @@ import { dataLimits } from './settings'
  *   quotas, so a full store never blocks a job or a counter.
  * - Quotas are checked by counting before writing; two concurrent writes can overshoot
  *   by one row each, which is accepted for a quota.
- * - A row past its `expiresAt` is invisible to every read and holds no quota;
- *   reconciliation deletes it later.
+ * - A row past its `expiresAt` is invisible to every read. It still holds quota until it
+ *   is deleted (otherwise short-lived rows could grow storage without bound before
+ *   reconciliation deletes them), but a write that would exceed a quota first deletes
+ *   the plugin's expired rows, so expired data never blocks a write.
  */
 export type OwnerType = 'user' | 'project'
 
@@ -47,6 +49,10 @@ export const QUERY_LIMIT_DEFAULT = 50
 export const QUERY_LIMIT_MAX = 200
 export const KEY_MAX_CHARS = 512
 export const TTL_MAX_SECONDS = 10 * 365 * 24 * 3600
+const COPY_PAGE_ROWS = 500
+// A full quota (10,000 rows, 50 MB) takes longer to copy than Prisma's 5 s default for an
+// interactive transaction; measured on Postgres 16: the default timed out at 5.2 s.
+const MIGRATION_TRANSACTION = { maxWait: 10_000, timeout: 120_000 }
 const COLLECTION_RE = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}$/
 const NAMESPACE_RE = /^(live|migrating:[A-Za-z0-9-]{1,64})$/
 const RESERVED_PREFIX = '__'
@@ -168,14 +174,20 @@ function toRecord(row: PluginData): DataRecord {
 
 function serialize(value: unknown): { text: string; sizeBytes: number } {
   let text: string | undefined
+  let nul = false
   try {
-    text = JSON.stringify(value)
+    // Postgres jsonb refuses the NUL character, in a string or a key; look at the real
+    // strings, since the JSON text of an innocent backslash-u0000 contains the same six
+    // characters as an escaped NUL.
+    text = JSON.stringify(value, (key, v) => {
+      if (key.includes('\u0000') || (typeof v === 'string' && v.includes('\u0000'))) nul = true
+      return v
+    })
   } catch {
     throw new PluginDataError('invalid_value', 'the value cannot be written as JSON')
   }
   if (text === undefined) throw new PluginDataError('invalid_value', 'the value cannot be written as JSON')
-  // Postgres jsonb refuses the NUL character; refuse it here with a clear message.
-  if (text.includes('\\u0000')) throw new PluginDataError('invalid_value', 'the value contains a NUL character')
+  if (nul) throw new PluginDataError('invalid_value', 'the value contains a NUL character')
   return { text, sizeBytes: Buffer.byteLength(text, 'utf8') }
 }
 
@@ -195,28 +207,39 @@ async function checkQuotas(
 ) {
   const limits = dataLimits()
   const counted: Prisma.PluginDataWhereInput = {
-    AND: [{ pluginId: id.pluginId, namespace: id.namespace }, notReserved, liveRows()],
+    AND: [{ pluginId: id.pluginId, namespace: id.namespace }, notReserved],
   }
-  const [usage, ownerRows, existing] = await Promise.all([
-    db.pluginData.aggregate({ where: counted, _count: { _all: true }, _sum: { sizeBytes: true } }),
-    db.pluginData.count({ where: { AND: [counted, { ownerType: id.ownerType, ownerId: id.ownerId }] } }),
-    db.pluginData.findUnique({ where: unique, select: { sizeBytes: true, expiresAt: true } }),
-  ])
-  const replaced = existing && isLive(existing) ? existing.sizeBytes : null
-  const added = replaced === null ? 1 : 0
-  if (usage._count._all + added > limits.maxRows) {
-    throw new PluginDataError('rows_exceeded', `this plugin's data is limited to ${limits.maxRows} rows`, limits.maxRows)
+  const measure = async () => {
+    const [usage, ownerRows, existing] = await Promise.all([
+      db.pluginData.aggregate({ where: counted, _count: { _all: true }, _sum: { sizeBytes: true } }),
+      db.pluginData.count({ where: { AND: [counted, { ownerType: id.ownerType, ownerId: id.ownerId }] } }),
+      db.pluginData.findUnique({ where: unique, select: { sizeBytes: true } }),
+    ])
+    const added = existing ? 0 : 1
+    const rows = usage._count._all + added
+    const bytes = (usage._sum.sizeBytes ?? 0) - (existing?.sizeBytes ?? 0) + sizeBytes
+    const owner = ownerRows + added
+    if (rows > limits.maxRows) {
+      return new PluginDataError('rows_exceeded', `this plugin's data is limited to ${limits.maxRows} rows`, limits.maxRows)
+    }
+    if (bytes > limits.maxBytes) {
+      return new PluginDataError('bytes_exceeded', `this plugin's data is limited to ${limits.maxBytes} bytes`, limits.maxBytes)
+    }
+    if (owner > limits.maxRowsPerOwner) {
+      return new PluginDataError(
+        'owner_rows_exceeded',
+        `one user or project may keep at most ${limits.maxRowsPerOwner} rows of this plugin`,
+        limits.maxRowsPerOwner,
+      )
+    }
+    return null
   }
-  if ((usage._sum.sizeBytes ?? 0) - (replaced ?? 0) + sizeBytes > limits.maxBytes) {
-    throw new PluginDataError('bytes_exceeded', `this plugin's data is limited to ${limits.maxBytes} bytes`, limits.maxBytes)
+  let refusal = await measure()
+  if (refusal) {
+    const { count } = await db.pluginData.deleteMany({ where: { AND: [counted, { expiresAt: { lte: now() } }] } })
+    if (count > 0) refusal = await measure()
   }
-  if (ownerRows + added > limits.maxRowsPerOwner) {
-    throw new PluginDataError(
-      'owner_rows_exceeded',
-      `one user or project may keep at most ${limits.maxRowsPerOwner} rows of this plugin`,
-      limits.maxRowsPerOwner,
-    )
-  }
+  if (refusal) throw refusal
 }
 
 export async function get(
@@ -324,27 +347,41 @@ export async function copyNamespace(pluginId: string, from: string, to: string, 
   checkPair(pluginId, from, to)
   return db.$transaction(async (tx) => {
     await tx.pluginData.deleteMany({ where: { AND: [{ pluginId, namespace: to }, notReserved] } })
-    const rows = await tx.pluginData.findMany({
-      where: { AND: [{ pluginId, namespace: from }, notReserved, liveRows()] },
-    })
-    if (rows.length === 0) return 0
-    const { count } = await tx.pluginData.createMany({
-      data: rows.map((r) => ({
-        pluginId,
-        namespace: to,
-        ownerType: r.ownerType,
-        ownerId: r.ownerId,
-        userId: r.userId,
-        projectId: r.projectId,
-        collection: r.collection,
-        key: r.key,
-        value: r.value === null ? Prisma.JsonNull : (r.value as Prisma.InputJsonValue),
-        sizeBytes: r.sizeBytes,
-        expiresAt: r.expiresAt,
-      })),
-    })
-    return count
+    // Page by id so a full quota never sits in memory at once.
+    let copied = 0
+    let after: string | null = null
+    for (;;) {
+      const rows: PluginData[] = await tx.pluginData.findMany({
+        where: { AND: [{ pluginId, namespace: from }, notReserved, liveRows(), after ? { id: { gt: after } } : {}] },
+        orderBy: { id: 'asc' },
+        take: COPY_PAGE_ROWS,
+      })
+      if (rows.length === 0) break
+      copied += await copyPage(tx, pluginId, to, rows)
+      after = rows[rows.length - 1].id
+      if (rows.length < COPY_PAGE_ROWS) break
+    }
+    return copied
+  }, MIGRATION_TRANSACTION)
+}
+
+async function copyPage(tx: Prisma.TransactionClient, pluginId: string, to: string, rows: PluginData[]) {
+  const { count } = await tx.pluginData.createMany({
+    data: rows.map((r) => ({
+      pluginId,
+      namespace: to,
+      ownerType: r.ownerType,
+      ownerId: r.ownerId,
+      userId: r.userId,
+      projectId: r.projectId,
+      collection: r.collection,
+      key: r.key,
+      value: r.value === null ? Prisma.JsonNull : (r.value as Prisma.InputJsonValue),
+      sizeBytes: r.sizeBytes,
+      expiresAt: r.expiresAt,
+    })),
   })
+  return count
 }
 
 /**
@@ -360,5 +397,5 @@ export async function swapNamespace(pluginId: string, from: string, to: string, 
       data: { namespace: to },
     })
     await tx.pluginData.deleteMany({ where: { pluginId, namespace: from } })
-  })
+  }, MIGRATION_TRANSACTION)
 }
