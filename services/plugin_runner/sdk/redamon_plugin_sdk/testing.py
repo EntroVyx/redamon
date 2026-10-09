@@ -1,0 +1,350 @@
+"""Test doubles for plugin authors: FakeSdk, ScriptedLlm and make_context.
+
+FakeSdk is the real `Sdk` class over an in-memory Gateway, so a plugin's calls go through
+the same request building and answer mapping as in production, and the shared contract
+cases (sdk/contract_cases.json) run against both. It applies the Gateway's main refusals
+(permissions, owner, reserved collections, unknown parts, five pending proposals) but not
+every quota: passing here is necessary, not sufficient.
+
+    from redamon_plugin_sdk.testing import FakeSdk, ScriptedLlm, make_context
+
+    llm = ScriptedLlm(['{"lessons": []}'])
+    ctx = make_context(session_id="s1", job_id="j1", llm=llm, transcript={...})
+    result = await run(ctx, {})
+    assert llm.prompts[0][0]["role"] == "system"
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import time
+from typing import Any, Callable, Iterable, Optional
+
+from .client import Sdk
+from .context import Context
+from .errors import PluginError
+
+ALL_PERMISSIONS = ("session:read", "llm:invoke", "override:skill.text")
+MAX_PENDING_CHANGE_SETS = 5
+_COLLECTION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}$")
+_KEY_MAX_CHARS = 512
+_VALUE_MAX_BYTES = 1_048_576
+_TTL_MAX_SECONDS = 10 * 365 * 24 * 3600
+_QUERY_LIMIT_MAX = 200
+_ROLES = ("system", "user", "assistant")
+
+
+def _json_copy(value: Any) -> Any:
+    return json.loads(json.dumps(value))
+
+
+def _iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + f".{int(ts * 1000) % 1000:03d}Z"
+
+
+class ScriptedLlm:
+    """Answers model calls from a queue and records every prompt.
+
+    A queued `str` becomes `{content, model_used: "scripted", usage}`; a `dict` is returned
+    as it is; a `PluginError` is raised. An empty queue raises `llm_script_exhausted`, so a
+    plugin that makes one call more than the test expects fails loudly.
+    """
+
+    def __init__(self, responses: Iterable = ()):
+        self._queue = list(responses)
+        self.prompts: list = []
+        self.calls: list = []
+
+    def queue(self, *responses) -> None:
+        self._queue.extend(responses)
+
+    def __call__(self, messages: list, max_tokens=None, temperature=None) -> dict:
+        self.prompts.append(copy.deepcopy(messages))
+        self.calls.append({"messages": copy.deepcopy(messages), "max_tokens": max_tokens,
+                           "temperature": temperature})
+        if not self._queue:
+            raise PluginError("llm_script_exhausted", "ScriptedLlm has no response left for this call.")
+        nxt = self._queue.pop(0)
+        if isinstance(nxt, PluginError):
+            raise nxt
+        if isinstance(nxt, dict):
+            return copy.deepcopy(nxt)
+        return {"content": str(nxt), "model_used": "scripted",
+                "usage": {"input_tokens": 0, "output_tokens": 0, "estimated": True}}
+
+
+class FakeGateway:
+    """The Gateway's operations, in memory. Use it through FakeSdk."""
+
+    def __init__(self, *, plugin_id: str, user_id: str, project_id: Optional[str],
+                 session_id: Optional[str], job_id: Optional[str], transcript: Optional[dict],
+                 llm: Optional[ScriptedLlm], registry: Optional[dict],
+                 permissions: Optional[Iterable[str]], clock: Callable[[], float]):
+        self.plugin_id = plugin_id
+        self.user_id = user_id
+        self.project_id = project_id
+        self.session_id = session_id
+        self.job_id = job_id
+        self.transcript = transcript
+        self.llm = llm if llm is not None else ScriptedLlm()
+        self.registry = copy.deepcopy(registry or {})
+        self.permissions = set(ALL_PERMISSIONS if permissions is None else permissions)
+        self.clock = clock
+        self.rows: dict = {}
+        self.proposals: list = []
+        self.active: dict = {}
+        self.progress: list = []
+        self._seq = 0
+        self._change_sets = 0
+
+    async def post(self, op: str, body: dict) -> dict:
+        handler = getattr(self, "_" + op.replace("/", "_"), None)
+        if handler is None:
+            raise PluginError("not_found", f"No Gateway operation {op}.")
+        return handler(_json_copy(body))
+
+    # -- helpers ---------------------------------------------------------------
+
+    def _need(self, permission: str) -> None:
+        if permission not in self.permissions:
+            raise PluginError("permission_denied", f"This plugin was not granted {permission}.")
+
+    def _owner(self, body: dict) -> tuple:
+        owner = body.get("owner")
+        if owner == "user":
+            return ("user", self.user_id)
+        if owner == "project":
+            if not self.project_id:
+                raise PluginError("invalid_owner", "This action was not started from a project.")
+            return ("project", self.project_id)
+        raise PluginError("invalid_owner", "owner must be user or project")
+
+    def _collection(self, body: dict) -> str:
+        c = body.get("collection")
+        if not isinstance(c, str) or not _COLLECTION_RE.match(c):
+            raise PluginError("invalid_collection", f"invalid collection {c!r}")
+        if c.startswith("__"):
+            raise PluginError("reserved_collection", "collections starting with __ are reserved for the platform")
+        return c
+
+    def _key(self, body: dict) -> str:
+        k = body.get("key")
+        if not isinstance(k, str) or not k or len(k) > _KEY_MAX_CHARS:
+            raise PluginError("invalid_key", f"a key is 1 to {_KEY_MAX_CHARS} characters")
+        return k
+
+    def _live(self, row: dict) -> bool:
+        return row["expiresAt"] is None or row["expiresAt"] > self.clock()
+
+    def _target(self, body: dict) -> tuple:
+        point = body.get("point")
+        if point != "skill.text":
+            raise PluginError("invalid_target", f"unknown extension point {point!r}")
+        self._need(f"override:{point}")
+        group = body.get("targetGroup")
+        if group not in self.registry:
+            raise PluginError("invalid_target", f"unknown skill {group!r}")
+        return point, group
+
+    def _part_max(self, entry: dict) -> int:
+        return int(entry.get("maxChars") or max(4000, 2 * len(entry["text"])))
+
+    def _skill_max(self, group: str) -> int:
+        reg = self.registry[group]
+        total = sum(len(p["text"]) for p in reg["parts"].values())
+        return int(reg.get("skillMaxChars") or int(total * 1.5))
+
+    def _pending(self, scope: str, group: str) -> int:
+        return sum(1 for p in self.proposals
+                   if p["status"] == "proposed" and p["scope"] == scope and p["targetGroup"] == group)
+
+    # -- operations ------------------------------------------------------------
+
+    def _session_read(self, body: dict) -> dict:
+        self._need("session:read")
+        if not self.session_id:
+            raise PluginError("no_session", "This action was not started from a session.")
+        if self.transcript is not None:
+            return copy.deepcopy(self.transcript)
+        return {"meta": {"id": self.session_id, "running": False, "highWaterSeq": 0}, "events": [],
+                "truncated": {"keptEvents": 0, "droppedEvents": 0}, "untrusted": True}
+
+    def _llm_invoke(self, body: dict) -> dict:
+        self._need("llm:invoke")
+        messages = body.get("messages")
+        if (not isinstance(messages, list) or not messages
+                or not all(isinstance(m, dict) and m.get("role") in _ROLES
+                           and isinstance(m.get("content"), str) for m in messages)):
+            raise PluginError("invalid_messages",
+                              "messages is a non-empty list of {role: system|user|assistant, content}")
+        return self.llm(messages, body.get("max_tokens"), body.get("temperature"))
+
+    def _data_get(self, body: dict) -> dict:
+        ident = (self._owner(body), self._collection(body), self._key(body))
+        row = self.rows.get(ident)
+        if row is None or not self._live(row):
+            return {"found": False}
+        return {"found": True, "value": copy.deepcopy(row["value"])}
+
+    def _data_put(self, body: dict) -> dict:
+        ident = (self._owner(body), self._collection(body), self._key(body))
+        value = body.get("value")
+        size = len(json.dumps(value).encode("utf-8"))
+        if size > _VALUE_MAX_BYTES:
+            raise PluginError("value_too_large",
+                              f"a value is limited to {_VALUE_MAX_BYTES} bytes of JSON, this one has {size}")
+        ttl = body.get("ttlSeconds")
+        if ttl is not None and (not isinstance(ttl, int) or isinstance(ttl, bool)
+                                or not 1 <= ttl <= _TTL_MAX_SECONDS):
+            raise PluginError("invalid_ttl", f"ttlSeconds is a whole number from 1 to {_TTL_MAX_SECONDS}")
+        now = self.clock()
+        self._seq += 1
+        expires = now + ttl if ttl is not None else None
+        self.rows[ident] = {"value": value, "updatedAt": now, "seq": self._seq, "expiresAt": expires}
+        return {"sizeBytes": size, "expiresAt": _iso(expires) if expires is not None else None}
+
+    def _data_query(self, body: dict) -> dict:
+        owner, collection = self._owner(body), self._collection(body)
+        prefix = body.get("prefix") or ""
+        limit = body.get("limit", 50)
+        limit = max(1, min(_QUERY_LIMIT_MAX, int(limit) if isinstance(limit, (int, float)) else 50))
+        rows = [(k, r) for (o, c, k), r in self.rows.items()
+                if o == owner and c == collection and k.startswith(prefix) and self._live(r)]
+        rows.sort(key=lambda kr: (kr[1]["updatedAt"], kr[1]["seq"]), reverse=True)
+        return {"items": [{"key": k, "value": copy.deepcopy(r["value"]), "updatedAt": _iso(r["updatedAt"]),
+                           "expiresAt": _iso(r["expiresAt"]) if r["expiresAt"] is not None else None}
+                          for k, r in rows[:limit]]}
+
+    def _data_delete(self, body: dict) -> dict:
+        ident = (self._owner(body), self._collection(body), self._key(body))
+        row = self.rows.pop(ident, None)
+        return {"deleted": row is not None and self._live(row)}
+
+    def _override_get(self, body: dict) -> dict:
+        point, group = self._target(body)
+        reg = self.registry[group]
+        active = self.active.get(("project", group)) if self.project_id else None
+        active = active or self.active.get(("user", group))
+        parts = [{"partId": pid, "text": e["text"],
+                  "sha256": hashlib.sha256(e["text"].encode("utf-8")).hexdigest(),
+                  "chars": len(e["text"]), "maxChars": self._part_max(e)}
+                 for pid, e in reg["parts"].items()]
+        return {"point": point, "targetGroup": group, "displayName": reg.get("displayName", group),
+                "parts": parts, "active": copy.deepcopy(active),
+                "pendingCount": self._pending("user", group),
+                "limits": {"skillMaxChars": self._skill_max(group),
+                           "parts": {p["partId"]: p["maxChars"] for p in parts}}}
+
+    def _override_propose(self, body: dict) -> dict:
+        point, group = self._target(body)
+        reg = self.registry[group]
+        parts = body.get("parts")
+        if not isinstance(parts, dict) or not parts:
+            raise PluginError("invalid_proposal", "a proposal changes at least one part")
+        for pid, text in parts.items():
+            if pid not in reg["parts"]:
+                raise PluginError("invalid_proposal", f"unknown part {group}/{pid}")
+            if not isinstance(text, str) or len(text) > self._part_max(reg["parts"][pid]):
+                raise PluginError("invalid_proposal", f"the text of {group}/{pid} is too long or not text")
+        scope = body.get("scope")
+        if scope not in ("user", "project") or (scope == "project" and not self.project_id):
+            raise PluginError("invalid_proposal", "scope is user, or project inside a project")
+        if not isinstance(body.get("note"), str):
+            raise PluginError("invalid_proposal", "a note is required")
+        meta = body.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            raise PluginError("invalid_proposal", "meta must be an object")
+        active = self.active.get((scope, group))
+        base = dict(active["parts"]) if active else {}
+        merged = {pid: base.get(pid, e["text"]) for pid, e in reg["parts"].items()}
+        merged.update(parts)
+        if sum(len(t) for t in merged.values()) > self._skill_max(group):
+            raise PluginError("invalid_proposal", f"the whole skill {group} would exceed {self._skill_max(group)} characters")
+        if self._pending(scope, group) >= MAX_PENDING_CHANGE_SETS:
+            raise PluginError("too_many_pending",
+                              f"There are already {MAX_PENDING_CHANGE_SETS} proposals waiting for a decision on {group}")
+        self._change_sets += 1
+        from_revision = active["revision"] if active else 1
+        cs = {"changeSetId": f"fake-cs-{self._change_sets}", "point": point, "targetGroup": group,
+              "parts": parts, "note": body["note"], "meta": meta, "scope": scope,
+              "status": "proposed", "fromRevision": from_revision}
+        self.proposals.append(cs)
+        return {"changeSetId": cs["changeSetId"], "fromRevision": from_revision,
+                "proposedRevisionLabel": f"v{from_revision + 1}"}
+
+    def _override_withdraw(self, body: dict) -> dict:
+        self._need("override:skill.text")
+        cs_id = body.get("changeSetId")
+        for cs in self.proposals:
+            if cs["changeSetId"] == cs_id and cs["status"] == "proposed":
+                cs["status"] = "withdrawn"
+                return {"withdrawn": True}
+        raise PluginError("not_found", f"No proposal {cs_id} of this plugin.")
+
+    def _jobs_progress(self, body: dict) -> dict:
+        if not self.job_id:
+            raise PluginError("not_in_job", "jobs.progress is only available inside an async action.")
+        self.progress.append({"message": body.get("message"), "fields": body.get("fields")})
+        return {"ok": True}
+
+
+class FakeSdk(Sdk):
+    """An `Sdk` whose Gateway is in memory; inspect `proposals`, `progress`, `rows`, `llm`."""
+
+    def __init__(self, *, plugin_id: str = "test-plugin", user_id: str = "user-1",
+                 project_id: Optional[str] = None, session_id: Optional[str] = None,
+                 job_id: Optional[str] = None, transcript: Optional[dict] = None,
+                 llm: Optional[ScriptedLlm] = None, registry: Optional[dict] = None,
+                 permissions: Optional[Iterable[str]] = None,
+                 clock: Optional[Callable[[], float]] = None):
+        self.gateway = FakeGateway(plugin_id=plugin_id, user_id=user_id, project_id=project_id,
+                                   session_id=session_id, job_id=job_id, transcript=transcript,
+                                   llm=llm, registry=registry, permissions=permissions,
+                                   clock=clock or time.time)
+        super().__init__(self.gateway, job_id=job_id)
+
+    @property
+    def project_id(self) -> Optional[str]:
+        return self.gateway.project_id
+
+    @property
+    def job_id(self) -> Optional[str]:
+        return self.gateway.job_id
+
+    @property
+    def proposals(self) -> list:
+        return self.gateway.proposals
+
+    @property
+    def progress(self) -> list:
+        return self.gateway.progress
+
+    @property
+    def rows(self) -> dict:
+        return self.gateway.rows
+
+    @property
+    def llm_script(self) -> ScriptedLlm:
+        return self.gateway.llm
+
+    def set_active(self, target_group: str, *, revision: int, parts: dict, scope: str = "user") -> None:
+        """Make a version active, as if a person had approved it."""
+        self.gateway.active[(scope, target_group)] = {
+            "changeSetId": f"fake-active-{scope}-{target_group}", "scope": scope, "revision": revision,
+            "decidedAt": _iso(self.gateway.clock()), "pluginId": self.gateway.plugin_id,
+            "parts": dict(parts)}
+
+
+def make_context(*, plugin_id: str = "test-plugin", version: str = "0.0.0", user_id: str = "user-1",
+                 project_id: Optional[str] = None, session_id: Optional[str] = None,
+                 conversation_id: Optional[str] = None, job_id: Optional[str] = None,
+                 sdk: Optional[Sdk] = None, **fake_kwargs) -> Context:
+    """A `ctx` for a test; without `sdk`, a FakeSdk built from the same ids and fake_kwargs."""
+    if sdk is None:
+        sdk = FakeSdk(plugin_id=plugin_id, user_id=user_id, project_id=project_id,
+                      session_id=session_id, job_id=job_id, **fake_kwargs)
+    return Context(plugin_id=plugin_id, version=version, user_id=user_id, project_id=project_id,
+                   session_id=session_id, conversation_id=conversation_id, job_id=job_id, sdk=sdk)
