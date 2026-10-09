@@ -24,13 +24,13 @@ import re
 import time
 from typing import Any, Callable, Iterable, Optional
 
-from .client import Sdk, check_order, check_where
+from .client import Sdk, check_order, check_where, js_length
 from .context import Context
 from .errors import PluginError
 
 ALL_PERMISSIONS = ("session:read", "llm:invoke", "override:skill.text")
 MAX_PENDING_CHANGE_SETS = 5
-_COLLECTION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}$")
+_COLLECTION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}\Z")
 _KEY_MAX_CHARS = 512
 _VALUE_MAX_BYTES = 1_048_576
 _TTL_MAX_SECONDS = 10 * 365 * 24 * 3600
@@ -40,6 +40,27 @@ _ROLES = ("system", "user", "assistant")
 
 def _json_copy(value: Any) -> Any:
     return json.loads(json.dumps(value))
+
+
+def _has_nul(value: Any) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any("\x00" in k or _has_nul(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_nul(v) for v in value)
+    return False
+
+
+def _serialized_size(value: Any) -> int:
+    """Bytes of the value's JSON as the Gateway counts them: compact, UTF-8, unescaped."""
+    if _has_nul(value):
+        raise PluginError("invalid_value", "the value contains a NUL character")
+    try:
+        text = json.dumps(value, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        raise PluginError("invalid_value", "the value cannot be written as JSON") from None
+    return len(text.encode("utf-8", "surrogatepass"))
 
 
 def _jsonb_equal(stored: Any, wanted: Any) -> bool:
@@ -152,8 +173,8 @@ class FakeGateway:
 
     def _key(self, body: dict) -> str:
         k = body.get("key")
-        if not isinstance(k, str) or not k or len(k) > _KEY_MAX_CHARS:
-            raise PluginError("invalid_key", f"a key is 1 to {_KEY_MAX_CHARS} characters")
+        if not isinstance(k, str) or not k or js_length(k) > _KEY_MAX_CHARS or "\x00" in k:
+            raise PluginError("invalid_key", f"a key is 1-{_KEY_MAX_CHARS} characters, without NUL")
         return k
 
     def _live(self, row: dict) -> bool:
@@ -212,7 +233,7 @@ class FakeGateway:
     def _data_put(self, body: dict) -> dict:
         ident = (self._owner(body), self._collection(body), self._key(body))
         value = body.get("value")
-        size = len(json.dumps(value).encode("utf-8"))
+        size = _serialized_size(value)
         if size > _VALUE_MAX_BYTES:
             raise PluginError("value_too_large",
                               f"a value is limited to {_VALUE_MAX_BYTES} bytes of JSON, this one has {size}")
@@ -228,7 +249,11 @@ class FakeGateway:
 
     def _selected(self, body: dict) -> tuple:
         owner, collection = self._owner(body), self._collection(body)
-        prefix = body.get("prefix") or ""
+        prefix = body.get("prefix")
+        if prefix is None:
+            prefix = ""
+        if not isinstance(prefix, str) or js_length(prefix) > _KEY_MAX_CHARS or "\x00" in prefix:
+            raise PluginError("invalid_query", f"prefix must be text of at most {_KEY_MAX_CHARS} characters.")
         where = body.get("where")
         try:
             check_where(where)
@@ -305,16 +330,9 @@ class FakeGateway:
                            "parts": {p["partId"]: p["maxChars"] for p in parts}}}
 
     def _override_propose(self, body: dict) -> dict:
+        # The Gateway's order and rules (webapp lib/plugins/overrideOps.ts, TD-19).
         point, group = self._target(body)
         reg = self.registry[group]
-        parts = body.get("parts")
-        if not isinstance(parts, dict) or not parts:
-            raise PluginError("invalid_proposal", "a proposal changes at least one part")
-        for pid, text in parts.items():
-            if pid not in reg["parts"]:
-                raise PluginError("invalid_proposal", f"unknown part {group}/{pid}")
-            if not isinstance(text, str) or len(text) > self._part_max(reg["parts"][pid]):
-                raise PluginError("invalid_proposal", f"the text of {group}/{pid} is too long or not text")
         scope = body.get("scope")
         if scope not in ("user", "project") or (scope == "project" and not self.project_id):
             raise PluginError("invalid_proposal", "scope is user, or project inside a project")
@@ -323,9 +341,28 @@ class FakeGateway:
         meta = body.get("meta")
         if meta is not None and not isinstance(meta, dict):
             raise PluginError("invalid_proposal", "meta must be an object")
+        sent = body.get("parts")
+        if not isinstance(sent, dict):
+            raise PluginError("invalid_proposal", "parts must be an object of part id to text")
+        if not sent:
+            raise PluginError("invalid_proposal", "a proposal changes at least one part")
+        for pid, text in sent.items():
+            if not isinstance(text, str):
+                raise PluginError("invalid_proposal", f"the text of {group}/{pid} must be a string")
+        unknown = [f"unknown part {group}/{pid}" for pid in sent if pid not in reg["parts"]]
+        if unknown:
+            raise PluginError("invalid_proposal", "; ".join(unknown))
+        # A proposal is a whole version: a part not sent is factory text in it, and a part
+        # sent unchanged from its factory text is not a change.
+        parts = {pid: t for pid, t in sent.items() if t != reg["parts"][pid]["text"]}
+        if not parts:
+            raise PluginError("invalid_proposal",
+                              f"This proposal changes no part of {group}: every text equals the factory text.")
+        for pid, text in parts.items():
+            if len(text) > self._part_max(reg["parts"][pid]):
+                raise PluginError("invalid_proposal", f"{group}/{pid}: the text is too long")
         active = self.active.get((scope, group))
-        base = dict(active["parts"]) if active else {}
-        merged = {pid: base.get(pid, e["text"]) for pid, e in reg["parts"].items()}
+        merged = {pid: e["text"] for pid, e in reg["parts"].items()}
         merged.update(parts)
         if sum(len(t) for t in merged.values()) > self._skill_max(group):
             raise PluginError("invalid_proposal", f"the whole skill {group} would exceed {self._skill_max(group)} characters")

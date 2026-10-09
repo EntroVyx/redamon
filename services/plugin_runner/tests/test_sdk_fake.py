@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from redamon_plugin_sdk import Context, PluginError
+from redamon_plugin_sdk.client import check_where
 from redamon_plugin_sdk.testing import FakeSdk, ScriptedLlm, make_context
 from tests.support import context_kwargs, load_contract_cases, resolve_call
 
@@ -297,3 +298,86 @@ def test_the_echo_fixture_pages_its_list():
     second = asyncio.run(items.list_items(ctx, {"limit": 2, "cursor": first["next"]}))
     assert [i["title"] for i in first["items"] + second["items"]] == ["c", "b", "a"]
     assert first["next"] and second["next"] is None
+
+
+# --- the fake measures and refuses as the Gateway does (phase 03 review) ------------------
+
+def _refused(coro) -> str:
+    with pytest.raises(PluginError) as caught:
+        asyncio.run(coro)
+    return caught.value.code
+
+
+def _put(sdk, key, value) -> dict:
+    """The Gateway's answer, which data.put does not return to the plugin."""
+    return asyncio.run(sdk.gateway.post("data/put", {"owner": "user", "collection": "rows", "key": key, "value": value}))
+
+
+def test_a_value_is_measured_as_compact_utf8_json_like_the_gateway():
+    sdk = FakeSdk()
+    # 800,001 bytes compact; with Python's default ", " separators it would be 1.2 MB.
+    assert _put(sdk, "zeros", [0] * 400_000)["sizeBytes"] == 800_001
+    # Two UTF-8 bytes each, never a six-byte \u escape.
+    assert _put(sdk, "accents", "é" * 400_000)["sizeBytes"] == 800_002
+
+
+def test_a_key_is_measured_in_utf16_units_like_the_gateway():
+    sdk = FakeSdk()
+    assert _put(sdk, "😀" * 256, 1)["sizeBytes"] == 1
+    assert _refused(sdk.data.put("rows", "😀" * 257, 1)) == "invalid_key"
+
+
+@pytest.mark.parametrize("key,value,code", [
+    ("a\x00b", 1, "invalid_key"),
+    ("k", {"text": "a\x00b"}, "invalid_value"),
+    ("k", {"a\x00": 1}, "invalid_value"),
+])
+def test_nul_is_refused_as_postgres_refuses_it(key, value, code):
+    assert _refused(FakeSdk().data.put("rows", key, value)) == code
+
+
+@pytest.mark.parametrize("name", ["rows\n", "ok"])
+def test_a_trailing_newline_is_not_a_valid_name(name):
+    sdk = FakeSdk()
+    if name == "ok":
+        assert asyncio.run(sdk.data.query(name, where={"field": 1}))["items"] == []
+        return
+    assert _refused(sdk.data.put(name, "k", 1)) == "invalid_collection"
+    assert _refused(sdk.data.query("rows", where={name: 1})) == "invalid_query"
+
+
+@pytest.mark.parametrize("prefix", [5, ["a"], "x" * 513, "a\x00"])
+def test_a_prefix_that_is_not_short_text_is_refused(prefix):
+    sdk = FakeSdk()
+    sdk.gateway.rows.clear()
+    assert _refused(sdk.gateway.post("data/query", {"owner": "user", "collection": "rows", "prefix": prefix})) == "invalid_query"
+
+
+def test_a_huge_integer_in_where_is_refused_not_an_overflow():
+    with pytest.raises(PluginError) as caught:
+        check_where({"n": 10 ** 400})
+    assert caught.value.code == "invalid_query"
+    check_where({"n": 10 ** 300})
+
+
+SKILL = {"path_traversal": {"displayName": "Path Traversal", "skillMaxChars": 30,
+                            "parts": {"a": {"text": "aaaaaaaaaa", "maxChars": 40},
+                                      "b": {"text": "bbbbbbbbbb", "maxChars": 40}}}}
+
+
+def test_a_proposal_is_checked_over_the_factory_text_not_the_active_version():
+    # TD-19: parts not sent are factory text in the proposed version.
+    sdk = FakeSdk(registry=SKILL)
+    sdk.set_active("path_traversal", revision=2, parts={"b": "B" * 20})
+    # 15 + 10 factory = 25 <= 30, although 15 + the active 20 would be 35.
+    out = asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"a": "A" * 15}, note="n"))
+    assert out["fromRevision"] == 2
+    # 25 + 10 factory = 35 > 30, although 25 + nothing changed elsewhere looked small.
+    assert _refused(sdk.override.propose("skill.text", "path_traversal", {"a": "A" * 25}, note="n")) == "invalid_proposal"
+
+
+def test_parts_equal_to_their_factory_text_are_dropped_and_none_left_is_refused():
+    sdk = FakeSdk(registry=SKILL)
+    asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"a": "A", "b": "bbbbbbbbbb"}, note="n"))
+    assert sdk.proposals[0]["parts"] == {"a": "A"}
+    assert _refused(sdk.override.propose("skill.text", "path_traversal", {"b": "bbbbbbbbbb"}, note="n")) == "invalid_proposal"

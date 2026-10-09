@@ -33,7 +33,8 @@ _LONG_OPS = frozenset({"llm/invoke"})
 # client only gives a plugin author the error early.
 WHERE_MAX_FIELDS = 5
 WHERE_TEXT_MAX_CHARS = 512
-WHERE_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+# \Z, not $: Python's $ also matches before a final newline, JavaScript's (the Gateway's) does not.
+WHERE_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 ORDERS = ("-updated", "updated", "key", "-key")
 
 
@@ -142,6 +143,19 @@ def _invalid_query(message: str) -> PluginError:
     return PluginError("invalid_query", message)
 
 
+def js_length(text: str) -> int:
+    """The length the Gateway (JavaScript) measures: UTF-16 code units, so a character
+    outside the Basic Multilingual Plane (an emoji) counts twice."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _finite(number) -> bool:
+    try:
+        return math.isfinite(float(number))
+    except OverflowError:  # an int beyond a double, which JSON.parse reads as Infinity
+        return False
+
+
 def check_where(where) -> None:
     if where is None:
         return
@@ -151,8 +165,8 @@ def check_where(where) -> None:
         if not isinstance(name, str) or not WHERE_FIELD_RE.match(name):
             raise _invalid_query(f"where field {name!r} is not a valid name.")
         scalar = (value is None or isinstance(value, bool)
-                  or (isinstance(value, str) and len(value) <= WHERE_TEXT_MAX_CHARS)
-                  or (isinstance(value, (int, float)) and math.isfinite(value)))
+                  or (isinstance(value, str) and js_length(value) <= WHERE_TEXT_MAX_CHARS)
+                  or (isinstance(value, (int, float)) and _finite(value)))
         if not scalar:
             raise _invalid_query(f"where value for {name!r} must be text of at most "
                                  f"{WHERE_TEXT_MAX_CHARS} characters, a finite number, true, false or null.")
