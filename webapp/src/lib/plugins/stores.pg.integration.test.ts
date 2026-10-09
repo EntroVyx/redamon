@@ -19,6 +19,7 @@ import { setNowForTests } from './clock'
 import * as registry from './registry'
 import * as store from './dataStore'
 import * as ov from './overrides'
+import * as llm from './llmBudget'
 
 const URL = process.env.PLUGINS_PG_TEST_URL
 const MARKER = 'plugins_pg_integration_test_marker'
@@ -284,6 +285,70 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
         expect(walked.sort()).toEqual(['k0', 'k10', 'k2', 'k4', 'k6', 'k8'])
         expect(await store.count(S, me, 'rows', { where: { even: true } }, db)).toBe(6)
       })
+    })
+  })
+
+  // TD-09: the one statement that decides the last call of the day, on real rows and real
+  // concurrency (pooled connections).
+  describe('plugin LLM budget', () => {
+    const me: store.PluginOwner = { type: 'user', id: 'alice' }
+    const at = new Date('2030-01-01T12:00:00Z')
+    beforeEach(() => setNowForTests(() => at))
+
+    test('counts to the cap, then refuses; per plugin, per user, per UTC day', async () => {
+      process.env.PLUGIN_LLM_DAILY_CALL_CAP = '3'
+      try {
+        const counts = []
+        for (let i = 0; i < 4; i++) counts.push(await llm.chargeLlmCall('skiller', 'alice', db))
+        expect(counts.map((c) => c.count)).toEqual([1, 2, 3, null])
+        expect(counts[3].allowed).toBe(false)
+        expect((await llm.chargeLlmCall('echo', 'alice', db)).allowed).toBe(true)
+        expect((await llm.chargeLlmCall('skiller', 'bob', db)).allowed).toBe(true)
+        setNowForTests(() => new Date('2030-01-02T00:00:00Z'))
+        expect(await llm.chargeLlmCall('skiller', 'alice', db)).toMatchObject({ allowed: true, count: 1, key: 'llm:2030-01-02' })
+      } finally {
+        delete process.env.PLUGIN_LLM_DAILY_CALL_CAP
+      }
+    })
+
+    test('ten concurrent calls at cap - 1: exactly one is allowed', async () => {
+      process.env.PLUGIN_LLM_DAILY_CALL_CAP = '5'
+      try {
+        for (let i = 0; i < 4; i++) await llm.chargeLlmCall('skiller', 'alice', db)
+        const results = await Promise.all(Array.from({ length: 10 }, () => llm.chargeLlmCall('skiller', 'alice', db)))
+        expect(results.filter((r) => r.allowed)).toHaveLength(1)
+        expect(results.find((r) => r.allowed)!.count).toBe(5)
+      } finally {
+        delete process.env.PLUGIN_LLM_DAILY_CALL_CAP
+      }
+    })
+
+    test('the first calls of a day race on the insert: no call is lost or double-counted', async () => {
+      const results = await Promise.all(Array.from({ length: 8 }, () => llm.chargeLlmCall('skiller', 'alice', db)))
+      expect(results.map((r) => r.count).sort((a, b) => a! - b!)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    })
+
+    test('usage accumulates on the same reserved row, which plugins cannot read', async () => {
+      const c = await llm.chargeLlmCall('skiller', 'alice', db)
+      await llm.recordLlmUsage('skiller', 'alice', c.key, { inputTokens: 100, outputTokens: 20, model: 'openai/a' }, db)
+      const d = await llm.chargeLlmCall('skiller', 'alice', db)
+      await llm.recordLlmUsage('skiller', 'alice', d.key, { inputTokens: 5, outputTokens: 1, model: 'openai/b' }, db)
+      await llm.recordLlmUsage('skiller', 'alice', d.key, { inputTokens: 5, outputTokens: 1, model: 'openai/a' }, db)
+      const row = await db.pluginData.findFirst({ where: { pluginId: 'skiller', collection: '__usage' } })
+      expect(row).toMatchObject({
+        ownerType: 'user',
+        ownerId: 'alice',
+        userId: 'alice',
+        namespace: 'live',
+        key: 'llm:2030-01-01',
+        value: { count: 2, inputTokens: 110, outputTokens: 22, models: { 'openai/a': 2, 'openai/b': 1 } },
+      })
+      expect(row!.expiresAt!.toISOString()).toBe('2030-01-03T12:00:00.000Z')
+      expect(row!.updatedAt.toISOString()).toBe('2030-01-01T12:00:00.000Z')
+      await expect(store.get({ pluginId: 'skiller' }, me, '__usage', 'llm:2030-01-01', db)).rejects.toMatchObject({ code: 'reserved_collection' })
+      // It dies with the user, like every row of the plugin's data.
+      await db.user.delete({ where: { id: 'alice' } })
+      expect(await db.pluginData.count({ where: { collection: '__usage' } })).toBe(0)
     })
   })
 

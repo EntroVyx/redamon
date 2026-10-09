@@ -16,6 +16,7 @@ import {
   type FeatureId,
   type FeatureModelCode,
   type FeatureModelErrorBody,
+  type PluginFeatureId,
 } from '@/lib/llmFeatures'
 
 /** A stored `featureModels` value as a plain map; anything malformed reads as empty. */
@@ -28,8 +29,8 @@ export function featureModelsMap(raw: unknown): Record<string, string> {
   return out
 }
 
-/** The model `userId` saved for `featureId`, or '' when none is. */
-export async function readFeatureModel(userId: string, featureId: FeatureId): Promise<string> {
+/** The model `userId` saved for `featureId` (a core feature or a plugin's), or '' when none is. */
+export async function readFeatureModel(userId: string, featureId: FeatureId | PluginFeatureId): Promise<string> {
   const row = await prisma.userSettings.findUnique({
     where: { userId },
     select: { featureModels: true },
@@ -78,7 +79,7 @@ export function parseFeatureModelsPatch(raw: unknown): FeatureModelsPatch | { er
 
 export function featureModelErrorResponse(
   code: FeatureModelCode,
-  featureId: FeatureId,
+  featureId: FeatureId | PluginFeatureId,
   opts: { model?: string; error?: string } = {},
 ): NextResponse {
   const body: FeatureModelErrorBody = {
@@ -125,7 +126,7 @@ const AGENT_PASSTHROUGH_CODES = new Set<FeatureModelCode>(['model_unavailable', 
 export function agentCodedError(
   status: number,
   body: unknown,
-  featureId: FeatureId,
+  featureId: FeatureId | PluginFeatureId,
   sentModel: string,
 ): NextResponse | null {
   if (status >= 200 && status < 300) return null

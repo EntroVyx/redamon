@@ -211,7 +211,8 @@ trap cleanup EXIT
 "${PSQL[@]}" -c "CREATE SCHEMA $S;
   CREATE TABLE $S.plugin_installs (LIKE public.plugin_installs INCLUDING ALL);
   CREATE TABLE $S.plugin_overrides (LIKE public.plugin_overrides INCLUDING ALL);
-  CREATE TABLE $S.plugin_platform_state (LIKE public.plugin_platform_state INCLUDING ALL);" >/dev/null
+  CREATE TABLE $S.plugin_platform_state (LIKE public.plugin_platform_state INCLUDING ALL);
+  CREATE TABLE $S.plugin_data (LIKE public.plugin_data INCLUDING ALL);" >/dev/null
 
 # race <name> <sql-first> <sql-second>: runs the first statement block in session A,
 # holding its transaction open for 3 s; starts session B once A is sleeping, and
@@ -296,6 +297,30 @@ else
   bad "...and the one-active index refused B's activation" "$RACE_OUT"
 fi
 expect_eq "...never two active sets" "cs-a:active,cs-b:proposed" "$(set_states)"
+
+# The plugin LLM budget's charge (webapp/src/lib/plugins/llmBudget.ts, its statement
+# shape pinned by llmBudget.test.ts): one upsert whose update is conditional on the
+# count. At cap - 1, A takes the last call and holds its transaction; B waits on A's row
+# lock, re-checks the WHERE on the row A committed, and updates nothing.
+"${PSQL[@]}" -c "INSERT INTO $S.plugin_data (id, plugin_id, namespace, owner_type, owner_id, user_id, collection, key,
+  value, size_bytes, updated_at) VALUES ('llm-row', 'race', 'live', 'user', 'u-race', 'u-race', '__usage',
+  'llm:2030-01-01', '{\"count\": 2}', 1, now())" >/dev/null
+CHARGE="INSERT INTO $S.plugin_data (id, plugin_id, namespace, owner_type, owner_id, user_id, collection, key,
+    value, size_bytes, expires_at, updated_at)
+  VALUES ('llm-%s', 'race', 'live', 'user', 'u-race', 'u-race', '__usage', 'llm:2030-01-01',
+    '{\"count\": 1}'::jsonb, 1, now() + interval '2 days', now())
+  ON CONFLICT (plugin_id, namespace, owner_type, owner_id, collection, key) DO UPDATE
+    SET value = jsonb_set(plugin_data.value, '{count}', to_jsonb((plugin_data.value->>'count')::int + 1)),
+        updated_at = now()
+    WHERE (plugin_data.value->>'count')::int < 3
+  RETURNING (plugin_data.value->>'count')::int AS count"
+race llm "WITH u AS ($(printf "$CHARGE" A)) SELECT 'A:' || count(*) FROM u" \
+         "WITH u AS ($(printf "$CHARGE" B)) SELECT 'B:' || count(*) FROM u"
+expect_eq "LLM cap race: session B waited on A's row lock" "yes" "$(rfield llm_waited)"
+expect_eq "LLM cap race: the last call of the day goes to A" "1" "$(rfield A)"
+expect_eq "LLM cap race: B, re-checked on A's committed row, is refused" "0" "$(rfield B)"
+expect_eq "LLM cap race: the count stops at the cap" "3" \
+  "$("${PSQL[@]}" -c "select value->>'count' from $S.plugin_data where key = 'llm:2030-01-01'")"
 
 # --- What Prisma sends to Postgres -----------------------------------------------
 # The stores rely on three facts about the Prisma client in the webapp image,

@@ -19,14 +19,14 @@ import {
   featureModelErrorResponse,
   modelUsedMismatch,
 } from '@/lib/featureModels'
-import type { FeatureId } from '@/lib/llmFeatures'
+import type { FeatureId, PluginFeatureId } from '@/lib/llmFeatures'
 
 export type FeatureAgentResult =
   | { ok: true; status: number; body: Record<string, unknown> }
   | { ok: false; response: NextResponse; code?: string }
 
 export interface FeatureAgentCall {
-  featureId: FeatureId
+  featureId: FeatureId | PluginFeatureId
   path: string
   model: string
   body: Record<string, unknown>

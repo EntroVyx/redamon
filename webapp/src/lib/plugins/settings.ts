@@ -26,6 +26,11 @@ export function transcriptMaxBytes(): number {
   return positiveInt('PLUGIN_TRANSCRIPT_MAX_BYTES', 2_097_152)
 }
 
+/** Model calls one plugin may make per user and UTC day (TD-09), apart from the agent's own cap. */
+export function llmDailyCallCap(): number {
+  return positiveInt('PLUGIN_LLM_DAILY_CALL_CAP', 100)
+}
+
 export interface DataLimits {
   maxRows: number
   maxBytes: number
