@@ -948,6 +948,10 @@ Members of an in-flight fireteam wave keep their deploy-time `attack_path_type` 
 
 Each block is a Python string template with placeholders that `prompts/__init__.py` fills via `get_phase_tools()`.
 
+### Plugin Overrides of Built-In Skill Text (plugin platform, off by default)
+
+With the plugin platform switched on (`PLUGINS_ENABLED`, see [README.PLUGINS.md](README.PLUGINS.md)), a person can approve a plugin's rewrite of a built-in skill's static workflow parts. The webapp delivers the approved versions in the project settings payload (`skillTextOverrides`, only to the agent's master-key settings fetch), and `fetch_agent_settings` maps them to `SKILL_TEXT_OVERRIDES`. Every static part listed in [prompts/skill_parts.py](../../agentic/prompts/skill_parts.py) (47 parts across the 14 skills; blocks built from operator data are not listed) is appended through `resolve_skill_part` in [prompts/skill_part_seam.py](../../agentic/prompts/skill_part_seam.py), which renders the approved text only when every part of that skill's version still matches the factory text's SHA-256 and passes validation, and the factory text otherwise; the skill's gates still decide whether a part is rendered at all. It reads the session's own settings only and never raises, so with the platform off the prompt is byte-for-byte unchanged (pinned by `tests/test_skill_workflow_golden.py`). Each `phase_update` event carries `skill_workflow: {skillId, revision}` (revision 1 = factory text, `null` when the turn rendered no built-in playbook). The webapp reads the parts and validates proposals through the master-key endpoints `GET /plugins/skill-parts` and `POST /plugins/skill-parts/validate` ([plugin_api.py](../../agentic/plugin_api.py)).
+
 ### Skill Settings
 
 | Setting | Default | Purpose |
@@ -955,6 +959,7 @@ Each block is a Python string template with placeholders that `prompts/__init__.
 | `ATTACK_SKILL_CONFIG.builtIn` | all enabled | Per-skill on/off toggle for built-ins |
 | `USER_ATTACK_SKILLS` | `[]` | List of user-skill ids (`vulnerabilities/ssrf`, etc.) the project has activated; populated from DB |
 | `MAX_SKILLS` | `5` | Hard cap on simultaneous skills injected |
+| `SKILL_TEXT_OVERRIDES` | `{}` | Approved plugin versions of built-in skill parts, keyed `<skill>/<part>`; runtime data from the plugin platform, never a project field (excluded from `/defaults`) |
 | `XSS_DALFOX_ENABLED` | `true` | Enable dalfox WAF evasion in the XSS skill |
 | `XSS_BLIND_CALLBACK_ENABLED` | `false` | Allow interactsh OOB blind XSS callbacks |
 | `XSS_CSP_BYPASS_ENABLED` | `true` | Include CSP bypass guidance in the XSS prompt |

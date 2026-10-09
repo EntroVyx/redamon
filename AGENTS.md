@@ -149,7 +149,7 @@ Maintained by hand (not touched by `sync.sh`). One row per skill.
 | --- | --- | --- |
 | `redamon-testing` | How tests run + how to author them: the per-file Docker gate, tiers, and green-run-that-lies failure modes | [SKILL.md](skills/redamon-testing/SKILL.md) |
 | `agentic-tool-integration` | Wiring a new tool the agent can call: registry, phase map, dispatch chokepoint, duplicated exec paths | [SKILL.md](skills/agentic-tool-integration/SKILL.md) |
-| `builtin-agent-skill` | Adding a built-in attack skill across its 9 layers (incl. the KNOWN_ATTACK_PATHS gate + silent drawer layers) | [SKILL.md](skills/builtin-agent-skill/SKILL.md) |
+| `builtin-agent-skill` | Adding a built-in attack skill across its 10 layers (incl. the KNOWN_ATTACK_PATHS gate, the skill-part registry + silent drawer layers) | [SKILL.md](skills/builtin-agent-skill/SKILL.md) |
 | `project-settings-cascade` | Changing/adding a project default across Prisma + two Python modules + /defaults + frontend + existing rows | [SKILL.md](skills/project-settings-cascade/SKILL.md) |
 | `graph-db-writes` | Writing the Neo4j graph: the tenant-isolation MERGE key, mixin placement, schema-sync | [SKILL.md](skills/graph-db-writes/SKILL.md) |
 | `recon-ai-enrichment` | Wiring an LLM into a recon tool: never-raise, per-target cache, full+partial, two toggles one field | [SKILL.md](skills/recon-ai-enrichment/SKILL.md) |
