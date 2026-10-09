@@ -137,6 +137,7 @@ intend to use supply-chain SCA.
 | `ENABLE_KB` | `--kbase` | Bakes ML embedding models (+~4.4 GB image). The real KB switch. |
 | `ENABLE_KB_REFRESH` | kb-refresh sidecar | |
 | `ENABLE_ZRAM` | `REDAMON_ENABLE_ZRAM=1` | Compressed-RAM cushion. |
+| `PLUGINS_ENABLED` | `PLUGINS_ENABLED` in the server `.env` | Off by default; needs Docker Engine >= 28.0.0. See "The plugin platform" below. |
 
 `SKIP_KB` is intentionally **not** an input: redamon.sh derives it from the `.kbase-enabled`
 flag it manages. Control KB with `ENABLE_KB` only.
@@ -292,6 +293,30 @@ Repeated 401s are banned by the `redamon-mcp-auth` fail2ban jail.
 
 In `https-ip` with a self-signed certificate most MCP clients reject the connection. Use a
 real certificate (`TLS_MODE=provided`) or a domain.
+
+## The plugin platform (off by default)
+
+`PLUGINS_ENABLED=true` in the deploy `.env` turns on RedAmon plugins: optional features
+installed from the signed `redamon-plugins` catalog and run in the `plugin-runner`
+container, on an internal network with no internet access. `deploy.sh init` and `update`
+seed the switch into the server `.env` before `redamon.sh` runs, and set
+`PLUGINS_ALLOWED_ORIGIN` from the same derived origin as `MCP_ALLOWED_ORIGIN` (nginx
+forwards `Host $host` without the port).
+
+- **Docker Engine 28.0.0 or newer is required on the server.** The plugin networks use
+  `gateway_mode_ipv4: isolated`, which older engines refuse. Check with
+  `docker version --format '{{.Server.Version}}'`.
+- **A failed preflight never takes the stack down.** If the server cannot run the platform
+  (an older engine, a missing secret, a runner image that does not build), `redamon.sh`
+  prints the reason, starts everything else with plugins off, and `./redamon.sh status`
+  repeats the reason.
+- **The plugin-internal routes are denied at nginx** in both templates, before
+  `location /api/`: `/api/plugin-gateway/` (plugin code's Gateway), `/api/plugin-runner/`
+  (the runner's run list) and `/api/internal/plugins/` (reconciliation) answer 404 at the
+  edge. They are reached only on the container networks; nginx does not strip the headers
+  they authenticate with, so the edge must not offer them.
+- The runner's CPU cap (`PLUGIN_RUNNER_CPUS`, 2) is fitted to the server's cores like the
+  other services' caps.
 
 ## Security posture
 

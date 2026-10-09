@@ -138,6 +138,10 @@ CERT_BASE="${LEGACY_CERT_DIR:-$SCRIPT_DIR}"
 : "${MCP_RATE_START_PER_WINDOW:=}"; : "${MCP_RATE_START_WINDOW_MS:=}"
 : "${MCP_RATE_COMPARE_PER_WINDOW:=}"; : "${MCP_RATE_COMPARE_WINDOW_MS:=}"
 : "${MCP_KALI_EXEC_ENABLED:=true}"; : "${MCP_RATE_EXEC_PER_MIN:=}"
+# Plugin platform (README.PLUGINS.md). OFF by default: plugin code is third-party code,
+# switched on deliberately. It needs Docker Engine >= 28.0.0 on the server; a server that
+# cannot run it gets plugins off with the reason from redamon.sh, everything else runs.
+: "${PLUGINS_ENABLED:=false}"
 : "${MCP_DISABLED_TOOLS:=}"
 : "${MCP_TOKEN_PRUNE_INTERVAL:=}"
 : "${ADMIN_NAME:=}"; : "${ADMIN_EMAIL:=}"; : "${ADMIN_PASSWORD:=}"
@@ -375,6 +379,7 @@ build_deploy_env() {
              MCP_KALI_EXEC_ENABLED MCP_RATE_EXEC_PER_MIN \
              MCP_DISABLED_TOOLS \
              MCP_PUBLIC_ORIGIN \
+             PLUGINS_ENABLED \
              ADMIN_NAME ADMIN_EMAIL ADMIN_PASSWORD \
              NVD_API_KEY KB_EMBEDDING_USE_API KB_EMBEDDING_API_BASE_URL KB_EMBEDDING_API_KEY \
              OSV_DB_AUTO_REFRESH OSV_DB_ECOSYSTEMS OSV_DB_TTL_SECONDS OSV_DB_REFRESH_TIMEOUT \
@@ -541,6 +546,11 @@ seed MCP_TOKEN_PRUNE_INTERVAL "\${MCP_TOKEN_PRUNE_INTERVAL}"
 # non-default HTTPS_PORT an Origin-sending client would be 403'd against its own
 # origin, so the public origin is passed explicitly.
 seed MCP_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
+# Plugin platform switch, seeded before redamon.sh for the same reason as
+# MCP_SERVER_ENABLED (ensure_auth_secrets pins an ABSENT key to false). Its routes
+# check the request Origin like the MCP route, hence the same derived origin.
+seed PLUGINS_ENABLED "\${PLUGINS_ENABLED}"
+seed PLUGINS_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
 # Behind nginx every request arrives from 127.0.0.1 unless the app is told the
 # edge is trusted. nginx pins X-Forwarded-For to the real peer, so this is safe
 # here and is what makes audit records and the login lockout name a real IP.
@@ -581,6 +591,7 @@ cap_cpus RECON_ORCHESTRATOR_CPUS 4
 cap_cpus AGENT_CPUS 8
 cap_cpus WEBAPP_CPUS 4
 cap_cpus DOCKER_BROKER_CPUS 2
+cap_cpus PLUGIN_RUNNER_CPUS 2
 chmod 600 .env
 success "Checkout ready"
 EOF
@@ -903,6 +914,11 @@ seed MCP_TOKEN_PRUNE_INTERVAL "\${MCP_TOKEN_PRUNE_INTERVAL}"
 # non-default HTTPS_PORT an Origin-sending client would be 403'd against its own
 # origin, so the public origin is passed explicitly.
 seed MCP_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
+# Plugin platform switch, seeded before redamon.sh for the same reason as
+# MCP_SERVER_ENABLED (ensure_auth_secrets pins an ABSENT key to false). Its routes
+# check the request Origin like the MCP route, hence the same derived origin.
+seed PLUGINS_ENABLED "\${PLUGINS_ENABLED}"
+seed PLUGINS_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
 # Behind nginx every request arrives from 127.0.0.1 unless the app is told the
 # edge is trusted. nginx pins X-Forwarded-For to the real peer, so this is safe
 # here and is what makes audit records and the login lockout name a real IP.
@@ -913,7 +929,14 @@ sg docker -c "cd \$APP_PATH && ./redamon.sh update"
 # redamon.sh rebuilds only what CHANGED. An .env-only edit changes no image, so
 # the webapp would keep running with its old environment; recreate it explicitly.
 step "Recreate webapp so a changed .env actually takes effect"
-sg docker -c "cd \$APP_PATH && docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml up -d webapp"
+# Explicit -f files ignore COMPOSE_FILE, where redamon.sh adds the plugins overlay while
+# the platform runs. Its running runner is the sign that redamon.sh decided "on"; without
+# the overlay here, every update would take the webapp off its plugin network and volume.
+PLUGINS_ARGS=""
+if sg docker -c "docker ps --format '{{.Names}}'" 2>/dev/null | grep -qx redamon-plugin-runner; then
+  PLUGINS_ARGS="-f docker-compose.plugins.yml"
+fi
+sg docker -c "cd \$APP_PATH && docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml \$PLUGINS_ARGS up -d webapp"
 EOF
   run_secrets_gate
   # nginx may have changed; re-render is idempotent + gated

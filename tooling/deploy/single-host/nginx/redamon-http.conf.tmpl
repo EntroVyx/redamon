@@ -105,6 +105,15 @@ server {
         add_header __CSP_HEADER_NAME__ "default-src 'none'; frame-ancestors 'none'" always;
         add_header Cache-Control "no-store" always;
     }
+    # Plugin-internal routes: the Gateway that plugin code calls (call-token auth), the
+    # runner's run list (runner key) and plugin reconciliation (internal key). They are
+    # reached only on the container networks; from the public edge they would offer an
+    # attacker those credentials' checks to probe, and nginx does not strip the headers
+    # they authenticate with. `^~` wins over every regex location, and nginx matches the
+    # decoded, slash-merged path, so `%70lugin-gateway` or `//` variants land here too.
+    location ^~ /api/plugin-gateway/ { return 404; }
+    location ^~ /api/plugin-runner/ { return 404; }
+    location ^~ /api/internal/plugins/ { return 404; }
     location /api/ {
         limit_req zone=api burst=60 nodelay; limit_req_status 429;
         include /etc/nginx/snippets/redamon-proxy-common.conf;
