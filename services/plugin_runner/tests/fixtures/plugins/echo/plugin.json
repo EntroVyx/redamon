@@ -1,0 +1,35 @@
+{
+  "id": "echo",
+  "version": "1.0.0",
+  "displayName": "Echo",
+  "description": "The plugin platform's test fixture: one action per runner path, every permission and every extension point. Not a real plugin.",
+  "platform": ">=1.0.0 <2.0.0",
+  "dataVersion": 1,
+  "permissions": ["session:read", "llm:invoke", "override:skill.text"],
+  "llmFeature": { "description": "The model the Echo test fixture calls in its call_llm action." },
+  "actions": [
+    { "id": "echo", "entry": "engine/main.py:echo", "timeoutSeconds": 30 },
+    { "id": "describe", "entry": "engine/main.py:describe", "timeoutSeconds": 30 },
+    { "id": "sleep", "entry": "engine/main.py:sleep", "timeoutSeconds": 120, "async": true },
+    { "id": "crash", "entry": "engine/main.py:crash", "timeoutSeconds": 30 },
+    { "id": "raise_plugin_error", "entry": "engine/main.py:raise_plugin_error", "timeoutSeconds": 30 },
+    { "id": "raise_other", "entry": "engine/main.py:raise_other", "timeoutSeconds": 30 },
+    { "id": "print_noise", "entry": "engine/main.py:print_noise", "timeoutSeconds": 30 },
+    { "id": "big_result", "entry": "engine/main.py:big_result", "timeoutSeconds": 30 },
+    { "id": "import_site_package", "entry": "engine/main.py:import_site_package", "timeoutSeconds": 30 },
+    { "id": "not_async", "entry": "engine/main.py:not_async", "timeoutSeconds": 30 },
+    { "id": "read_session", "entry": "engine/main.py:read_session", "timeoutSeconds": 60 },
+    { "id": "call_llm", "entry": "engine/main.py:call_llm", "timeoutSeconds": 600, "llm": true },
+    { "id": "propose_override", "entry": "engine/main.py:propose_override", "timeoutSeconds": 60 },
+    { "id": "list_items", "entry": "engine/items.py:list_items", "timeoutSeconds": 30 }
+  ],
+  "contributes": {
+    "nav": { "label": "Echo", "icon": "puzzle", "screen": "ui/home.json" },
+    "chat.session.actions": [
+      { "label": "Echo this session", "icon": "play", "action": "read_session" },
+      { "label": "Echo skill versions", "icon": "history", "coreScreen": "skill.text.versions" }
+    ],
+    "project.skills.row": [{ "label": "Echo this skill", "action": "echo" }]
+  },
+  "screens": ["ui/home.json"]
+}

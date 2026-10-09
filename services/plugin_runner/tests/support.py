@@ -123,3 +123,108 @@ def context_kwargs(case: dict) -> dict:
 
 def case_id(case: dict) -> Optional[str]:
     return case["name"]
+
+
+# --- a worker driven over its real protocol --------------------------------------------
+
+BOOTSTRAP = RUNNER_ROOT / "worker" / "bootstrap.py"
+ECHO_ROOT = Path(__file__).resolve().parent / "fixtures" / "plugins" / "echo"
+ECHO_MANIFEST = json.loads((ECHO_ROOT / "plugin.json").read_text(encoding="utf-8"))
+
+
+def echo_entry(action: str) -> str:
+    return next(a["entry"] for a in ECHO_MANIFEST["actions"] if a["id"] == action)
+
+
+class WorkerProcess:
+    """Starts worker/bootstrap.py as the supervisor does (`python -I -S`, protocol fd) and
+    exchanges JSON lines with it synchronously. Messages from the protocol fd are queued by
+    a reader thread; stderr is collected into `stderr_lines`."""
+
+    def __init__(self, root: Path = ECHO_ROOT, *, mem_mb: int = 512, nproc: int = 64,
+                 env: Optional[dict] = None, extra_args: Optional[list] = None):
+        import os
+        import queue
+        import subprocess
+        import sys
+
+        r, w = os.pipe()
+        self._queue: "queue.Queue" = queue.Queue()
+        self.stderr_lines: list = []
+        args = [sys.executable, "-I", "-S", str(BOOTSTRAP), "--root", str(root),
+                "--sdk", str(SDK_ROOT), "--mem-mb", str(mem_mb), "--nproc", str(nproc),
+                "--proto-fd", str(w)] + (extra_args or [])
+        base_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8",
+                    "PYTHONDONTWRITEBYTECODE": "1", "PYTHONHASHSEED": "0",
+                    "REDAMON_GATEWAY_URL": "http://127.0.0.1:9"}
+        base_env.update(env or {})
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, pass_fds=(w,), env=base_env, cwd="/")
+        os.close(w)
+        self._proto = os.fdopen(r, "rb")
+
+        def read_proto():
+            for line in self._proto:
+                self._queue.put(json.loads(line))
+            self._queue.put(None)
+
+        def read_stream(stream, sink):
+            for line in stream:
+                sink.append(line.decode("utf-8", "replace").rstrip("\n"))
+
+        self.stdout_lines: list = []
+        for target, a in ((read_proto, ()), (read_stream, (self.proc.stderr, self.stderr_lines)),
+                          (read_stream, (self.proc.stdout, self.stdout_lines))):
+            threading.Thread(target=target, args=a, daemon=True).start()
+
+    def send(self, msg: dict) -> None:
+        self.proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
+        self.proc.stdin.flush()
+
+    def send_raw(self, raw: bytes) -> None:
+        self.proc.stdin.write(raw)
+        self.proc.stdin.flush()
+
+    def next_message(self, timeout: float = 10.0):
+        import queue
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError(f"no message from the worker within {timeout}s; stderr: {self.stderr_lines}")
+
+    def ready(self, timeout: float = 10.0) -> dict:
+        msg = self.next_message(timeout)
+        assert msg and msg.get("type") == "ready", (msg, self.stderr_lines)
+        return msg
+
+    def invoke(self, action: str, params: Optional[dict] = None, *, req_id: str = "r1",
+               entry: Optional[str] = None, ctx: Optional[dict] = None,
+               token: str = "call-token") -> None:
+        self.send({"type": "invoke", "id": req_id, "action": action,
+                   "entry": entry or echo_entry(action), "params": params or {},
+                   "ctx": ctx or {"pluginId": "echo", "version": "1.0.0", "userId": "user-1"},
+                   "token": token})
+
+    def call(self, action: str, params: Optional[dict] = None, timeout: float = 10.0, **kw) -> dict:
+        self.invoke(action, params, **kw)
+        return self.next_message(timeout)
+
+    def close(self, timeout: float = 5.0) -> int:
+        try:
+            if self.proc.poll() is None:
+                try:
+                    self.send({"type": "shutdown"})
+                except (BrokenPipeError, OSError):
+                    pass
+                try:
+                    self.proc.wait(timeout)
+                except Exception:
+                    self.proc.kill()
+                    self.proc.wait()
+        finally:
+            for s in (self.proc.stdin,):
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        return self.proc.returncode
