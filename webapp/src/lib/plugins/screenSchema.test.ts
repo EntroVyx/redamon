@@ -66,6 +66,20 @@ describe('refused screens', () => {
     expect(errors(node)).toMatch(/nested 7 deep; at most 6/)
   })
 
+  test('a description nested 20,000 levels deep is refused, not a stack overflow', () => {
+    let node: unknown = { type: 'emptyState', title: 'leaf' }
+    for (let i = 0; i < 20_000; i++) node = page([node])
+    const r = parseScreen(node)
+    expect(r.ok).toBe(false)
+    expect(r.ok ? '' : r.errors.join()).toMatch(/nested too deep/)
+  })
+
+  test('deep nesting hidden inside a field is refused too', () => {
+    let deep: unknown = 'x'
+    for (let i = 0; i < 20_000; i++) deep = [deep]
+    expect(parseScreen({ type: 'markdown', content: { text: deep } }).ok).toBe(false)
+  })
+
   test('an unknown primitive', () => {
     expect(errors({ type: 'iframe', src: 'https://example.com' })).toMatch(/type/)
   })

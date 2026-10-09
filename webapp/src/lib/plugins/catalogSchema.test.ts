@@ -63,6 +63,10 @@ describe('shape checks', () => {
     expect(refusal((c) => (c.catalogVersion = 2))).toMatch(/catalogVersion/)
   })
 
+  test('a dataVersion past the int4 column', () => {
+    expect(refusal((c) => (c.plugins[0].releases[0].dataVersion = 2_147_483_648))).toMatch(/dataVersion: Too big/)
+  })
+
   test('a serial below 1', () => {
     expect(refusal((c) => (c.serial = 0))).toMatch(/serial/)
   })

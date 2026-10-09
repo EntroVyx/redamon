@@ -172,6 +172,7 @@ describe('refusals, each with a readable message', () => {
     ['version', '1.0', /version: must be a version x\.y\.z/],
     ['platform', '^1.0.0', /platform: must be a range of comparators/],
     ['dataVersion', 0, /dataVersion: Too small/],
+    ['dataVersion', 2_147_483_648, /dataVersion: Too big/],
     ['displayName', 'x'.repeat(61), /displayName: Too big/],
     ['description', 'x'.repeat(501), /description: Too big/],
   ])('%s = %j', (key, value, expected) => {

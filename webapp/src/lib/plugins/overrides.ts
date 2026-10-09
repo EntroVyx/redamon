@@ -46,6 +46,9 @@ export const MAX_PENDING_CHANGE_SETS = 5
 export const MAX_PARTS_PER_CHANGE_SET = 50
 export const PART_VALUE_MAX_CHARS = 100_000
 export const NOTE_MAX_CHARS = 4_000
+export const META_MAX_BYTES = 65_536
+// Keys of `meta` the platform writes itself; a plugin's values for them are dropped.
+const PLATFORM_META_KEYS = ['staleReason']
 
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 // Change set ids are crypto.randomUUID() values.
@@ -155,7 +158,7 @@ function toChangeSet(rows: PluginOverride[]): ChangeSet {
     targetGroup: first.targetGroup,
     status: first.status as OverrideStatus,
     revision: first.revision,
-    staleReason: staleReasonOf(first.meta),
+    staleReason: first.status === 'stale' ? staleReasonOf(first.meta) : null,
     note: first.note,
     meta: first.meta,
     createdBy: first.createdBy,
@@ -278,6 +281,13 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
     invalid(`the note is at most ${NOTE_MAX_CHARS} characters`)
   }
   if (typeof input.createdBy !== 'string' || !input.createdBy) invalid('createdBy is required')
+  let meta: Prisma.InputJsonValue | undefined
+  if (input.meta !== undefined && input.meta !== null) {
+    if (typeof input.meta !== 'object' || Array.isArray(input.meta)) invalid('meta must be an object')
+    const own = Object.fromEntries(Object.entries(input.meta).filter(([k]) => !PLATFORM_META_KEYS.includes(k)))
+    if (Buffer.byteLength(JSON.stringify(own), 'utf8') > META_MAX_BYTES) invalid(`meta is at most ${META_MAX_BYTES} bytes of JSON`)
+    meta = own as Prisma.InputJsonValue
+  }
 
   const changeSetId = randomUUID()
   await db.$transaction(async (tx) => {
@@ -304,7 +314,7 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
         baseSha256: p.baseSha256,
         status: 'proposed',
         note: input.note ?? null,
-        meta: input.meta ?? Prisma.DbNull,
+        meta: meta ?? Prisma.DbNull,
         createdBy: input.createdBy,
       })),
     })

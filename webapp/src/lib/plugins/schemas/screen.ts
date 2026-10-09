@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ACTION_ID_RE, SCREEN_PATH_RE, parseWith } from './common'
+import { ACTION_ID_RE, SCREEN_PATH_RE, parseWith, type SchemaResult } from './common'
 
 /**
  * A plugin screen is a JSON description drawn by the core host from a fixed set of
@@ -201,7 +201,29 @@ export const screenSchema = screenNodeSchema.superRefine((node, ctx) => {
   }
 })
 
-export function parseScreen(input: unknown) {
+// Deeper than any valid screen (6 pages of nodes, a few levels inside each), and far
+// below what would overflow the stack of the recursive schema check.
+const SCREEN_MAX_JSON_DEPTH = 64
+
+/** Depth of a JSON value, iteratively, so a hostile file cannot overflow the stack. */
+function jsonDepth(input: unknown, limit: number): number {
+  const stack: [unknown, number][] = [[input, 1]]
+  let max = 0
+  while (stack.length) {
+    const [node, depth] = stack.pop()!
+    if (depth > max) max = depth
+    if (max > limit) return max
+    if (node && typeof node === 'object') {
+      for (const child of Object.values(node)) stack.push([child, depth + 1])
+    }
+  }
+  return max
+}
+
+export function parseScreen(input: unknown): SchemaResult<ScreenNode> {
+  if (jsonDepth(input, SCREEN_MAX_JSON_DEPTH) > SCREEN_MAX_JSON_DEPTH) {
+    return { ok: false, errors: [`(root): nested too deep (more than ${SCREEN_MAX_JSON_DEPTH} levels of JSON)`] }
+  }
   return parseWith(screenSchema, input)
 }
 

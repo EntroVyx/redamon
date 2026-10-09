@@ -79,6 +79,23 @@ describe('propose', () => {
     expect(db.rows('pluginOverride')).toEqual([])
   })
 
+  test.each([
+    ['an array', ['a', 'b']],
+    ['a string', 'summary'],
+    ['a number', 3],
+    ['more than 64 KB', { blob: 'x'.repeat(70_000) }],
+  ])('refuses meta that is %s', async (_n, meta) => {
+    expect(await code(ov.propose({ ...base, parts: [part('sqli/workflow')], meta: meta as never }))).toBe('invalid_proposal')
+  })
+
+  test("a plugin cannot set the platform's own staleReason through meta", async () => {
+    const id = await proposeParts(alice, 'sqli', { workflow: 'W' }, { meta: { summary: 's', staleReason: 'part_removed' } })
+    const set = await ov.getChangeSet(id)
+    expect(set).toMatchObject({ status: 'proposed', staleReason: null, meta: { summary: 's' } })
+    expect((set!.meta as Record<string, unknown>).staleReason).toBeUndefined()
+    await ov.approve(id, 'alice', H)
+  })
+
   test('five pending change sets per scope and skill; the sixth is refused (sets, not rows)', async () => {
     for (let i = 0; i < 5; i++) await proposeParts(alice, 'sqli', { workflow: `W${i}`, payloads: `P${i}` })
     expect(await ov.pendingCount(alice, 'skill.text', 'sqli')).toBe(5)

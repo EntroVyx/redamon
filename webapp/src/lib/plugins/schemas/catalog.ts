@@ -21,7 +21,7 @@ const pluginId = z.string().regex(PLUGIN_ID_RE, 'must be a plugin id')
 const release = z.object({
   version,
   platform: z.string().regex(new RegExp(RANGE_PATTERN), 'must be a version range'),
-  dataVersion: z.number().int().min(1),
+  dataVersion: z.number().int().min(1).max(2_147_483_647),
   // The regex repeats the protocol rule so the exported JSON Schema carries it.
   url: z.url({ protocol: /^https?$/, error: 'must be an http(s) URL' }).regex(/^https?:\/\//, 'must be an http(s) URL'),
   sha256,

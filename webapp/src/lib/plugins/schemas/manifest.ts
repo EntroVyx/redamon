@@ -71,7 +71,8 @@ export const manifestSchema = z
     platform: z
       .string()
       .regex(new RegExp(RANGE_PATTERN), 'must be a range of comparators like ">=1.0.0 <2.0.0"'),
-    dataVersion: z.number().int().min(1),
+    // The column is a Postgres int4.
+    dataVersion: z.number().int().min(1).max(2_147_483_647),
     permissions: z
       .array(z.enum(PLUGIN_PERMISSIONS))
       .refine(unique, 'lists a permission twice'),
