@@ -89,11 +89,11 @@ describe('calls', () => {
     expect(failed).toEqual({ kind: 'result', ok: false, error: { code: 'no_target', message: 'Pick one.' } })
   })
 
-  test('an async action is accepted with its job id', async () => {
-    const { config } = await fake()
+  test('an async action is accepted with its job id and the runner boot id (TD-22)', async () => {
+    const { r, config } = await fake()
     const out = await runAction('echo', 'sleep',
       { token: 't', params: {}, ctx: CTX, timeoutSeconds: 30, async: true, jobId: 'job-1' }, config)
-    expect(out).toEqual({ kind: 'accepted', jobId: 'job-1' })
+    expect(out).toEqual({ kind: 'accepted', jobId: 'job-1', bootId: r.options.bootId })
   })
 
   test.each([

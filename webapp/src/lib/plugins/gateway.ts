@@ -85,6 +85,8 @@ export interface GatewayOptions {
    */
   permission?: PluginPermission | ((body: Record<string, unknown>) => PluginPermission | null)
   kinds?: readonly CallTokenKind[]
+  /** False only for jobs/complete: a job that used its calls must still report its result. */
+  budgeted?: boolean
 }
 
 type Handler = (ctx: GatewayContext) => Promise<Record<string, unknown> | NextResponse>
@@ -312,7 +314,7 @@ async function run(
   identify(claims.pid)
 
   const limit = gatewayCallsPerToken()
-  if (charge(claims) > limit) {
+  if (opts.budgeted !== false && charge(claims) > limit) {
     return gatewayError(429, 'call_budget_exceeded', `This call token has made its ${limit} calls.`)
   }
 

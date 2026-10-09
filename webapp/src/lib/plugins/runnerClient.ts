@@ -103,7 +103,8 @@ export interface ActionRequest {
 export type ActionOutcome =
   | { kind: 'result'; ok: true; result: Record<string, unknown> }
   | { kind: 'result'; ok: false; error: { code: string; message: string } }
-  | { kind: 'accepted'; jobId: string }
+  /** `bootId`: the runner that took the job (TD-22); null from a runner that does not say. */
+  | { kind: 'accepted'; jobId: string; bootId: string | null }
 
 async function call(
   config: RunnerConfig,
@@ -193,7 +194,10 @@ export async function runAction(
   if (req.async === true && req.jobId === undefined) throw new TypeError('an async action needs the job id')
   const body = { ...req, async: req.async === true }
   const out = await call(config, 'POST', path, actionTimeoutMs(req.timeoutSeconds), body)
-  if (out.status === 202) return { kind: 'accepted', jobId: String(out.body.jobId) }
+  if (out.status === 202) {
+    const bootId = typeof out.body.bootId === 'string' && out.body.bootId ? out.body.bootId : null
+    return { kind: 'accepted', jobId: String(out.body.jobId), bootId }
+  }
   if (out.body.ok === true) {
     return { kind: 'result', ok: true, result: (out.body.result ?? {}) as Record<string, unknown> }
   }
