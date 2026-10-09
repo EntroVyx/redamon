@@ -26,7 +26,7 @@ def _done(h, n=1, timeout=30.0):
 def test_an_async_action_answers_202_then_reports_success(runner, plugins_dir):
     h = runner([install_plugin(plugins_dir)])
     r = h.act("echo", "sleep", {"seconds": 0.2}, async_=True, job_id="job-1", token="job-token-1")
-    assert r.status_code == 202 and r.json() == {"jobId": "job-1"}
+    assert r.status_code == 202 and r.json() == {"jobId": "job-1", "bootId": h.health()["bootId"]}
     req = _done(h)
     assert req.method == "POST" and req.path == COMPLETE
     assert req.headers["authorization"] == "Bearer job-token-1"
@@ -67,6 +67,15 @@ def test_the_report_is_retried_on_a_server_error(runner, plugins_dir):
     assert len(h.completions) == 3
 
 
+def test_the_report_is_retried_when_the_gateway_is_rate_limited(runner, plugins_dir):
+    h = runner([install_plugin(plugins_dir)])
+    h.complete_statuses = [429]
+    h.act("echo", "echo", async_=True, job_id="j10")
+    _done(h, 2)
+    time.sleep(0.3)
+    assert len(h.completions) == 2
+
+
 def test_the_report_gives_up_after_three_retries(runner, plugins_dir):
     h = runner([install_plugin(plugins_dir)])
     h.complete_statuses = [500, 500, 500, 500, 500]
@@ -93,7 +102,7 @@ def test_cancel_stops_a_running_job(runner, plugins_dir):
     wait_until(lambda: h.health()["workers"][0]["inFlight"] == 1)
     r = h.post("/runner/v1/plugins/echo/jobs/j8/cancel")
     assert r.status_code == 200 and r.json() == {"ok": True}
-    assert _done(h, timeout=25).json() == {"status": "failed", "error": {
+    assert _done(h, timeout=25).json() == {"status": "cancelled", "error": {
         "code": "cancelled", "message": "The action was cancelled."}}
 
 
@@ -112,8 +121,16 @@ def test_a_job_that_ignores_cancel_is_killed_after_the_grace_period(runner, plug
     h.act("echo", "stubborn", async_=True, job_id="j9")
     wait_until(lambda: h.health()["workers"][0]["inFlight"] == 1)
     h.post("/runner/v1/plugins/echo/jobs/j9/cancel")
-    assert _done(h, timeout=25).json()["error"]["code"] == "cancelled"
+    report = _done(h, timeout=25).json()
+    assert report["status"] == "cancelled" and report["error"]["code"] == "cancelled"
     wait_until(lambda: h.restarted_from(pid), timeout=45)
+
+
+def test_a_plugin_error_coded_cancelled_is_still_a_failure(runner, plugins_dir):
+    # Only a cancel the webapp asked for makes a job `cancelled`.
+    h = runner([install_plugin(plugins_dir)])
+    h.act("echo", "raise_plugin_error", {"code": "cancelled", "message": "Mine."}, async_=True, job_id="j11")
+    assert _done(h).json() == {"status": "failed", "error": {"code": "cancelled", "message": "Mine."}}
 
 
 def test_a_job_id_already_running_is_refused(runner, plugins_dir):

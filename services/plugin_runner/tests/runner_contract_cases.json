@@ -9,7 +9,10 @@
     "key, null sends no header, any other string is sent as it is. `expect`: `status`, plus",
     "`body` (exact), `bodyIncludes` (these top-level fields equal), `keys` (exact top-level key",
     "set) or `code` (body.code). `jobsComplete` is the body the supervisor posts to the",
-    "Gateway's /api/plugin-gateway/v1/jobs/complete with the job's own bearer token."
+    "Gateway's /api/plugin-gateway/v1/jobs/complete with the job's own bearer token.",
+    "`before`: requests sent first, their answers ignored (a job left running). `runnerState`:",
+    "\"out_of_date\" sets the runner up out of date (the webapp runs another platform version).",
+    "An async 202 carries the runner's `bootId`, which the webapp stores on the job."
   ],
   "runnerKey": "contract-runner-key-0123456789abcdef",
   "platformVersion": "1.0.0",
@@ -89,7 +92,37 @@
           "jobId": "contract-job-1"
         }
       },
-      "expect": { "status": 202, "body": { "jobId": "contract-job-1" } }
+      "expect": { "status": 202, "keys": ["bootId", "jobId"], "bodyIncludes": { "jobId": "contract-job-1" } }
+    },
+    {
+      "name": "an async action without a job id",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": { "token": "job-token", "params": { "seconds": 0.1 },
+                  "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+                  "timeoutSeconds": 30, "async": true }
+      },
+      "expect": { "status": 400, "code": "bad_request" }
+    },
+    {
+      "name": "an async job that is already running",
+      "before": [
+        { "method": "POST", "path": "/runner/v1/plugins/echo/actions/sleep", "key": "valid",
+          "body": { "token": "job-token", "params": { "seconds": 5 },
+                    "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "dup-job" },
+                    "timeoutSeconds": 30, "async": true, "jobId": "dup-job" } }
+      ],
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": { "token": "job-token", "params": { "seconds": 5 },
+                  "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "dup-job" },
+                  "timeoutSeconds": 30, "async": true, "jobId": "dup-job" }
+      },
+      "expect": { "status": 409, "code": "job_running" }
     },
     {
       "name": "an action the manifest does not declare",
@@ -114,6 +147,29 @@
       "expect": { "status": 404, "code": "unknown_plugin" }
     },
     {
+      "name": "a plugin version that is not running",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "9.9.9", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_plugin" }
+    },
+    {
+      "name": "an action while the runner is out of date",
+      "runnerState": "out_of_date",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 503, "code": "runner_out_of_date" }
+    },
+    {
       "name": "cancel of a job that is not running",
       "request": { "method": "POST", "path": "/runner/v1/plugins/echo/jobs/no-such-job/cancel", "key": "valid" },
       "expect": { "status": 404, "code": "unknown_job" }
@@ -131,6 +187,7 @@
   },
   "jobsComplete": {
     "succeeded": { "status": "succeeded", "result": { "slept": 0.1 } },
-    "failed": { "status": "failed", "error": { "code": "action_timeout", "message": "The action did not finish within 30 seconds." } }
+    "failed": { "status": "failed", "error": { "code": "action_timeout", "message": "The action did not finish within 30 seconds." } },
+    "cancelled": { "status": "cancelled", "error": { "code": "cancelled", "message": "The action was cancelled." } }
   }
 }

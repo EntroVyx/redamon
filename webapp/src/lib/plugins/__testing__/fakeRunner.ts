@@ -6,12 +6,15 @@
  *
  *   GET  /runner/v1/health
  *   POST /runner/v1/reload
- *   POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId}
+ *   POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId, bootId}
  *   POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel     200 | 404 unknown_job
  *   GET  /runner/v1/plugins/{id}/logs?lines=N
  *
  * Every route requires `X-Plugin-Runner-Key`; no key configured → 503
- * `runner_not_configured` (fail closed, TD-08).
+ * `runner_not_configured` (fail closed, TD-08). An action is checked in the supervisor's
+ * order (supervisor/app.py): the body (400 bad_request), the runner being out of date (503
+ * runner_out_of_date), the plugin at `ctx.version` (404 unknown_plugin), the action (404
+ * unknown_action), an async job id already running (409 job_running).
  */
 import { randomUUID, timingSafeEqual } from 'crypto'
 import { startFakeServer, type FakeRequest, type FakeResponse, type FakeServer } from './fakeHttpServer'
@@ -51,6 +54,8 @@ export interface FakeRunnerOptions {
   actions?: Record<string, ActionScript>
   /** Keyed by plugin id. */
   logs?: Record<string, string[]>
+  /** The versions running per plugin id; a plugin not listed runs 1.0.0. */
+  versions?: Record<string, string[]>
 }
 
 export interface FakeRunner {
@@ -68,6 +73,25 @@ export interface FakeRunner {
 
 function json(status: number, body: object): FakeResponse {
   return { status, body }
+}
+
+/** The supervisor's `_action_body` checks; the message of the first one that fails. */
+function actionBodyError(body: Record<string, unknown>): string | null {
+  const { token, params, ctx, timeoutSeconds, jobId } = body
+  const isAsync = body.async ?? false
+  const obj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+  if (typeof token !== 'string' || !token) return 'token is required.'
+  if (!obj(params)) return 'params must be a JSON object.'
+  if (!obj(ctx) || !['pluginId', 'version', 'userId'].every((k) => typeof ctx[k] === 'string' && ctx[k])) {
+    return 'ctx needs pluginId, version and userId.'
+  }
+  if (typeof timeoutSeconds !== 'number' || timeoutSeconds < 1) return 'timeoutSeconds must be a number of at least 1.'
+  if (typeof isAsync !== 'boolean') return 'async must be true or false.'
+  if (jobId !== undefined && jobId !== null && (typeof jobId !== 'string' || !jobId || jobId.length > 200)) {
+    return 'jobId must be a short string.'
+  }
+  if (isAsync && (jobId === undefined || jobId === null)) return 'An async action needs the jobId the webapp created.'
+  return null
 }
 
 function keyMatches(given: string | string[] | undefined, expected: string): boolean {
@@ -120,20 +144,29 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
       }
       const call = { pluginId, action, body }
       record.actionCalls.push(call)
-      if (!knownPlugin(pluginId)) {
-        return json(404, { error: `Plugin ${pluginId} is not running.`, code: 'unknown_plugin' })
+      const invalid = actionBodyError(body)
+      if (invalid) return json(400, { error: invalid, code: 'bad_request' })
+      if (options.state === 'out_of_date') {
+        return json(503, {
+          error: 'The plugin runner is out of date for this RedAmon version; rebuild it.', code: 'runner_out_of_date',
+        })
+      }
+      const version = (body.ctx as Record<string, string>).version
+      if (!knownPlugin(pluginId) || !(options.versions?.[pluginId] ?? ['1.0.0']).includes(version)) {
+        return json(404, { error: `Plugin ${pluginId} ${version} is not running.`, code: 'unknown_plugin' })
       }
       const script = options.actions?.[`${pluginId}/${action}`]
       if (!script) return json(404, { error: `Plugin ${pluginId} declares no action ${action}.`, code: 'unknown_action' })
       if (body.async === true) {
-        const jobId = typeof body.jobId === 'string' ? body.jobId : randomUUID()
+        const jobId = body.jobId as string
         const key = `${pluginId}/${jobId}`
+        if (running.has(key)) return json(409, { error: `Job ${jobId} is already running.`, code: 'job_running' })
         running.add(key)
         // The job's outcome is the caller's to observe; a rejection must not crash the test run.
         void Promise.resolve(script(call))
           .catch(() => undefined)
           .finally(() => running.delete(key))
-        return json(202, { jobId })
+        return json(202, { jobId, bootId: options.bootId })
       }
       const out = await script(call)
       return 'result' in out ? json(200, { ok: true, result: out.result }) : out

@@ -3,7 +3,7 @@ proxy (:7072). Every route, including an unknown one, demands the runner key fir
 
     GET  /runner/v1/health
     POST /runner/v1/reload
-    POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId}
+    POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId, bootId}
     POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel
     GET  /runner/v1/plugins/{id}/logs?lines=N
 
@@ -128,6 +128,8 @@ def create_app(settings: Settings, *, clock=SYSTEM_CLOCK, logs: LogBuffer | None
         if is_async:
             if manager.job_running(plugin_id, job_id):
                 return auth.error(409, "job_running", f"Job {job_id} is already running.")
+            # The job id the webapp created is the one the plugin reports progress under.
+            ctx = dict(ctx, jobId=job_id)
             task = asyncio.create_task(jobs.run_job(
                 handle, client=manager.client, settings=settings, clock=clock, logs=logs, job_id=job_id,
                 action_id=action_id, params=params, ctx=ctx, token=token, timeout=effective))
@@ -135,7 +137,7 @@ def create_app(settings: Settings, *, clock=SYSTEM_CLOCK, logs: LogBuffer | None
             task.add_done_callback(manager.job_tasks.discard)
             # Registered before answering, so a cancel that follows the 202 finds the job.
             await asyncio.sleep(0)
-            return JSONResponse(status_code=202, content={"jobId": job_id})
+            return JSONResponse(status_code=202, content={"jobId": job_id, "bootId": manager.boot_id})
         try:
             return await handle.invoke(action_id, params, ctx, token, effective)
         except RunnerError as e:

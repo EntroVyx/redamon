@@ -15,20 +15,21 @@ async def run_job(handle, *, client, settings, clock, logs, job_id: str, action_
     try:
         answer = await handle.invoke(action_id, params, ctx, token, timeout, job_id=job_id)
     except RunnerError as e:
-        body = {"status": "failed", "error": {"code": e.code, "message": e.message}}
+        answer = {"ok": False, "error": {"code": e.code, "message": e.message}}
+    # Only a cancel the webapp asked for makes the job `cancelled`, never a plugin's own code.
+    cancelled = handle.cancelled_jobs.pop(job_id, None) is not None
+    if answer.get("ok"):
+        body = {"status": "succeeded", "result": answer["result"]}
     else:
-        if answer.get("ok"):
-            body = {"status": "succeeded", "result": answer["result"]}
-        else:
-            body = {"status": "failed", "error": answer["error"]}
+        body = {"status": "cancelled" if cancelled else "failed", "error": answer["error"]}
     await report(client=client, settings=settings, clock=clock, logs=logs, handle=handle,
                  job_id=job_id, token=token, body=body)
 
 
 async def report(*, client, settings, clock, logs, handle, job_id: str, token: str, body: dict) -> bool:
-    """POSTs the terminal state; retries a transport failure or a 5xx answer
-    `len(settings.job_report_delays)` times. A 4xx (job unknown, already terminal, token
-    expired) is final."""
+    """POSTs the terminal state; retries a transport failure, a 429 or a 5xx answer
+    `len(settings.job_report_delays)` times. Another 4xx (job unknown, token expired) is
+    final."""
     url = settings.gateway_url + COMPLETE_PATH
     attempts = len(settings.job_report_delays) + 1
     for attempt in range(attempts):
@@ -38,7 +39,7 @@ async def report(*, client, settings, clock, logs, handle, job_id: str, token: s
             status = None
         else:
             status = r.status_code
-            if status < 500:
+            if status < 500 and status != 429:
                 if status >= 300:
                     logs.event(handle.plugin_id, handle.version,
                                f"job {job_id}: the webapp refused its result (HTTP {status})")

@@ -116,6 +116,8 @@ class WorkerHandle:
         self.pending: dict = {}
         self.jobs: dict = {}
         self._cancelled: set = set()
+        # Job ids the webapp cancelled, until the job's report is written (jobs.run_job).
+        self.cancelled_jobs: dict = {}
         self._kill_reason: Optional[str] = None
         self._stopping = False
         self._tasks: set = set()
@@ -430,6 +432,7 @@ class WorkerHandle:
         if rid is None or rid not in self.pending:
             return False
         self._cancelled.add(rid)
+        self.cancelled_jobs[job_id] = rid
         try:
             await asyncio.wait_for(self._send({"type": "cancel", "id": rid}), self.settings.kill_grace)
         except RunnerError:

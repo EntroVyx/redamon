@@ -12,9 +12,18 @@ import { join } from 'node:path'
 import { startFakeRunner, type FakeRunnerOptions } from './__testing__/fakeRunner'
 import { closeAllFakeServers } from './__testing__/fakeHttpServer'
 
+interface Request {
+  method: 'GET' | 'POST'
+  path: string
+  key: string | null
+  body?: Record<string, unknown>
+}
+
 interface Case {
   name: string
-  request: { method: 'GET' | 'POST'; path: string; key: string | null; body?: Record<string, unknown> }
+  before?: Request[]
+  runnerState?: 'out_of_date'
+  request: Request
   expect: { status: number; body?: unknown; bodyIncludes?: Record<string, unknown>; keys?: string[]; code?: string }
 }
 
@@ -37,10 +46,14 @@ const ECHO: FakeRunnerOptions['actions'] = {
     const p = body.params as { code: string; message: string }
     return { status: 200, body: { ok: false, error: { code: p.code, message: p.message } } }
   },
-  'echo/sleep': () => ({ result: { slept: 0.1 } }),
+  'echo/sleep': async ({ body }) => {
+    const seconds = Number((body.params as { seconds?: number }).seconds ?? 0)
+    await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 5) * 1000))
+    return { result: { slept: seconds } }
+  },
 }
 
-async function send(baseUrl: string, req: Case['request']) {
+async function send(baseUrl: string, req: Request) {
   const headers: Record<string, string> = {}
   if (req.key === 'valid') headers['X-Plugin-Runner-Key'] = CONTRACT.runnerKey
   else if (req.key !== null) headers['X-Plugin-Runner-Key'] = req.key
@@ -67,7 +80,9 @@ describe('runner contract cases on the fake runner', () => {
   test.each(CONTRACT.cases.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
     const r = await startFakeRunner({
       runnerKey: CONTRACT.runnerKey, platformVersion: CONTRACT.platformVersion, actions: ECHO,
+      state: c.runnerState ?? 'ok',
     })
+    for (const before of c.before ?? []) await (await send(r.baseUrl, before)).body?.cancel()
     await check(await send(r.baseUrl, c.request), c.expect)
   })
 
