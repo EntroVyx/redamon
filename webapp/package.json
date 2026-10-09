@@ -13,7 +13,8 @@
     "test:coverage": "vitest run --no-file-parallelism --coverage",
     "docs:mcp": "MCP_DOCS_WRITE=1 vitest run src/lib/mcp/apiReference.test.ts",
     "postinstall": "prisma generate",
-    "docs:settings": "MCP_DOCS_WRITE=1 vitest run src/lib/reconSettings/settingsReference.test.ts"
+    "docs:settings": "MCP_DOCS_WRITE=1 vitest run src/lib/reconSettings/settingsReference.test.ts",
+    "plugins:schemas": "tsx scripts/export-plugin-schemas.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

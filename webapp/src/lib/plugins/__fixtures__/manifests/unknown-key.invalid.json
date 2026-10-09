@@ -1,0 +1,11 @@
+{
+  "id": "echo",
+  "version": "1.0.0",
+  "displayName": "Echo",
+  "description": "Declares a key the platform does not know.",
+  "platform": ">=1.0.0 <2.0.0",
+  "dataVersion": 1,
+  "permissions": [],
+  "actions": [],
+  "hooks": { "onInstall": "engine/setup.py:run" }
+}

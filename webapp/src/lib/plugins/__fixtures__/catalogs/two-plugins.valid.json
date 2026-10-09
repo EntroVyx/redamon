@@ -1,0 +1,48 @@
+{
+  "catalogVersion": 1,
+  "serial": 42,
+  "expires": "2026-12-31T00:00:00Z",
+  "plugins": [
+    {
+      "id": "skiller",
+      "displayName": "Skiller",
+      "description": "Proposes better skill text from a session.",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "platform": ">=1.0.0 <2.0.0",
+          "dataVersion": 1,
+          "url": "https://github.com/example/redamon-plugins/releases/download/skiller-v1.0.0/skiller-1.0.0.tar.gz",
+          "sha256": "0b4f9e5a4c1d2e3f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7",
+          "size": 48213,
+          "permissions": ["session:read", "llm:invoke", "override:skill.text"]
+        },
+        {
+          "version": "1.1.0",
+          "platform": ">=1.1.0 <2.0.0",
+          "dataVersion": 1,
+          "url": "https://github.com/example/redamon-plugins/releases/download/skiller-v1.1.0/skiller-1.1.0.tar.gz",
+          "sha256": "1b4f9e5a4c1d2e3f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7",
+          "permissions": ["session:read", "llm:invoke", "override:skill.text", "future:capability"]
+        }
+      ]
+    },
+    {
+      "id": "echo",
+      "displayName": "Echo",
+      "description": "Fixture.",
+      "releases": [
+        {
+          "version": "0.3.1",
+          "platform": ">=1.0.0 <2.0.0",
+          "dataVersion": 2,
+          "url": "http://example.org/echo-0.3.1.tar.gz",
+          "sha256": "2b4f9e5a4c1d2e3f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7",
+          "permissions": []
+        }
+      ]
+    }
+  ],
+  "revoked": [{ "id": "skiller", "version": "0.9.0", "reason": "Leaked session text into proposals." }],
+  "generatedBy": "a field a later CI adds"
+}

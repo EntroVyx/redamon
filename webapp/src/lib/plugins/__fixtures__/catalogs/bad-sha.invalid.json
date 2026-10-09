@@ -1,0 +1,23 @@
+{
+  "catalogVersion": 1,
+  "serial": 1,
+  "expires": "2026-12-31T00:00:00Z",
+  "plugins": [
+    {
+      "id": "echo",
+      "displayName": "Echo",
+      "description": "Fixture.",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "platform": ">=1.0.0 <2.0.0",
+          "dataVersion": 1,
+          "url": "https://example.org/echo-1.0.0.tar.gz",
+          "sha256": "0B4F9E5A",
+          "permissions": []
+        }
+      ]
+    }
+  ],
+  "revoked": []
+}
