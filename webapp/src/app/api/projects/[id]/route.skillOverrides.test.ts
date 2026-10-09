@@ -77,7 +77,8 @@ beforeEach(() => {
   vi.stubEnv('INTERNAL_API_KEY', MASTER)
   vi.stubEnv('SCANNER_API_KEY', SCANNER)
   vi.stubEnv('PLUGINS_ENABLED', 'true')
-  delete process.env.ACCESS_ENFORCE
+  // Enforcement on (its default); unstubAllEnvs puts the caller's value back.
+  vi.stubEnv('ACCESS_ENFORCE', undefined)
   wireProject()
   mockResolveForProject.mockResolvedValue(OVERRIDES)
   mockGetEffectiveUser.mockResolvedValue({ userId: 'owner-1' })

@@ -38,10 +38,22 @@ def _current():
     return _rendered
 
 
-def _dump(key: str, text: str) -> str:
-    path = Path("/tmp") / ("skill_golden_" + key.replace("/", "__") + ".txt")
-    path.write_text(text, encoding="utf-8")
-    return str(path)
+RERECORD = (
+    "If a built-in skill prompt was edited on purpose, re-record from the repository root:\n"
+    '  docker run --rm -v "$PWD:/repo" -w /repo/agentic --user "$(id -u):$(id -g)" '
+    "-e PYTHONPATH=/repo/agentic:/repo --entrypoint python redamon-agent:latest "
+    "tests/tools/record_skill_golden.py > agentic/tests/fixtures/skill_workflow_golden.json\n"
+    "and commit the fixture with that edit. Otherwise the assembly of skill text changed.")
+
+
+def _describe(text: str) -> str:
+    """Which registered part a rendered block is, so a failure names it."""
+    from prompts import skill_parts
+    for part in skill_parts.all_parts():
+        head = part.text.split("{", 1)[0]
+        if text == part.text or (part.kind == "template" and len(head) >= 40 and text.startswith(head)):
+            return part.key
+    return "an unregistered block starting " + repr(text[:80])
 
 
 def test_fixture_covers_every_scenario():
@@ -72,12 +84,16 @@ def test_workflow_matches_golden(key):
     expected = GOLDEN["workflow"][key]
     got = recorder.digest({"workflow": {key: parts}, "phase_tools": {}})["workflow"][key]
     if got != expected:
-        changed = [i for i, (a, b) in enumerate(zip(got["parts"], expected["parts"])) if a != b]
-        path = _dump(key, "\n".join(parts))
+        width = max(len(got["parts"]), len(expected["parts"]))
+        changed = [i for i in range(width)
+                   if i >= len(got["parts"]) or i >= len(expected["parts"])
+                   or got["parts"][i] != expected["parts"][i]]
+        names = [_describe(parts[i]) if i < len(parts) else "(a part no longer rendered)"
+                 for i in changed]
         pytest.fail(
-            f"{key}: workflow changed (parts {len(expected['parts'])} -> {len(got['parts'])}, "
-            f"differing part indexes {changed}, chars {expected['chars']} -> {got['chars']}); "
-            f"current render written to {path}")
+            f"{key}: workflow changed: parts {len(expected['parts'])} -> {len(got['parts'])}, "
+            f"chars {expected['chars']} -> {got['chars']}, changed at index {changed}: "
+            f"{names}.\n{RERECORD}")
 
 
 @pytest.mark.parametrize("key", sorted(GOLDEN["phase_tools"]))
@@ -87,6 +103,5 @@ def test_phase_tools_match_golden(key):
     expected = GOLDEN["phase_tools"][key]
     got = recorder.digest({"workflow": {}, "phase_tools": {key: text}})["phase_tools"][key]
     if got != expected:
-        path = _dump(key, text)
         pytest.fail(f"{key}: get_phase_tools output changed (chars {expected['chars']} -> "
-                    f"{got['chars']}); current render written to {path}")
+                    f"{got['chars']}).\n{RERECORD}")
