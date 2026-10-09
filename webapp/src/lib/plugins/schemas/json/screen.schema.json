@@ -21,13 +21,13 @@
               "properties": {
                 "action": {
                   "type": "string",
-                  "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                  "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                 },
                 "params": {
                   "type": "object",
                   "propertyNames": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                   },
                   "additionalProperties": {
                     "anyOf": [
@@ -84,13 +84,13 @@
               "properties": {
                 "action": {
                   "type": "string",
-                  "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                  "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                 },
                 "params": {
                   "type": "object",
                   "propertyNames": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                   },
                   "additionalProperties": {
                     "anyOf": [
@@ -118,11 +118,11 @@
             },
             "itemTitle": {
               "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
             },
             "itemSubtitle": {
               "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
             },
             "rowActions": {
               "maxItems": 5,
@@ -137,11 +137,11 @@
                   },
                   "screen": {
                     "type": "string",
-                    "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+                    "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
                   },
                   "action": {
                     "type": "string",
-                    "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                    "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                   },
                   "pass": {
                     "default": [],
@@ -149,7 +149,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                     }
                   }
                 },
@@ -188,13 +188,13 @@
               "properties": {
                 "action": {
                   "type": "string",
-                  "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                  "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                 },
                 "params": {
                   "type": "object",
                   "propertyNames": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                   },
                   "additionalProperties": {
                     "anyOf": [
@@ -229,7 +229,7 @@
                 "properties": {
                   "field": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                   },
                   "label": {
                     "type": "string",
@@ -264,11 +264,11 @@
                   },
                   "screen": {
                     "type": "string",
-                    "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+                    "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
                   },
                   "action": {
                     "type": "string",
-                    "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                    "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                   },
                   "pass": {
                     "default": [],
@@ -276,7 +276,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                     }
                   }
                 },
@@ -319,7 +319,7 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                   },
                   "label": {
                     "type": "string",
@@ -404,7 +404,7 @@
               "properties": {
                 "action": {
                   "type": "string",
-                  "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                  "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
                 },
                 "label": {
                   "type": "string",
@@ -419,7 +419,7 @@
             },
             "resultScreen": {
               "type": "string",
-              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
             }
           },
           "required": [
@@ -438,7 +438,7 @@
             },
             "name": {
               "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
             },
             "label": {
               "type": "string",
@@ -496,17 +496,17 @@
             },
             "action": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_]{1,39}$"
+              "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
             },
             "screen": {
               "type": "string",
-              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
             },
             "params": {
               "type": "object",
               "propertyNames": {
                 "type": "string",
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
               },
               "additionalProperties": {
                 "anyOf": [
@@ -561,7 +561,7 @@
                 },
                 "field": {
                   "type": "string",
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                 }
               },
               "additionalProperties": false
@@ -594,7 +594,7 @@
                 },
                 "field": {
                   "type": "string",
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                 }
               },
               "additionalProperties": false
@@ -608,7 +608,7 @@
                 },
                 "field": {
                   "type": "string",
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                 }
               },
               "additionalProperties": false
@@ -637,7 +637,7 @@
                 },
                 "field": {
                   "type": "string",
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}(?!\\n)$"
                 }
               },
               "additionalProperties": false

@@ -56,12 +56,15 @@ const contributes = z.strictObject(
 
 const unique = <T>(xs: T[]) => new Set(xs).size === xs.length
 
+// A pattern rather than a refine, so the exported JSON Schema carries the rule too.
+const NOT_RESERVED_RE = new RegExp(`^(?!(?:${[...RESERVED_PLUGIN_IDS].join('|')})$)`)
+
 export const manifestSchema = z
   .strictObject({
     id: z
       .string()
       .regex(PLUGIN_ID_RE, 'must match ^[a-z][a-z0-9-]{1,39}$')
-      .refine((id) => !RESERVED_PLUGIN_IDS.has(id), 'is a reserved name'),
+      .regex(NOT_RESERVED_RE, 'is a reserved name'),
     version: z.string().regex(new RegExp(VERSION_PATTERN), 'must be a version x.y.z'),
     displayName: z.string().min(1).max(60),
     description: z.string().min(1).max(500),

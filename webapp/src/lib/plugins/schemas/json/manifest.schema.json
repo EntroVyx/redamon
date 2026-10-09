@@ -4,11 +4,18 @@
   "properties": {
     "id": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{1,39}$"
+      "allOf": [
+        {
+          "pattern": "^[a-z][a-z0-9-]{1,39}(?!\\n)$"
+        },
+        {
+          "pattern": "^(?!(?:staging|platform|core|redamon|plugins|admin|api|system|internal|status|llm-features|jobs|offline-install|contributions|overrides|external-link)(?!\\n)$)"
+        }
+      ]
     },
     "version": {
       "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
+      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})(?!\\n)$"
     },
     "displayName": {
       "type": "string",
@@ -22,7 +29,7 @@
     },
     "platform": {
       "type": "string",
-      "pattern": "^ *(>=|<=|>|<|=)(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})( +(>=|<=|>|<|=)(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})){0,3} *$"
+      "pattern": "^ *(>=|<=|>|<|=)(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})( +(>=|<=|>|<|=)(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})){0,3} *(?!\\n)$"
     },
     "dataVersion": {
       "type": "integer",
@@ -62,11 +69,11 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{1,39}$"
+            "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
           },
           "entry": {
             "type": "string",
-            "pattern": "^engine(\\/[a-z0-9_]+)+\\.py:[a-z_][a-z0-9_]*$"
+            "pattern": "^engine(\\/[a-z0-9_]+)+\\.py:[a-z_][a-z0-9_]*(?!\\n)$"
           },
           "timeoutSeconds": {
             "type": "integer",
@@ -81,7 +88,7 @@
           },
           "resultScreen": {
             "type": "string",
-            "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+            "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
           }
         },
         "required": [
@@ -127,7 +134,7 @@
             },
             "screen": {
               "type": "string",
-              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+              "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
             }
           },
           "required": [
@@ -172,7 +179,7 @@
               },
               "action": {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
               },
               "coreScreen": {
                 "type": "string",
@@ -200,7 +207,7 @@
               },
               "action": {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{1,39}$"
+                "pattern": "^[a-z][a-z0-9_]{1,39}(?!\\n)$"
               }
             },
             "required": [
@@ -218,7 +225,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json$"
+        "pattern": "^ui(\\/[a-z0-9_-]+)+\\.json(?!\\n)$"
       }
     }
   },

@@ -22,7 +22,8 @@ const release = z.object({
   version,
   platform: z.string().regex(new RegExp(RANGE_PATTERN), 'must be a version range'),
   dataVersion: z.number().int().min(1),
-  url: z.url({ protocol: /^https?$/, error: 'must be an http(s) URL' }),
+  // The regex repeats the protocol rule so the exported JSON Schema carries it.
+  url: z.url({ protocol: /^https?$/, error: 'must be an http(s) URL' }).regex(/^https?:\/\//, 'must be an http(s) URL'),
   sha256,
   size: z.number().int().min(0).optional(),
   permissions: z.array(z.string().regex(/^[a-z][a-z0-9.:_-]{0,63}$/)).max(20),

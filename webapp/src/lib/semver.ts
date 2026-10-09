@@ -69,10 +69,11 @@ const COMPARATOR_RE = new RegExp(`^${OP}(${VERSION})$`)
 /**
  * The same grammar as single patterns, for JSON Schema `pattern` (the plugin
  * repository's CI validates manifests with them). semver.ranges.test.ts holds them
- * equal to the parser on every fixture case.
+ * equal to the parser on every fixture case. They end in `(?!\n)$` because Python's
+ * `$` also matches before a trailing newline; this form means "end of string" in both.
  */
-export const VERSION_PATTERN = `^${VERSION}$`
-export const RANGE_PATTERN = `^ *${OP}${VERSION}( +${OP}${VERSION}){0,${MAX_COMPARATORS - 1}} *$`
+export const VERSION_PATTERN = `^${VERSION}(?!\\n)$`
+export const RANGE_PATTERN = `^ *${OP}${VERSION}( +${OP}${VERSION}){0,${MAX_COMPARATORS - 1}} *(?!\\n)$`
 
 export function parseVersion(v: string): Version {
   const m = typeof v === 'string' ? VERSION_RE.exec(v) : null
