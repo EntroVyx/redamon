@@ -242,6 +242,40 @@ expect_eq "install race: the second, re-checked after A commits, updates nothing
 expect_eq "install race: the row belongs to the winner" "A" \
   "$("${PSQL[@]}" -c "select operation_id from $S.plugin_installs where plugin_id = 'race'")"
 
+# --- What Prisma sends to Postgres -----------------------------------------------
+# The data store relies on two facts about the Prisma client in the webapp image,
+# checked here through Prisma itself, inside a transaction that is always rolled back:
+# `startsWith` is an UNESCAPED LIKE pattern (so `_` is a wildcard and the store must
+# escape: likePrefix), and the escaped form matches literally.
+if docker compose exec -T webapp true >/dev/null 2>&1; then
+  PRISMA_PROBE=$(cat <<'JS'
+const { PrismaClient } = require('@prisma/client')
+const p = new PrismaClient()
+const ROLLBACK = new Error('rollback')
+const notLike = (prefix) => ({ pluginId: 'pdbt-like', NOT: { collection: { startsWith: prefix } } })
+p.$transaction(async (tx) => {
+  await tx.user.create({ data: { id: 'pdbt-like-u', name: 'pdbt', email: 'pdbt-like@example.invalid' } })
+  await tx.pluginInstall.create({ data: { pluginId: 'pdbt-like' } })
+  for (const collection of ['ab', '__jobs']) {
+    await tx.pluginData.create({ data: { pluginId: 'pdbt-like', ownerType: 'user', ownerId: 'pdbt-like-u',
+      userId: 'pdbt-like-u', collection, key: 'k', value: 1, sizeBytes: 1 } })
+  }
+  console.log('like_raw:' + await tx.pluginData.count({ where: notLike('__') }))
+  console.log('like_escaped:' + await tx.pluginData.count({ where: notLike('\\_\\_') }))
+  throw ROLLBACK
+}).catch((e) => { if (e !== ROLLBACK) { console.log('like_error:' + e.message); process.exitCode = 1 } })
+  .finally(() => p.$disconnect())
+JS
+)
+  PROBE_OUT=$(docker compose exec -T webapp node -e "$PRISMA_PROBE" 2>&1)
+  pfield() { printf '%s\n' "$PROBE_OUT" | sed -n "s/^$1://p" | head -1; }
+  expect_eq "Prisma sends startsWith unescaped: '__' also matches 'ab'" "0" "$(pfield like_raw)"
+  expect_eq "the escaped prefix the data store sends matches literally" "1" "$(pfield like_escaped)"
+  [ -n "$(pfield like_error)" ] && bad "the Prisma probe runs" "$(pfield like_error)"
+else
+  echo "  SKIP  Prisma LIKE probe: webapp container not running"
+fi
+
 COUNTS_AFTER=$("${PSQL[@]}" -c "$COUNTS_SQL")
 expect_eq "existing tables' row counts are unchanged" "$COUNTS_BEFORE" "$COUNTS_AFTER"
 

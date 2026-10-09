@@ -13,6 +13,16 @@ describe('fakePrisma', () => {
     expect(r.count).toBe(2)
   })
 
+  test('startsWith is an unescaped LIKE pattern, as Prisma 6 sends it to Postgres', async () => {
+    const db = createFakePrisma()
+    db.seed('pluginInstall', [{ pluginId: 'ab' }, { pluginId: '__' }, { pluginId: 'a%b' }])
+    const ids = async (where: Record<string, unknown>) =>
+      (await db.pluginInstall.findMany({ where, orderBy: { pluginId: 'asc' } })).map((r) => r.pluginId)
+    expect(await ids({ pluginId: { startsWith: '__' } })).toEqual(['__', 'a%b', 'ab'])
+    expect(await ids({ pluginId: { startsWith: '\\_\\_' } })).toEqual(['__'])
+    expect(await ids({ pluginId: { contains: '\\%' } })).toEqual(['a%b'])
+  })
+
   test('updateMany counts the rows it changed', async () => {
     const db = createFakePrisma()
     db.seed('pluginInstall', [{ pluginId: 'a', status: 'ready' }, { pluginId: 'b' }])

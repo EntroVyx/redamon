@@ -6,6 +6,9 @@
  *   compare-and-swap test sees exactly one winner;
  * - a `where` key whose value is `undefined` is ignored, as Prisma does, so a store
  *   that builds `{operationId: undefined}` matches every row here too;
+ * - `startsWith` / `contains` are SQL `LIKE` patterns, as Prisma 6 sends them to
+ *   Postgres: it does NOT escape `_` and `%`, so `startsWith: '__'` matches any value of
+ *   two or more characters. A store must escape its own patterns (likePrefix);
  * - unique keys raise the real `PrismaClientKnownRequestError` P2002, missing rows P2025;
  * - `$transaction(fn)` rolls back only its own writes when `fn` throws, and
  *   `SELECT pg_advisory_xact_lock(hashtext(<key>))` through `$executeRaw` takes a real
@@ -115,6 +118,20 @@ const cmp = (a: unknown, b: unknown): number => {
 
 const OPERATORS = new Set(['equals', 'in', 'notIn', 'lt', 'lte', 'gt', 'gte', 'not', 'startsWith', 'contains'])
 
+/** Postgres LIKE: `_` is one character, `%` any run, a backslash escapes the next one. */
+function like(value: unknown, pattern: string): boolean {
+  if (typeof value !== 'string') return false
+  let re = '^'
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]
+    if (ch === '\\' && i + 1 < pattern.length) re += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    else if (ch === '_') re += '.'
+    else if (ch === '%') re += '.*'
+    else re += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(re + '$', 's').test(value)
+}
+
 function isOperatorObject(v: unknown): v is Record<string, unknown> {
   if (!v || typeof v !== 'object' || v instanceof Date || Array.isArray(v)) return false
   const keys = Object.keys(v)
@@ -136,8 +153,8 @@ function matchField(value: unknown, cond: unknown): boolean {
       case 'gt': if (value == null || cmp(value, arg) <= 0) return false; break
       case 'gte': if (value == null || cmp(value, arg) < 0) return false; break
       case 'not': if (isOperatorObject(arg) ? matchField(value, arg) : eq(value, arg)) return false; break
-      case 'startsWith': if (typeof value !== 'string' || !value.startsWith(arg as string)) return false; break
-      case 'contains': if (typeof value !== 'string' || !value.includes(arg as string)) return false; break
+      case 'startsWith': if (!like(value, `${arg}%`)) return false; break
+      case 'contains': if (!like(value, `%${arg}%`)) return false; break
     }
   }
   return true
