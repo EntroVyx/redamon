@@ -2119,7 +2119,9 @@ _plugins_compose_overlay() {
     if [[ "${COMPOSE_FILE:-}" != *"$PLUGINS_OVERLAY"* ]]; then
         export COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.yml}:$SCRIPT_DIR/$PLUGINS_OVERLAY"
     fi
-    PLUGINS_COMPOSE_ARGS="-f $SCRIPT_DIR/$PLUGINS_OVERLAY"
+    # Relative like DEV_COMPOSE (commands run from $SCRIPT_DIR): these args are expanded
+    # unquoted, and an absolute path with a space in it would split.
+    PLUGINS_COMPOSE_ARGS="-f $PLUGINS_OVERLAY"
 }
 
 # Decides the effective switch for this run. Runs once per command, after the secrets

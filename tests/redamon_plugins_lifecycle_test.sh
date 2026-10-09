@@ -32,7 +32,9 @@ has()   { if grep -qF -- "$2" <<<"$3"; then ok "$1"; else bad "$1" "absent" "$2"
 hasnt() { if grep -qF -- "$2" <<<"$3"; then bad "$1" "present" "absent: $2"; else ok "$1"; fi; }
 section() { printf '\n== %s ==\n' "$1"; }
 
-WORK="$(mktemp -d)"
+# A space in the path on purpose: checkouts live in such directories, and a compose file
+# path that is word-split breaks `up dev` there.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/redamon plugins.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 SCRIPT_DIR="$WORK"
 CALLS="$WORK/calls.log"
@@ -275,8 +277,8 @@ section "up dev passes the overlay with its own -f files"
 fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
 ( cmd_up_dev ) >/dev/null 2>&1; rc=$?
 eq "up dev exits 0" "$rc" "0"
-has "the dev up lists the plugins overlay after the dev file" \
-    "-f docker-compose.yml -f docker-compose.dev.yml -f $WORK/docker-compose.plugins.yml up -d" "$(core_up)"
+has "the dev up lists the plugins overlay after the dev file, relative like the dev files" \
+    "-f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.plugins.yml up -d" "$(core_up)"
 eq "up dev starts the profile" "$(plugin_ups | grep -c 'plugin-runner plugin-gateway')" "1"
 fresh "$STRONG" "PLUGINS_ENABLED=false" "${KEYS[@]}"
 ( cmd_up_dev ) >/dev/null 2>&1
