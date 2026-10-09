@@ -347,6 +347,18 @@ preflight_ram_gate() {
         if allocate_memory; then
             return 0
         fi
+        # The plugin platform is optional: a host short only by the runner's minimum runs
+        # without it for this run, like any host that cannot run it (R-78).
+        if [[ -z "${PLUGINS_EFFECTIVE:-}" ]] && _plugins_effective_on 2>/dev/null; then
+            PLUGINS_EFFECTIVE=off
+            if allocate_memory; then
+                PLUGINS_OFF_REASON="the ~$(( ${BUILD_MEM_MB:-0} / 1024 ))GB of memory available to Docker cannot also cover the plugin runner's minimum"
+                export PLUGINS_ENABLED=false
+                error "Plugins stay off for this run: $PLUGINS_OFF_REASON."
+                return 0
+            fi
+            PLUGINS_EFFECTIVE=""
+        fi
         error "Insufficient memory: ~$(( ${BUILD_MEM_MB:-0} / 1024 ))GB available to Docker (source: ${BUILD_RES_SOURCE:-unknown}),"
         error "  which cannot cover the minimums of the services this profile starts"
         error "  (short by ~$(( _ALLOC_SHORTFALL_MB / 1024 + 1 ))GB)."
@@ -1972,7 +1984,7 @@ ensure_auth_secrets() {
     # Plugin platform. Written explicitly as false for the same reason: plugin code
     # is third-party code, so the platform is switched on deliberately, never by
     # upgrading. Also listed in the webapp's compose `environment` block.
-    if ! grep -q '^PLUGINS_ENABLED=' "$env_file" 2>/dev/null; then
+    if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?PLUGINS_ENABLED=' "$env_file" 2>/dev/null; then
         echo "PLUGINS_ENABLED=false" >> "$env_file"
         info "Initialized PLUGINS_ENABLED=false (plugin platform off by default)"
     fi
@@ -2036,11 +2048,41 @@ PLUGINS_OFF_REASON=""
 PLUGINS_COMPOSE_ARGS=""     # -f overlay, for call sites with explicit -f (up dev)
 PLUGINS_IMAGE_REBUILT=false
 
-# The switch as written in .env, parsed like the webapp's pluginsEnabled(): trimmed,
-# any case, `true` or `1`. bash 3.2 (macOS) has no case-changing expansion, hence tr.
+# The value compose gives a variable: the shell's when set, else the LAST assignment in
+# .env, read with compose's .env syntax (an `export ` prefix, single or double quotes, an
+# inline comment after whitespace). Reading .env any other way lets this script and the
+# containers disagree on the plugin switch or a secret.
+_env_compose_value() {
+    local key="$1" file="${2:-$SCRIPT_DIR/.env}"
+    if [[ -n "${!key+x}" ]]; then
+        printf '%s' "${!key}"
+        return 0
+    fi
+    [[ -f "$file" ]] || return 0
+    awk -v k="$key" '
+        { line = $0; sub(/^[ \t]+/, "", line); sub(/^export[ \t]+/, "", line) }
+        index(line, k "=") == 1 { v = substr(line, length(k) + 2); found = 1 }
+        END {
+            if (!found) exit
+            sub(/^[ \t]+/, "", v)
+            q = substr(v, 1, 1)
+            if (q == "\"" || q == "\047") {
+                rest = substr(v, 2); e = index(rest, q)
+                v = e ? substr(rest, 1, e - 1) : rest
+            } else {
+                if (match(v, /[ \t]#/)) v = substr(v, 1, RSTART - 1)
+                sub(/[ \t\r]+$/, "", v)
+            }
+            printf "%s", v
+        }' "$file"
+}
+
+# The switch as compose hands it to the webapp, parsed like the webapp's
+# pluginsEnabled(): trimmed, any case, `true` or `1`. bash 3.2 (macOS) has no
+# case-changing expansion, hence tr.
 plugins_switch_on() {
     local v
-    v="$(_env_get PLUGINS_ENABLED "$SCRIPT_DIR/.env" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+    v="$(_env_compose_value PLUGINS_ENABLED | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
     [[ "$v" == "true" || "$v" == "1" ]]
 }
 
@@ -2082,18 +2124,30 @@ plugins_preflight() {
     local build=true env_file="$SCRIPT_DIR/.env" internal
     [[ "${1:-}" == "--no-build" ]] && build=false
     PLUGINS_OFF_REASON=""
-    internal="$(_env_get INTERNAL_API_KEY "$env_file")"
+    internal="$(_env_compose_value INTERNAL_API_KEY "$env_file")"
     if [[ -z "$internal" || "$internal" == "changeme" ]]; then
         PLUGINS_OFF_REASON="INTERNAL_API_KEY is unset or 'changeme' (run ./redamon.sh install to generate it)"
         return 1
     fi
-    local k
+    # What the webapp refuses at runtime (run-list/route.ts, callToken.ts), refused here
+    # instead, with the cause named, rather than failing every plugin call.
+    local k v secret
     for k in PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET; do
-        if [[ -z "$(_env_get "$k" "$env_file")" ]]; then
-            PLUGINS_OFF_REASON="$k is empty in .env (delete the line; the next ./redamon.sh up generates it)"
+        v="$(_env_compose_value "$k" "$env_file" | tr -d '[:space:]')"
+        if [[ -z "$v" || "$v" == "changeme" ]]; then
+            PLUGINS_OFF_REASON="$k is empty or 'changeme' (delete the line; the next ./redamon.sh up generates it)"
             return 1
         fi
     done
+    secret="$(_env_compose_value PLUGIN_CALL_TOKEN_SECRET "$env_file" | tr -d '[:space:]')"
+    if [[ "${#secret}" -lt 32 ]]; then
+        PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET has fewer than 32 characters (delete the line; the next ./redamon.sh up generates it)"
+        return 1
+    fi
+    if [[ "$secret" == "$(_env_compose_value AUTH_SECRET "$env_file" | tr -d '[:space:]')" ]]; then
+        PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET equals AUTH_SECRET (delete its line; the next ./redamon.sh up generates another)"
+        return 1
+    fi
     if ! _docker_engine_at_least "$PLUGINS_MIN_ENGINE"; then
         local have
         have="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || have=""
@@ -2119,15 +2173,33 @@ plugins_preflight() {
 # _gpu_compose_overlay does. Keeps an exported COMPOSE_FILE (the deploy's prod overlay).
 _plugins_compose_overlay() {
     if [[ "${COMPOSE_FILE:-}" != *"$PLUGINS_OVERLAY"* ]]; then
-        export COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.yml}:$SCRIPT_DIR/$PLUGINS_OVERLAY"
+        local base="$SCRIPT_DIR/docker-compose.yml"
+        # Compose stops loading docker-compose.override.yml (dev mode) by itself once
+        # COMPOSE_FILE is set, so it is listed explicitly.
+        [[ -f "$SCRIPT_DIR/docker-compose.override.yml" ]] && base="$base:$SCRIPT_DIR/docker-compose.override.yml"
+        export COMPOSE_FILE="${COMPOSE_FILE:-$base}:$SCRIPT_DIR/$PLUGINS_OVERLAY"
     fi
     # Relative like DEV_COMPOSE (commands run from $SCRIPT_DIR): these args are expanded
     # unquoted, and an absolute path with a space in it would split.
     PLUGINS_COMPOSE_ARGS="-f $PLUGINS_OVERLAY"
 }
 
+# Creates the plugin networks, the volume and the two containers (not started) before
+# the core `up` would create them through the overlay: a daemon that refuses them (an
+# exhausted address pool) then turns plugins off instead of failing the core `up`.
+_plugins_create() {
+    # shellcheck disable=SC2068
+    if docker compose $@ --profile plugins up --no-start --no-deps plugin-runner plugin-gateway >/dev/null 2>&1; then
+        return 0
+    fi
+    PLUGINS_OFF_REASON="Docker could not create the plugin networks, volume or containers (docker compose --profile plugins up --no-start plugin-runner plugin-gateway shows why)"
+    return 1
+}
+
 # Decides the effective switch for this run. Runs once per command, after the secrets
-# exist and before the first `docker compose up`.
+# exist and before the first `docker compose up`. Leading args are compose file
+# selectors (up dev). The decision is exported either way: compose reads the shell
+# before .env, so the webapp starts with exactly what was decided here.
 _plugins_prepare() {
     if [[ -n "${PLUGINS_EFFECTIVE:-}" ]]; then
         [[ "$PLUGINS_EFFECTIVE" == on ]] && _plugins_compose_overlay
@@ -2135,16 +2207,17 @@ _plugins_prepare() {
     fi
     if ! plugins_switch_on; then
         PLUGINS_EFFECTIVE=off
+        export PLUGINS_ENABLED=false
         return 0
     fi
-    if plugins_preflight; then
+    if plugins_preflight && _plugins_create "$@"; then
         PLUGINS_EFFECTIVE=on
+        export PLUGINS_ENABLED=true
         _plugins_compose_overlay
         info "Plugin platform: on"
         return 0
     fi
     PLUGINS_EFFECTIVE=off
-    # Compose reads the shell before .env: the webapp now starts with the switch off.
     export PLUGINS_ENABLED=false
     error "Plugins stay off for this run: $PLUGINS_OFF_REASON."
     return 0

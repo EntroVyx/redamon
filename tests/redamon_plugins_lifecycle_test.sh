@@ -23,6 +23,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1090
 source "$REPO_ROOT/redamon.sh"
 set +e
+# The real gate, for the section that runs it (every other section stubs it).
+eval "_real_$(declare -f preflight_ram_gate)"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -51,8 +53,10 @@ record() { echo "$* | CF=${COMPOSE_FILE:-} | PE=${PLUGINS_ENABLED:-}" >> "$CALLS
 STUB_ENGINE="29.8.0"
 STUB_RUNNER_IMAGE=present        # present | missing
 STUB_RUNNER_BUILD_RC=0
+STUB_PLUGINS_CREATE_RC=0         # what `compose ... up --no-start` (the plugin resources) returns
 docker() {
     record "docker $*"
+    [[ "$1" == compose && "$*" == *--no-start* ]] && return "$STUB_PLUGINS_CREATE_RC"
     case "$1" in
         version) [[ "$*" == *Server.Version* ]] && printf '%s\n' "$STUB_ENGINE"; return 0 ;;
         image)
@@ -104,13 +108,15 @@ fresh() {
     unset COMPOSE_FILE PLUGINS_ENABLED PLUGINS_EFFECTIVE PLUGINS_OFF_REASON
     PLUGINS_COMPOSE_ARGS=""; GPU_COMPOSE_ARGS=""; PLUGINS_IMAGE_REBUILT=false
     STUB_ENGINE="29.8.0"; STUB_RUNNER_IMAGE=present; STUB_RUNNER_BUILD_RC=0; STUB_CHANGED=""
+    STUB_PLUGINS_CREATE_RC=0
 }
 STRONG="INTERNAL_API_KEY=$(printf 'a%.0s' {1..64})"
 KEYS=("PLUGIN_RUNNER_KEY=$(printf 'b%.0s' {1..64})" "PLUGIN_CALL_TOKEN_SECRET=$(printf 'c%.0s' {1..64})")
 
 calls()       { cat "$CALLS"; }
 core_up()     { grep -E '^docker compose .*up -d .*webapp' "$CALLS" | head -1; }
-plugin_ups()  { grep -E '^docker compose .*up .*plugin-(runner|gateway)' "$CALLS"; }
+plugin_ups()  { grep -E '^docker compose .*up .*plugin-(runner|gateway)' "$CALLS" | grep -v -- '--no-start'; }
+plugin_creates() { grep -E '^docker compose .*up --no-start .*plugin-runner' "$CALLS"; }
 plugin_rms()  { grep -E '^docker compose .*rm .*plugin-runner' "$CALLS"; }
 line_of()     { grep -nE "$1" "$CALLS" | head -1 | cut -d: -f1; }
 errors()      { grep -c '^ERROR' "$MSGS"; }
@@ -186,8 +192,14 @@ check_degraded() {   # label, then the .env lines
 ENGINE_FOR_CASE=27.5.1 EXPECT_CAUSE="27.5.1" check_degraded "Engine 27.5.1" "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
 ENGINE_FOR_CASE=garbage EXPECT_CAUSE="Docker Engine" check_degraded "unparseable Engine version" "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
 EXPECT_CAUSE="INTERNAL_API_KEY" check_degraded "INTERNAL_API_KEY=changeme" "INTERNAL_API_KEY=changeme" "PLUGINS_ENABLED=true" "${KEYS[@]}"
-EXPECT_CAUSE="PLUGIN_RUNNER_KEY" check_degraded "an empty runner key" "$STRONG" "PLUGINS_ENABLED=true" "PLUGIN_RUNNER_KEY=" "${KEYS[1]}"
-EXPECT_CAUSE="PLUGIN_CALL_TOKEN_SECRET" check_degraded "an empty token secret" "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET="
+# An empty key (a .env copied from an older .env.example) is generated, not a reason.
+for empty in "PLUGIN_RUNNER_KEY=" "PLUGIN_CALL_TOKEN_SECRET="; do
+    fresh "$STRONG" "PLUGINS_ENABLED=true" "$empty"
+    ( set -e; cmd_up ) >/dev/null 2>&1; rc=$?
+    eq "$empty: up exits 0" "$rc" "0"
+    eq "$empty: generated" "$(grep -cE "^${empty}[0-9a-f]{64}\$" "$WORK/.env")" "1"
+    has "$empty: plugins come on" "docker-compose.plugins.yml" "$(core_up)"
+done
 fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
 STUB_RUNNER_IMAGE=missing; STUB_RUNNER_BUILD_RC=1
 ( cmd_up ) >/dev/null 2>&1; rc=$?
@@ -374,6 +386,101 @@ fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
 out="$(_status_plugins_report | plain)"
 has "switch on and able: on" "PLUGINS: on" "$out"
 has "status asks compose for the two services" "--profile plugins ps" "$(calls)"
+
+# =============================================================================
+section "(x) the switch is read the way compose reads it, and the webapp gets the decision"
+# Compose: the shell before .env, the last assignment, `export `, quotes, an inline ` #`.
+for v in '"true"' "'1'" 'true # on' "$(printf 'true\t# tab')"; do
+    fresh "PLUGINS_ENABLED=$v"
+    plugins_switch_on && ok "PLUGINS_ENABLED=$v is on" || bad "PLUGINS_ENABLED=$v" "off" "on"
+done
+fresh 'PLUGINS_ENABLED="false"'
+plugins_switch_on && bad 'PLUGINS_ENABLED="false"' "on" "off" || ok 'PLUGINS_ENABLED="false" is off'
+fresh "export PLUGINS_ENABLED=true"
+plugins_switch_on && ok "an export prefix is read" || bad "export PLUGINS_ENABLED=true" "off" "on"
+fresh "PLUGINS_ENABLED=false" "PLUGINS_ENABLED=true"
+plugins_switch_on && ok "the last assignment wins (on)" || bad "false then true" "off" "on"
+fresh "PLUGINS_ENABLED=true" "PLUGINS_ENABLED=false"
+plugins_switch_on && bad "true then false" "on" "off" || ok "the last assignment wins (off)"
+fresh "PLUGINS_ENABLED=false"
+PLUGINS_ENABLED=true plugins_switch_on && ok "the shell wins over .env" || bad "shell true, .env false" "off" "on"
+
+for shape in 'PLUGINS_ENABLED="true"' 'PLUGINS_ENABLED=true # on' 'export PLUGINS_ENABLED=true'; do
+    fresh "$STRONG" "$shape" "${KEYS[@]}"
+    ( set -e; cmd_up ) >/dev/null 2>&1; rc=$?
+    eq "$shape: up exits 0 under set -e" "$rc" "0"
+    has "$shape: the webapp starts with plugins on" "PE=true" "$(core_up)"
+    has "$shape: with the overlay" "docker-compose.plugins.yml" "$(core_up)"
+    eq "$shape: the .env keeps one switch" "$(grep -cE '^(export )?PLUGINS_ENABLED=' "$WORK/.env")" "1"
+done
+fresh "$STRONG" "PLUGINS_ENABLED=true" "PLUGINS_ENABLED=false" "${KEYS[@]}"
+( set -e; cmd_up ) >/dev/null 2>&1
+has "true then false: the webapp starts with plugins off" "PE=false" "$(core_up)"
+hasnt "true then false: no overlay" "docker-compose.plugins.yml" "$(core_up)"
+eq "true then false: no runner" "$(plugin_ups | wc -l | tr -d ' ')" "0"
+fresh "$STRONG" "PLUGINS_ENABLED=false" "${KEYS[@]}"
+( export PLUGINS_ENABLED=true; set -e; cmd_up ) >/dev/null 2>&1
+has "a shell PLUGINS_ENABLED=true wins, as in compose" "docker-compose.plugins.yml" "$(core_up)"
+fresh "$STRONG" "PLUGINS_ENABLED=false" "${KEYS[@]}"
+( set -e; cmd_up ) >/dev/null 2>&1
+has "switch off: the webapp is told so explicitly" "PE=false" "$(core_up)"
+
+# =============================================================================
+section "(xi) secrets the webapp would refuse turn plugins off with the cause named"
+SHORT="$(printf 'c%.0s' {1..31})"; SAME="$(printf 'd%.0s' {1..40})"
+EXPECT_CAUSE="PLUGIN_RUNNER_KEY" check_degraded "a runner key left as changeme" \
+    "$STRONG" "PLUGINS_ENABLED=true" "PLUGIN_RUNNER_KEY=changeme" "${KEYS[1]}"
+EXPECT_CAUSE="PLUGIN_CALL_TOKEN_SECRET" check_degraded "a token secret left as changeme" \
+    "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=changeme"
+EXPECT_CAUSE="32" check_degraded "a token secret of 31 characters" \
+    "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SHORT"
+EXPECT_CAUSE="AUTH_SECRET" check_degraded "a token secret equal to AUTH_SECRET" \
+    "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SAME" "AUTH_SECRET=$SAME"
+
+# =============================================================================
+section "(xii) Docker refusing the plugin networks or volume: plugins off, the core starts (R-78)"
+fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
+STUB_PLUGINS_CREATE_RC=1
+( set -e; cmd_up ) >/dev/null 2>&1; rc=$?
+eq "up exits 0 under set -e" "$rc" "0"
+eq "the plugin resources were created before the core up" "$(plugin_creates | wc -l | tr -d ' ')" "1"
+has "the core up runs with the switch off" "PE=false" "$(core_up)"
+hasnt "and without the overlay" "docker-compose.plugins.yml" "$(core_up)"
+eq "no profile up" "$(plugin_ups | wc -l | tr -d ' ')" "0"
+eq "one error names the cause" "$(grep '^ERROR' "$MSGS" | grep -c 'plugin networks')" "1"
+fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
+( set -e; cmd_up ) >/dev/null 2>&1
+[[ -n "$(line_of 'up [-]-no-start')" && "$(line_of 'up [-]-no-start')" -lt "$(line_of '^docker compose .*up -d .*webapp')" ]] \
+    && ok "on: the resources are created before the core up" || bad "create order" "after or absent" "before"
+
+# =============================================================================
+section "(xiii) a docker-compose.override.yml (dev mode) stays loaded with the overlay"
+fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
+: > "$WORK/docker-compose.override.yml"
+( set -e; cmd_up ) >/dev/null 2>&1
+has "base, override, then the plugins overlay" \
+    "CF=$WORK/docker-compose.yml:$WORK/docker-compose.override.yml:$WORK/docker-compose.plugins.yml" "$(core_up)"
+rm -f "$WORK/docker-compose.override.yml"
+
+# =============================================================================
+section "(xiv) a host short only of the runner's memory runs without plugins (R-78)"
+preflight_ram_gate() { _real_preflight_ram_gate; }
+detect_build_resources() { BUILD_MEM_MB=6300; BUILD_RES_SOURCE=stub; }
+fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
+allocate_memory() { if _plugins_effective_on; then _ALLOC_SHORTFALL_MB=137; return 1; fi; return 0; }
+( set -e; cmd_up ) >/dev/null 2>&1; rc=$?
+eq "up exits 0 under set -e" "$rc" "0"
+has "the core up runs with the switch off" "PE=false" "$(core_up)"
+hasnt "and without the overlay" "docker-compose.plugins.yml" "$(core_up)"
+eq "no profile up" "$(plugin_ups | wc -l | tr -d ' ')" "0"
+eq "one error names memory as the cause" "$(grep '^ERROR' "$MSGS" | grep -c 'Plugins stay off.*memory')" "1"
+eq "and no 'Insufficient memory' refusal" "$(grep -c 'Insufficient memory' "$MSGS")" "0"
+fresh "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[@]}"
+allocate_memory() { _ALLOC_SHORTFALL_MB=2048; return 1; }
+( set -e; cmd_up ) >/dev/null 2>&1; rc=$?
+[[ "$rc" -ne 0 ]] && ok "a host short even without the runner is still refused" || bad "short host" "exit 0" "non-zero"
+eq "and nothing started" "$(core_up | wc -l | tr -d ' ')" "0"
+preflight_ram_gate() { return 0; }
 
 echo
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"

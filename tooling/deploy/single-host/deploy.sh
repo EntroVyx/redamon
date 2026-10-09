@@ -497,7 +497,8 @@ cd "\$APP_PATH"
 # rebuild can never silently ship the wrong (localhost:8090) WS URL.
 step "Seed application .env (operator app-config only; secrets are redamon.sh's job)"
 touch .env
-seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || echo "\$k=\$v" >> .env; }
+# A key is appended on a line of its own even when the operator's .env has no final newline.
+seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || { [ -z "\$(tail -c1 .env)" ] || echo >> .env; echo "\$k=\$v" >> .env; }; }
 seed NVD_API_KEY "\${NVD_API_KEY}"
 seed KB_EMBEDDING_USE_API "\${KB_EMBEDDING_USE_API}"
 seed KB_EMBEDDING_API_BASE_URL "\${KB_EMBEDDING_API_BASE_URL}"
@@ -889,7 +890,8 @@ is_true "\${ENABLE_ZRAM}" && export REDAMON_ENABLE_ZRAM=1
 [ -z "\${REDAMON_VERSION:-}" ] && [ -f VERSION ] && export REDAMON_VERSION="\$(cat VERSION 2>/dev/null || echo)"
 step "Re-seed application .env (operator app-config; init-only before, so update ignored it)"
 touch .env
-seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || echo "\$k=\$v" >> .env; }
+# A key is appended on a line of its own even when the operator's .env has no final newline.
+seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || { [ -z "\$(tail -c1 .env)" ] || echo >> .env; echo "\$k=\$v" >> .env; }; }
 # Inbound MCP server. Seeded BEFORE redamon.sh runs: ensure_auth_secrets appends
 # MCP_SERVER_ENABLED=false when the key is ABSENT, so without this the deployed
 # host actively pins the flag off and the operator's choice is unreachable.
@@ -932,11 +934,15 @@ step "Recreate webapp so a changed .env actually takes effect"
 # Explicit -f files ignore COMPOSE_FILE, where redamon.sh adds the plugins overlay while
 # the platform runs. Its running runner is the sign that redamon.sh decided "on"; without
 # the overlay here, every update would take the webapp off its plugin network and volume.
+# No runner: plugins are off for this run (switched off, or turned off by redamon.sh), so
+# the webapp is too, whatever the exported deploy.env and .env say.
 PLUGINS_ARGS=""
+PLUGINS_SWITCH="PLUGINS_ENABLED=false"
 if sg docker -c "docker ps --format '{{.Names}}'" 2>/dev/null | grep -qx redamon-plugin-runner; then
   PLUGINS_ARGS="-f docker-compose.plugins.yml"
+  PLUGINS_SWITCH=""
 fi
-sg docker -c "cd \$APP_PATH && docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml \$PLUGINS_ARGS up -d webapp"
+sg docker -c "cd \$APP_PATH && \$PLUGINS_SWITCH docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml \$PLUGINS_ARGS up -d webapp"
 EOF
   run_secrets_gate
   # nginx may have changed; re-render is idempotent + gated

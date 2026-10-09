@@ -105,6 +105,39 @@ grep -qF 'PLUGINS_ARGS' <<<"$recreate" && ok "the recreate passes it when presen
 grep -qF 'redamon-plugin-runner' <<<"$upd" && ok "it follows the runner redamon.sh left running" \
     || bad "the overlay follows the running runner" "absent" "redamon-plugin-runner"
 
+# The recreate runs as the update's remote shell runs it: the heredoc's lines, unescaped,
+# with `sg` and `docker` stubbed. Whatever the exported deploy.env and .env say, a webapp
+# recreated without the runner (redamon.sh turned plugins off for this run) gets them off.
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+awk '/^PLUGINS_ARGS=""/{on=1} on{print} on && /up -d webapp"$/{exit}' <<<"$upd" | sed 's/\\\$/$/g' > "$W/recreate.sh"
+recreate_with() {   # recreate_with <running container names>: the compose call it makes
+    : > "$W/log"
+    ( export PLUGINS_ENABLED=true APP_PATH="$W" OVERLAY_DIR=/overlay RUNNING="$1" LOG="$W/log"
+      docker() { if [[ "$1" == ps ]]; then printf '%s\n' $RUNNING; else echo "PE=${PLUGINS_ENABLED:-} docker $*" >> "$LOG"; fi; }
+      sg() { shift 2; bash -c "$1"; }
+      export -f docker
+      source "$W/recreate.sh" ) >/dev/null 2>&1
+    cat "$W/log"
+}
+out="$(recreate_with "")"
+grep -q 'up -d webapp' <<<"$out" && ok "the recreate snippet runs" || bad "the recreate snippet runs" "$out" "a compose up"
+grep -q '^PE=false ' <<<"$out" && ok "no runner: the webapp is recreated with plugins off" \
+    || bad "no runner: plugins off" "$out" "PE=false"
+grep -qF 'docker-compose.plugins.yml' <<<"$out" && bad "no runner: no overlay" "$out" "absent" || ok "no runner: no overlay"
+out="$(recreate_with "redamon-webapp redamon-plugin-runner")"
+grep -q '^PE=true ' <<<"$out" && grep -qF -- '-f docker-compose.plugins.yml up -d webapp' <<<"$out" \
+    && ok "runner running: the webapp keeps the overlay and the switch" || bad "runner running" "$out" "PE=true + overlay"
+
+echo
+echo "== seeding never glues a key onto an operator's last line (R-79) =="
+for fn in cmd_init cmd_update; do
+    seed_def="$(body_of "$fn" | grep -E '^seed\(\) \{' | head -1 | sed 's/\\\$/$/g')"
+    ( cd "$W" && printf 'OPERATOR_KEY=1' > .env && eval "$seed_def" && seed PLUGINS_ENABLED true && seed OPERATOR_KEY 2 ) >/dev/null 2>&1
+    got="$(cat "$W/.env" 2>/dev/null | tr '\n' ' ')"
+    [[ "$got" == "OPERATOR_KEY=2 PLUGINS_ENABLED=true " ]] && ok "$fn: seed keeps every key on its own line" \
+        || bad "$fn: seed keeps every key on its own line" "$got" "OPERATOR_KEY=2 PLUGINS_ENABLED=true "
+done
+
 echo
 echo "== documented where an operator looks =="
 grep -qE '^PLUGINS_ENABLED=false' "$ENV_EXAMPLE" && ok "deploy .env.example ships it off" \

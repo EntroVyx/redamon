@@ -56,6 +56,12 @@ ON="$(services --profile plugins <<<"$BASE")"
 [[ " $ON " == *" plugin-runner "* && " $ON " == *" plugin-gateway "* ]] \
     && ok "with --profile plugins both are listed" || bad "with the profile" "$ON" "both"
 
+# What a plain `up` creates is what the resolved config without the profile lists.
+NOPROF="$(config_json <<<"$BASE")"
+eq "without the profile: no plugins volume" "$(q "$NOPROF" "'plugins' in c.get('volumes', {})" 2>/dev/null)" "False"
+eq "without the profile: no plugin network" \
+   "$(q "$NOPROF" "sorted(n for n in c.get('networks', {}) if n.startswith('plugins'))" 2>/dev/null)" "[]"
+
 C="$(config_json --profile plugins <<<"$BASE")"
 if [[ -z "$C" ]]; then
     bad "docker compose config resolves the file" "empty" "json"
