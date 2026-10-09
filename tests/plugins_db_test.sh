@@ -242,11 +242,53 @@ expect_eq "install race: the second, re-checked after A commits, updates nothing
 expect_eq "install race: the row belongs to the winner" "A" \
   "$("${PSQL[@]}" -c "select operation_id from $S.plugin_installs where plugin_id = 'race'")"
 
+# Two approvals for one scope and skill, the override store's statement sequence:
+# lock, supersede the active set, activate the proposed one.
+OVI="INSERT INTO $S.plugin_overrides (id, plugin_id, extension_point, scope_type, scope_id, user_id,
+  target_group, target_key, change_set_id, value, base_sha256, status, created_by, updated_at) VALUES"
+seed_sets() {
+  "${PSQL[@]}" -c "DELETE FROM $S.plugin_overrides; $OVI
+    ('a1','p','skill.text','user','u1','u1','sqli','sqli/workflow','cs-a','A','$H','proposed','t',now()),
+    ('a2','p','skill.text','user','u1','u1','sqli','sqli/payloads','cs-a','A','$H','proposed','t',now()),
+    ('b1','p','skill.text','user','u1','u1','sqli','sqli/workflow','cs-b','B','$H','proposed','t',now()),
+    ('b2','p','skill.text','user','u1','u1','sqli','sqli/payloads','cs-b','B','$H','proposed','t',now())" >/dev/null
+}
+approve_sql() { # <set> <label> <lock: yes|no>
+  local lock=""
+  [ "$3" = yes ] && lock="SELECT pg_advisory_xact_lock(hashtext('override:skill.text:user:u1:sqli'));"
+  echo "$lock UPDATE $S.plugin_overrides SET status = 'superseded' WHERE extension_point = 'skill.text'
+    AND scope_type = 'user' AND scope_id = 'u1' AND target_group = 'sqli' AND status = 'active';
+    WITH u AS (UPDATE $S.plugin_overrides SET status = 'active' WHERE change_set_id = '$1'
+    AND status = 'proposed' RETURNING 1) SELECT '$2:' || count(*) FROM u;"
+}
+set_states() {
+  "${PSQL[@]}" -c "select string_agg(change_set_id || ':' || status, ',' order by change_set_id)
+    from (select distinct change_set_id, status from $S.plugin_overrides) s"
+}
+
+seed_sets
+race approve "$(approve_sql cs-a A yes)" "$(approve_sql cs-b B yes)"
+expect_eq "approval race with the scope lock: B waited for A's lock" "yes" "$(rfield approve_waited)"
+expect_eq "...A's approval activates its two parts" "2" "$(rfield A)"
+expect_eq "...B's, run after A commits, supersedes A and activates its own" "2" "$(rfield B)"
+expect_eq "...one active set at the end, the other superseded" "cs-a:superseded,cs-b:active" "$(set_states)"
+
+seed_sets
+race nolock "$(approve_sql cs-a A no)" "$(approve_sql cs-b B no)"
+expect_eq "approval race without the lock: B waited on A's uncommitted rows" "yes" "$(rfield nolock_waited)"
+if printf '%s\n' "$RACE_OUT" | grep -q "duplicate key value violates unique constraint"; then
+  ok "...and the one-active index refused B's activation"
+else
+  bad "...and the one-active index refused B's activation" "$RACE_OUT"
+fi
+expect_eq "...never two active sets" "cs-a:active,cs-b:proposed" "$(set_states)"
+
 # --- What Prisma sends to Postgres -----------------------------------------------
-# The data store relies on two facts about the Prisma client in the webapp image,
+# The stores rely on three facts about the Prisma client in the webapp image,
 # checked here through Prisma itself, inside a transaction that is always rolled back:
 # `startsWith` is an UNESCAPED LIKE pattern (so `_` is a wildcard and the store must
-# escape: likePrefix), and the escaped form matches literally.
+# escape: likePrefix), the escaped form matches literally, and the override store's
+# `$executeRaw` advisory lock call really takes a transaction lock.
 if docker compose exec -T webapp true >/dev/null 2>&1; then
   PRISMA_PROBE=$(cat <<'JS'
 const { PrismaClient } = require('@prisma/client')
@@ -262,6 +304,12 @@ p.$transaction(async (tx) => {
   }
   console.log('like_raw:' + await tx.pluginData.count({ where: notLike('__') }))
   console.log('like_escaped:' + await tx.pluginData.count({ where: notLike('\\_\\_') }))
+  // The override store's lock call, exactly as it is written there.
+  const key = 'override:skill.text:user:pdbt-like-u:sqli'
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`
+  const [held] = await tx.$queryRaw`SELECT count(*)::int AS n FROM pg_locks
+    WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted`
+  console.log('advisory_held:' + held.n)
   throw ROLLBACK
 }).catch((e) => { if (e !== ROLLBACK) { console.log('like_error:' + e.message); process.exitCode = 1 } })
   .finally(() => p.$disconnect())
@@ -271,6 +319,7 @@ JS
   pfield() { printf '%s\n' "$PROBE_OUT" | sed -n "s/^$1://p" | head -1; }
   expect_eq "Prisma sends startsWith unescaped: '__' also matches 'ab'" "0" "$(pfield like_raw)"
   expect_eq "the escaped prefix the data store sends matches literally" "1" "$(pfield like_escaped)"
+  expect_eq "the override store's pg_advisory_xact_lock call holds a lock through Prisma" "1" "$(pfield advisory_held)"
   [ -n "$(pfield like_error)" ] && bad "the Prisma probe runs" "$(pfield like_error)"
 else
   echo "  SKIP  Prisma LIKE probe: webapp container not running"
