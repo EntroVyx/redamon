@@ -9,7 +9,8 @@
  * prints the PLUGINS_EXTRA_TRUSTED_KEYS value to put in .env before `./redamon.sh up`.
  * Never use it for anything else.
  *
- *   node scripts/make-plugin-fixtures.mjs [outDir]     (default test-results/plugin-fixtures)
+ *   node scripts/make-plugin-fixtures.mjs [outDir]     (default .plugin-fixtures, gitignored;
+ *   not test-results/, which Playwright empties at the start of every run)
  *
  * Releases: echo 1.0.0 (data version 1) and 1.1.0 (data version 2, migrations/0002_*).
  */
@@ -21,7 +22,7 @@ import { gzipSync } from 'node:zlib'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ECHO = resolve(HERE, '../../../services/plugin_runner/tests/fixtures/plugins/echo')
-const OUT = resolve(process.argv[2] ?? join(HERE, '..', 'test-results', 'plugin-fixtures'))
+const OUT = resolve(process.argv[2] ?? join(HERE, '..', '.plugin-fixtures'))
 const RELEASES = [
   { version: '1.0.0', dataVersion: 1 },
   { version: '1.1.0', dataVersion: 2 },

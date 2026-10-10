@@ -13,7 +13,8 @@ import { mintToken, signIn } from './auth'
  * value for .env, then `./redamon.sh up`). Skipped when the platform is off.
  */
 
-const FIXTURES = join(__dirname, '..', 'test-results', 'plugin-fixtures')
+// Not under test-results/, which Playwright empties before the run: the key must survive it.
+const FIXTURES = join(__dirname, '..', '.plugin-fixtures')
 const SEED_USER = process.env.REDAMON_USER || 'cmrzlj3xk0000ob3vo67o3igg'
 let admin = process.env.REDAMON_ADMIN_USER || ''
 let api: APIRequestContext
