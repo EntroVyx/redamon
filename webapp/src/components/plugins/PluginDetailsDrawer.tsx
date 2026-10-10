@@ -49,7 +49,7 @@ export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback }: P
   const installed = d?.plugin.installed
   const rollback = admin?.rollback
   return (
-    <Drawer isOpen={isOpen} onClose={onClose} position="right" mode="overlay" width="560px" title={`${d?.plugin.displayName ?? pluginId} details`}>
+    <Drawer isOpen={isOpen} onClose={onClose} position="right" mode="overlay" width="560px" className={styles.detailsDrawer} title={`${d?.plugin.displayName ?? pluginId} details`}>
       {detail.isLoading && <div className="skeleton skeletonCard" />}
       {detail.isError && <div className={styles.error}>The details could not be loaded.</div>}
       {admin && (

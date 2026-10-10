@@ -76,6 +76,9 @@ const echoState = (page: Page) => echoCard(page).getByTestId('plugin-state')
 test('install from files, disable, enable, uninstall keep, reinstall, uninstall purge', async ({ page }) => {
   test.setTimeout(240_000)
   await page.goto('/graph')
+  // Leave only once /graph has drawn, as a user does: it then leaves its drawer offsets on
+  // <html> (0 px tall after it unmounts), which the details drawer below must not inherit.
+  await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--drawer-bottom') !== '')
   await page.getByRole('link', { name: /^Plugins$/ }).click()
   await expect(page).toHaveURL(/\/plugins$/)
   await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible()
@@ -83,6 +86,11 @@ test('install from files, disable, enable, uninstall keep, reinstall, uninstall 
 
   await installFromFiles(page)
   await expect(echoState(page)).toHaveText('Ready', { timeout: 60_000 })
+
+  await echoCard(page).getByRole('button', { name: 'Details' }).click()
+  await expect(page.getByTestId('plugin-versions')).toContainText('1.0.0')
+  await expect(page.getByRole('link', { name: /export data/i })).toBeInViewport()
+  await page.getByRole('button', { name: 'Close drawer' }).click()
 
   await echoCard(page).getByRole('button', { name: 'Disable' }).click()
   await page.getByRole('button', { name: 'Disable', exact: true }).last().click()
