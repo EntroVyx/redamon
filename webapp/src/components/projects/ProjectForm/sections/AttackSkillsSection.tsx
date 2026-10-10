@@ -17,6 +17,10 @@ import { SsrfSection } from './SsrfSection'
 import { RceSection } from './RceSection'
 import { PathTraversalSection } from './PathTraversalSection'
 import { DeserializationSection } from './DeserializationSection'
+import { PluginSkillRow } from '@/components/plugins/skills/PluginSkillRow'
+import { usePluginSkillOverrides } from '@/components/plugins/skills/usePluginSkillOverrides'
+import { SkillVersionsModal } from '@/components/plugins/review/SkillVersionsModal'
+import { OverrideReviewModal } from '@/components/plugins/review/OverrideReviewModal'
 import styles from '../ProjectForm.module.css'
 
 type FormData = Omit<Project, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'user'>
@@ -24,6 +28,12 @@ type FormData = Omit<Project, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'use
 interface AttackSkillsSectionProps {
   data: FormData
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
+  /**
+   * The saved project's id. Plugin version controls render only when it is set: the section
+   * also renders in create mode (no project yet) and inside the chat SettingsModal, whose
+   * debounced whole-row PUT swallows errors, so Reset/Delete are their own API calls (X23).
+   */
+  projectId?: string | null
 }
 
 interface BuiltInSkillDef {
@@ -160,7 +170,7 @@ function getConfig(data: FormData): AttackSkillConfig {
   return DEFAULT_CONFIG
 }
 
-export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionProps) {
+export function AttackSkillsSection({ data, updateField, projectId }: AttackSkillsSectionProps) {
   const { userId } = useProject()
   const { alertError, alert: showAlert } = useAlertModal()
   const [builtInOpen, setBuiltInOpen] = useState(true)
@@ -168,6 +178,12 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
   const [userSkills, setUserSkills] = useState<UserSkillDef[]>([])
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
+
+  // Plugin skill-version controls, only for a saved project (X23).
+  const savedProjectId = projectId ?? null
+  const { bySkill, rowActions, reload: reloadOverrides } = usePluginSkillOverrides(savedProjectId)
+  const [versionsSkill, setVersionsSkill] = useState<string | null>(null)
+  const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
 
   const config = getConfig(data)
 
@@ -382,6 +398,19 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
                   {enabled && skill.id === 'deserialization' && (
                     <DeserializationSection data={data} updateField={updateField} />
                   )}
+
+                  {savedProjectId && (
+                    <PluginSkillRow
+                      skillId={skill.id}
+                      projectId={savedProjectId}
+                      scopeOwnerId={userId}
+                      summary={bySkill.get(skill.id)}
+                      rowActions={rowActions}
+                      onVersions={setVersionsSkill}
+                      onPending={setVersionsSkill}
+                      onReset={reloadOverrides}
+                    />
+                  )}
                 </div>
               )
             })}
@@ -529,6 +558,26 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
           </div>
         )}
       </div>
+
+      {savedProjectId && versionsSkill && (
+        <SkillVersionsModal
+          projectId={savedProjectId}
+          initialSkill={versionsSkill}
+          scopeOwnerId={userId}
+          onClose={() => { setVersionsSkill(null); reloadOverrides() }}
+          onOpenReview={(changeSetId) => { setVersionsSkill(null); setReviewChangeSetId(changeSetId) }}
+          onReviewAgain={(changeSetId) => { setVersionsSkill(null); setReviewChangeSetId(changeSetId) }}
+        />
+      )}
+
+      {savedProjectId && reviewChangeSetId && (
+        <OverrideReviewModal
+          changeSetId={reviewChangeSetId}
+          scopeOwnerId={userId}
+          onClose={() => setReviewChangeSetId(null)}
+          onDecided={() => { setReviewChangeSetId(null); reloadOverrides() }}
+        />
+      )}
     </>
   )
 }

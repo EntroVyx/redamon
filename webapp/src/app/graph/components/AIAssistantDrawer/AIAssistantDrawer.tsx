@@ -504,6 +504,7 @@ export function AIAssistantDrawer({
         setSettingsModal={setSettingsModal}
         projectFormData={projectFormData}
         updateProjectField={updateProjectField}
+        projectId={projectId}
       />
 
       <ModelPickerModal

@@ -1264,7 +1264,7 @@ export function ProjectForm({
         )}
 
         {activeTab === 'attack' && (
-          <AttackSkillsSection data={formData} updateField={updateField} />
+          <AttackSkillsSection data={formData} updateField={updateField} projectId={mode === 'edit' ? projectId : null} />
         )}
 
         {activeTab === 'cypherfix' && (
