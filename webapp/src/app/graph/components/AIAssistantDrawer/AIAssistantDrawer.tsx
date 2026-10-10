@@ -37,6 +37,7 @@ import { DrawerHeader } from './DrawerHeader'
 import { PhaseIndicatorBar } from './PhaseIndicatorBar'
 import { SettingsModal } from './SettingsModal'
 import { usePluginChatActions } from '@/components/plugins/usePluginChatActions'
+import { OverrideReviewModal } from '@/components/plugins/review/OverrideReviewModal'
 import { useToast } from '@/components/ui'
 import { ModelPickerModal } from './ModelPickerModal'
 import { ChatArea } from './ChatArea'
@@ -148,11 +149,12 @@ export function AIAssistantDrawer({
     settingsDropdownRef,
   } = useSettingsModal(projectId)
 
-  // Plugin chat-session actions from the gear menu (design §6.7). Steps 6.5 and 6.6 replace
-  // these placeholder handlers with the real review and versions modals.
+  // Plugin chat-session actions from the gear menu (design §6.7). The review modal is wired
+  // here (step 6.5); the versions core screen is wired in step 6.6.
   const pluginToast = useToast()
+  const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
   const { run: runPluginChatAction, modals: pluginChatModals } = usePluginChatActions({
-    onReviewProposal: () => pluginToast.info('Review opens in a later step.'),
+    onReviewProposal: (changeSetId) => setReviewChangeSetId(changeSetId),
     onCoreScreen: () => pluginToast.info('Skill versions open in a later step.'),
   })
 
@@ -470,6 +472,15 @@ export function AIAssistantDrawer({
       />
 
       {pluginChatModals}
+
+      {reviewChangeSetId && (
+        <OverrideReviewModal
+          changeSetId={reviewChangeSetId}
+          scopeOwnerId={userId}
+          onClose={() => setReviewChangeSetId(null)}
+          onDecided={() => setReviewChangeSetId(null)}
+        />
+      )}
 
       <SettingsModal
         settingsModal={settingsModal}
