@@ -138,6 +138,15 @@ describe('an interrupted update', () => {
     expect(w.runner.options.workers?.map((x) => x.version)).toEqual(['1.0.1'])
   })
 
+  test('finished away from a revoked version: the new one runs, unrevoked', async () => {
+    await placeVersion('1.0.1')
+    updating('1.0.1', { revokedReason: 'Sends transcripts out.' })
+    // Without a catalog the revocation step changes nothing: only the recovery can clear it.
+    w.catalog.unavailable = new Error('offline')
+    await go()
+    expect(row()).toMatchObject({ status: 'ready', activeVersion: '1.0.1', revokedReason: null })
+  })
+
   test('whose new version would migrate kept data is rolled back, its folder removed', async () => {
     db.seed('pluginData', [
       { pluginId: 'echo', ownerType: 'user', ownerId: 'user-a', userId: 'user-a', collection: 'items', key: 'a', value: 1, sizeBytes: 1 },

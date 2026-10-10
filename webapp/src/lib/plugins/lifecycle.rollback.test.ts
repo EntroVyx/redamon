@@ -84,6 +84,14 @@ describe('rollback', () => {
     expect(a.after).toMatchObject({ activeVersion: '1.0.0' })
   })
 
+  test('away from a revoked version: the previous one runs, unrevoked', async () => {
+    await up('1.0.1')
+    db.tables.pluginInstall.set('echo', { ...row(), revokedReason: 'Sends transcripts out.' })
+    const out = await rollback('echo', ADMIN, w.deps)
+    expect(out.plugin).toMatchObject({ status: 'ready', activeVersion: '1.0.0', revokedReason: null })
+    expect(w.runner.options.workers?.map((x) => x.version)).toEqual(['1.0.0'])
+  })
+
   test('data migrated forward is taken back by the down migration first', async () => {
     seed()
     const original = data()

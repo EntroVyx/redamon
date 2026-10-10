@@ -109,6 +109,24 @@ describe('the platform range', () => {
     expect(w.runner.options.workers?.map((x) => x.id)).toEqual(['echo'])
   })
 
+  test('a failed plugin out of range becomes incompatible, with no error', async () => {
+    set({ status: 'failed', lastError: 'worker_failed: x', manifest: { ...(row().manifest as object), platform: '>=2.0.0' } })
+    const report = await reconcileNow(w.deps)
+    expect(row().status).toBe('incompatible')
+    expect(report.errors).toEqual([])
+  })
+
+  test.each([
+    ['disabled', { enabled: false }, []],
+    ['revoked', {}, [{ id: 'echo', version: '1.0.0', reason: 'x' }]],
+  ])('a %s plugin back in range is ready, not retried into failed', async (_kind, extra, revoked) => {
+    w.catalog.revoked = revoked
+    set({ status: 'incompatible', ...extra })
+    const report = await reconcileNow(w.deps)
+    expect(row().status).toBe('ready')
+    expect(report.statusChanges.filter((c) => c.to === 'failed')).toEqual([])
+  })
+
   test('a platform update the range does not cover makes even a disabled plugin incompatible', async () => {
     set({ enabled: false, manifest: { ...(row().manifest as object), platform: '>=1.5.0' } })
     await reconcileNow(w.deps)

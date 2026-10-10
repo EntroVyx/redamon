@@ -189,6 +189,7 @@ async function finishSwitch(row: PluginInstall, op: Operation, kind: string, d: 
       manifest: manifest as unknown as Prisma.InputJsonValue,
       catalogEntry,
       lastError: null,
+      revokedReason: null,
     }),
   )
   for (const v of await listVersions(row.pluginId)) {
@@ -465,7 +466,12 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
         if (loaded) {
           const reason = isRevoked(loaded.catalog, row.pluginId, row.activeVersion)
           if (reason !== row.revokedReason && !(reason === null && row.revokedReason === null)) {
-            await prisma.pluginInstall.updateMany({ where: { pluginId: row.pluginId }, data: { revokedReason: reason } })
+            // For the version read: an operation that switched it meanwhile wins.
+            const { count } = await prisma.pluginInstall.updateMany({
+              where: { pluginId: row.pluginId, activeVersion: row.activeVersion, operationId: null },
+              data: { revokedReason: reason },
+            })
+            if (!count) continue
             revokedReason = reason
             runListChanged = true
             ;(reason === null ? report.unrevoked : report.revoked).push(row.pluginId)
@@ -502,7 +508,8 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
           await changeStatus(row, 'incompatible')
         } else if (inRange && row.status === 'incompatible') {
           await changeStatus(row, 'ready')
-          retry.add(row.pluginId)
+          // The run list leaves out a disabled or revoked plugin: no worker to wait for.
+          if (row.enabled && revokedReason === null) retry.add(row.pluginId)
         } else if (inRange && row.status === 'failed' && row.enabled && revokedReason === null) {
           await changeStatus(row, 'ready')
           retry.add(row.pluginId)

@@ -108,6 +108,12 @@ describe('an update', () => {
     expect(h.audit.map((e) => e.action)).not.toContain('plugin.permissions_granted')
   })
 
+  test('from a revoked version to a fixed release: it runs, unrevoked', async () => {
+    db.tables.pluginInstall.set('echo', { ...row(), revokedReason: 'Sends transcripts out.' })
+    const out = await go('1.0.1')
+    expect(out.plugin).toMatchObject({ status: 'ready', activeVersion: '1.0.1', revokedReason: null })
+  })
+
   test('a new permission that was not accepted → 400, nothing changes, nothing is downloaded', async () => {
     const before = JSON.stringify(row())
     const downloads = w.downloads.length

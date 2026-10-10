@@ -75,6 +75,25 @@ describe('revocation', () => {
     })
   })
 
+  test('a revocation computed for one version never lands on the version that replaced it', async () => {
+    w.catalog.revoked = [{ id: 'echo', version: '1.0.0', reason: 'x' }]
+    const find = db.pluginInstall.findMany
+    let reads = 0
+    // The revocation step (the second ordered read; the first is crash recovery) reads the
+    // row at 1.0.0, then an update switches it to 1.0.1 before the write.
+    db.pluginInstall.findMany = (async (...a: Parameters<typeof find>) => {
+      const rows = await find(...a)
+      if ((a[0] as { orderBy?: unknown } | undefined)?.orderBy && ++reads === 2) {
+        db.tables.pluginInstall.set('echo', { ...row(), activeVersion: '1.0.1' })
+      }
+      return rows
+    }) as typeof find
+    const report = await reconcileNow(w.deps)
+    db.pluginInstall.findMany = find
+    expect(row()).toMatchObject({ activeVersion: '1.0.1', revokedReason: null })
+    expect(report.revoked).toEqual([])
+  })
+
   test('a second run changes nothing and audits nothing', async () => {
     w.catalog.revoked = [{ id: 'echo', version: '1.0.0', reason: 'x' }]
     await reconcileNow(w.deps)

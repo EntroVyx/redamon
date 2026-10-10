@@ -44,6 +44,7 @@ describe('the status machine of design §9.1', () => {
     ['ready', 'failed'],
     ['failed', 'ready'],
     ['ready', 'incompatible'],
+    ['failed', 'incompatible'],
     ['incompatible', 'ready'],
     ...(['ready', 'failed', 'incompatible'] as PluginStatus[]).flatMap(
       (s): [PluginStatus, PluginStatus][] => [[s, 'updating'], [s, 'uninstalling']],

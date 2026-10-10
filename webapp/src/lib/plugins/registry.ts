@@ -42,7 +42,7 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<PluginStatus, readonly PluginS
   available: ['installing'],
   installing: ['available', 'ready'],
   ready: ['failed', 'incompatible', 'updating', 'uninstalling'],
-  failed: ['ready', 'updating', 'uninstalling'],
+  failed: ['ready', 'incompatible', 'updating', 'uninstalling'],
   incompatible: ['ready', 'updating', 'uninstalling'],
   updating: ['ready'],
   uninstalling: ['available'],

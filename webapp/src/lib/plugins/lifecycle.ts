@@ -745,6 +745,8 @@ export async function update(
       manifest: checked.manifest as unknown as Prisma.InputJsonValue,
       catalogEntry: { ...entryOf(release), previous: withoutPrevious(before.catalogEntry) } as Prisma.InputJsonValue,
       lastError: null,
+      // A revocation is of the version that was active; the catalog vouched for this one.
+      revokedReason: null,
     })
     let migration: MigrationStats | null = null
     if (kept && release.dataVersion !== before.dataVersion) {
@@ -889,6 +891,8 @@ export async function rollback(pluginId: string, actorId: string, deps?: Lifecyc
       ? { ...previousEntry, previous: withoutPrevious(before.catalogEntry) }
       : before.catalogEntry ?? Prisma.DbNull) as Prisma.InputJsonValue,
     lastError: null,
+    // The revocation was of the version left; one of this version comes back at the next tick.
+    revokedReason: null,
   })
   let migration: MigrationStats | null = null
   try {
