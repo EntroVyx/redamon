@@ -10,14 +10,17 @@ import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
  * `signature`, `acceptedPermissions` as JSON, optional `restoreOverrides`): the same checks
  * as a download (lib/plugins/lifecycle.ts offlineInstall).
  *
- * Route handlers have no body limit, so Content-Length is checked before the body is
- * parsed, and the archive's own size after it; sizes declared inside the archive are never
- * trusted (the project import's JSZip limits are not a model here).
+ * Content-Length is checked before the body is parsed, and the archive's own size after it;
+ * sizes declared inside the archive are never trusted (the project import's JSZip limits are
+ * not a model here).
  */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const FORM_OVERHEAD = 2 * 1024 * 1024
+// Next passes a route only the first 10 MiB of a body that goes through middleware
+// (`proxyClientMaxBodySize`, unset in next.config.ts), so a larger form arrives cut short.
+const MIDDLEWARE_BODY_MAX_BYTES = 10 * 1024 * 1024
 const CATALOG_MAX_BYTES = 1_048_576
 const SIGNATURE_MAX_BYTES = 4096
 
@@ -39,8 +42,14 @@ export async function POST(request: NextRequest) {
   if (!request.headers.has('content-length') || !Number.isFinite(declared) || declared < 0) {
     return errorResponse(411, 'length_required', 'The upload must declare its Content-Length.')
   }
-  const cap = archiveMaxBytes() + FORM_OVERHEAD
-  if (declared > cap) return errorResponse(413, 'upload_too_large', `The upload is limited to ${cap} bytes.`)
+  const cap = Math.min(archiveMaxBytes() + FORM_OVERHEAD, MIDDLEWARE_BODY_MAX_BYTES)
+  if (declared > cap) {
+    return errorResponse(
+      413,
+      'upload_too_large',
+      `The upload is limited to ${cap} bytes; a larger plugin installs from the catalog download.`,
+    )
+  }
 
   let form: FormData
   try {

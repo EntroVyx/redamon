@@ -148,6 +148,19 @@ describe('the body', () => {
     expect(parse).not.toHaveBeenCalled()
   })
 
+  test('over the 10 MiB the middleware passes: refused up front with that limit, not cut short', async () => {
+    // The default archive cap is 20 MiB, but Next keeps only the first 10 MiB of a body
+    // that goes through middleware; the route would then read a truncated form.
+    const req = await request(form(trio()), { 'content-length': String(10 * 1024 * 1024 + 1) })
+    const parse = vi.spyOn(req, 'formData')
+    const res = await offlineInstall(req)
+    expect(res.status).toBe(413)
+    const body = await res.json()
+    expect(body.code).toBe('upload_too_large')
+    expect(body.error).toMatch(/10485760 bytes/)
+    expect(parse).not.toHaveBeenCalled()
+  })
+
   test('no Content-Length → 411, unparsed', async () => {
     const req = await request(form(trio()))
     req.headers.delete('content-length')
