@@ -37,7 +37,8 @@ webapp/
 │   │   │       ├── ReconLogsDrawer/   # Real-time logs
 │   │   │       ├── ReconConfirmModal/ # Confirmation dialog
 │   │   │       └── AIAssistantDrawer/ # Agent chat & tool confirmation UI
-│   │   ├── layout.tsx         # Root layout
+│   │   ├── plugins/           # Plugins page (plugin platform, off by default)
+│   │   ├── layout.tsx         # Root layout (reads the plugin switch for the header)
 │   │   ├── page.tsx           # Home page
 │   │   └── globals.css        # Global styles
 │   ├── components/            # React components
@@ -50,7 +51,8 @@ webapp/
 │   │   ├── prisma.ts          # Prisma client
 │   │   ├── recon-types.ts     # TypeScript types
 │   │   ├── websocket-types.ts # Agent WebSocket message types
-│   │   └── hard-guardrail.ts  # Deterministic domain blocklist (gov/mil/edu/int)
+│   │   ├── hard-guardrail.ts  # Deterministic domain blocklist (gov/mil/edu/int)
+│   │   └── plugins/           # Plugin platform: catalog, archives, lifecycle, reconcile, Gateway
 │   └── providers/             # React context providers
 ├── public/                    # Static assets
 ├── Dockerfile                 # Production multi-stage build
@@ -471,6 +473,22 @@ same-origin request, checked against `PLUGINS_ALLOWED_ORIGIN` when it is set):
 | `POST /api/plugins/[pluginId]/actions/[actionId]` | Runs a plugin action. Body `{context: {projectId?, sessionId?}, params}`; the project and session must be the user's. A sync action answers `{ok, result \| error}`; an async one `202 {jobId}` (a second click while it runs answers the same job). `409 model_required` when the action calls a model and none is chosen; `503 runner_unavailable` / `plugin_not_running` when the runner cannot run it |
 | `GET /api/plugins/jobs/[jobId]` | An async action's job: `{status: queued\|running\|succeeded\|failed\|cancelled, progress, result, error, ...}`; owner only |
 | `POST /api/plugins/jobs/[jobId]/cancel` | Cancels the owner's job |
+| `GET /api/plugins` | The Plugins page model: the catalog's state, one entry per catalog plugin merged with the installed rows, each with its card state, the newest release this platform can run (with consent text) and any update; admins also see errors |
+| `GET /api/plugins/[pluginId]` | One plugin; admins also get the last error, versions on disk, data usage, approved versions and whether a rollback is possible |
+
+**For admins** (the role is read from the database on every request, so a demoted admin's token is
+refused; same-origin and JSON bodies; `409 plugin_busy` when another operation holds the plugin):
+
+| Route | What it does |
+|---|---|
+| `POST /api/plugins/[pluginId]/install` | `{version, acceptedPermissions, restoreOverrides?}`: downloads the release the signed catalog pins, checks it, installs it. `acceptedPermissions` must be exactly the release's list; `restoreOverrides` is required when an earlier install left approved skill versions |
+| `POST /api/plugins/[pluginId]/update` | `{version, acceptedPermissions}`: side by side, with the plugin's data migrations; new permissions need consent again |
+| `POST /api/plugins/[pluginId]/rollback` | The previous version active again; refused (`no_down_migration`) when the data moved and cannot go back |
+| `POST /api/plugins/[pluginId]/enable`, `.../disable` | Enable (also the Retry of a failed plugin) or disable; code and data stay |
+| `POST /api/plugins/[pluginId]/uninstall` | `{mode: "keep" \| "purge", confirm: "<pluginId>"}`; purge deletes the plugin's data for every user and project and needs an export from the last hour |
+| `GET /api/plugins/[pluginId]/export` | A JSON download of every row the plugin left (install, data, overrides) |
+| `GET /api/plugins/[pluginId]/logs?lines=N` | The plugin's log from the runner's ring buffer |
+| `POST /api/plugins/offline-install` | `multipart/form-data` with `archive`, `catalog`, `signature`, `acceptedPermissions`: the same checks as a download (Content-Length checked before the body is read) |
 
 **For plugin code** (`/api/plugin-gateway/v1/*`, the Gateway): authenticated only by the call
 token the webapp mints per action (`Authorization: Bearer`), never by a cookie or the internal key;
@@ -482,6 +500,10 @@ The wire format is `services/plugin_runner/sdk/contract_cases.json`.
 
 **For the plugin runner** (`/api/plugin-runner/v1/run-list`): the runner key (`X-Plugin-Runner-Key`)
 only.
+
+**For the recon orchestrator** (`POST /api/internal/plugins/reconcile`): the master internal key.
+Crash recovery, heals, revocations and clean-up; one at a time (`202 {skipped: "busy"}` while
+another runs).
 
 ---
 
@@ -507,6 +529,11 @@ only.
 | `PLUGIN_GATEWAY_CALLS_PER_TOKEN` | Gateway calls one call token may make | `600` |
 | `PLUGIN_LLM_DAILY_CALL_CAP` | Model calls one plugin may make per user and UTC day | `100` |
 | `PLUGIN_TRANSCRIPT_MAX_BYTES` | The most of one session transcript a plugin receives | `2097152` |
+| `PLUGINS_CATALOG_URL` | The signed plugin catalog (its signature is `<url>.sig`) | the `redamon-plugins` repository's `catalog.json` |
+| `PLUGINS_DOWNLOAD_HOSTS` | The only hosts the catalog and archives are fetched from, on every redirect hop (https only, public addresses only) | `github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,raw.githubusercontent.com` |
+| `PLUGINS_EXTRA_TRUSTED_KEYS` | Extra catalog signing keys an admin trusts, JSON `[{keyId, publicKey}]` (a custom catalog; the page warns) | (unset) |
+| `PLUGINS_DIR` | Where the plugins volume is mounted | `/data/plugins` |
+| `PLUGIN_ARCHIVE_MAX_BYTES` | Cap on a plugin archive, unpacked | `20971520` |
 
 ---
 

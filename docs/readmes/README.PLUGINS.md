@@ -372,18 +372,57 @@ have. `timeoutSeconds` is capped by a platform maximum.
 The Plugins page and the logic behind it, inside the webapp. It fetches and verifies the
 catalog, shows available and installed plugins, displays the consent prompt, and runs the
 whole lifecycle of §9, including **reconciliation and crash recovery** (§9.7). It is the
-**only writer** of the plugins volume. It is reached from one new navigation entry
-([NavigationBar.tsx:15](../../webapp/src/components/layout/NavigationBar/NavigationBar.tsx#L15))
-and a page under `webapp/src/app/plugins/` *(proposed)*.
+**only writer** of the plugins volume. It is reached from one **Plugins** button in the top
+bar ([GlobalHeader.tsx](../../webapp/src/components/layout/GlobalHeader/GlobalHeader.tsx))
+and a page under `webapp/src/app/plugins/`.
 
 - **Who can do what.** Installing, updating, enabling, disabling and uninstalling are
   **instance-wide, admin-only** actions, because they put code on the host. The lifecycle
-  routes use the existing [`requireAdmin`](../../webapp/src/lib/session.ts#L74) check.
+  routes read the admin role from the database on every request
+  ([lifecycleRoutes.ts](../../webapp/src/lib/plugins/lifecycleRoutes.ts)), because the role
+  inside a login token outlives a demotion by up to seven days. An admin acting as another
+  user keeps these rights and is recorded as the actor.
   Every signed-in user sees the contributions of enabled plugins; only admins see the
   management controls.
 - **Audit.** Every lifecycle operation, every override proposal, approval and reset, and
   every permission grant is recorded with the existing
   [`writeAudit`](../../webapp/src/lib/audit.ts#L17) into the `AuditLog` table.
+
+**As built (platform 1.0.0).** The modules live in
+[`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/):
+
+- [`fetchRemote.ts`](../../webapp/src/lib/plugins/fetchRemote.ts), the only outbound fetch:
+  `https` on port 443, a host in `PLUGINS_DOWNLOAD_HOSTS` on every hop (at most five
+  redirects, followed by hand), the address checked by the socket's own DNS lookup and refused
+  unless public (so a DNS answer cannot change between the check and the connection), one
+  deadline over all hops, and size caps counted while streaming.
+- [`keyring.ts`](../../webapp/src/lib/plugins/keyring.ts) and
+  [`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts): the official keys (none until the
+  production key is published) plus the admin's `PLUGINS_EXTRA_TRUSTED_KEYS`; the signature,
+  the schema, the expiry (a warning under 14 days) and the highest serial, kept with the bytes
+  of that catalog. A lower serial is a replay (a CDN can lag a push): the stored catalog is
+  used and the replay logged.
+- [`archive.ts`](../../webapp/src/lib/plugins/archive.ts),
+  [`staging.ts`](../../webapp/src/lib/plugins/staging.ts) and
+  [`installChecks.ts`](../../webapp/src/lib/plugins/installChecks.ts): a strict ustar reader
+  (regular files and directories under one top folder named after the plugin, nothing else,
+  at most 2,000 entries and `PLUGIN_ARCHIVE_MAX_BYTES` unpacked), the six checks of §9.3, and
+  staging on the volume with fixed modes (files a webapp running as root writes are handed to
+  uid 1001).
+- [`lifecycle.ts`](../../webapp/src/lib/plugins/lifecycle.ts),
+  [`migrations.ts`](../../webapp/src/lib/plugins/migrations.ts),
+  [`reconcile.ts`](../../webapp/src/lib/plugins/reconcile.ts) and
+  [`exportData.ts`](../../webapp/src/lib/plugins/exportData.ts): §9.
+- Routes under `/api/plugins/`: `GET /` and `GET /[pluginId]` for every signed-in user (admins
+  also see errors, versions on disk, data usage and the rollback check); for admins
+  `POST /[pluginId]/{install,update,rollback,enable,disable,uninstall}`,
+  `GET /[pluginId]/{export,logs}` and `POST /offline-install`; and
+  `POST /api/internal/plugins/reconcile` for the recon orchestrator. Every one answers 404 while
+  the switch is off; a lease conflict is `409 plugin_busy`.
+- The page: one card per catalog plugin (and per installed plugin the catalog no longer lists)
+  with the actions its state allows, the consent prompt, the uninstall dialog (keep, or export
+  then delete everything with the plugin id typed), Install from file, the catalog's state,
+  a banner when the runner is down, and for admins a details drawer with the plugin's log.
 
 ### 7.2 Loader
 
@@ -1010,6 +1049,27 @@ flowchart TB
   signature that cover it. It goes through exactly the same checks as a download.
 - **The Runner's view.** When the Runner starts, its Loader asks the Manager for the run list
   (§7.2), so a Runner restart never needs database access.
+
+**As built.** The recon orchestrator asks for a reconcile every `PLUGIN_RECONCILE_INTERVAL`
+(300 s by default), in the background of its reaper so a slow webapp never delays it, and only
+while `PLUGINS_ENABLED` is on (TD-20).
+
+- **One reconcile at a time**, under a platform-wide lease; a second answers `skipped: busy`.
+  Each run does bounded work: at most one heal download and a 20-second budget.
+- **An operation is recovered only once its lease has expired** (ten minutes), and is claimed
+  first, so a slow request and a reconcile never work on one plugin together. An interrupted
+  install goes back to available; an interrupted update or rollback is finished when its
+  target version is on the volume and moves no data, and undone otherwise (the database write
+  is the commit, and a migrating update switches version and data in one transaction); an
+  interrupted uninstall is finished, honouring a purge.
+- **Clean-up** removes version and staging folders nothing references, never one younger
+  than 15 minutes (an install may not have written its row yet).
+- **Revocation** sets `revokedReason` from a catalog that verified, never `enabled`, and
+  clears it when the catalog lifts it. **Stale versions**: every active skill version is
+  compared with the agent's part registry; a removed part or a changed factory text makes the
+  whole version stale. When the agent cannot be asked, nothing is guessed.
+- A failed plugin is retried; expired data rows are deleted; a job past its deadline is
+  failed with `timeout`.
 
 ---
 
