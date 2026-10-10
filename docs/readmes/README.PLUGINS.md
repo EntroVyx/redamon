@@ -420,13 +420,18 @@ and a page under `webapp/src/app/plugins/`.
 - Routes under `/api/plugins/`: `GET /` and `GET /[pluginId]` for every signed-in user (admins
   also see errors, versions on disk, data usage and the rollback check); for admins
   `POST /[pluginId]/{install,update,rollback,enable,disable,uninstall}`,
-  `GET /[pluginId]/{export,logs}` and `POST /offline-install`; and
-  `POST /api/internal/plugins/reconcile` for the recon orchestrator. Every one answers 404 while
-  the switch is off; a lease conflict is `409 plugin_busy`.
-- The page: one card per catalog plugin (and per installed plugin the catalog no longer lists)
-  with the actions its state allows, the consent prompt, the uninstall dialog (keep, or export
-  then delete everything with the plugin id typed), Install from file, the catalog's state,
-  a banner when the runner is down, and for admins a details drawer with the plugin's log.
+  `GET /[pluginId]/{export,logs}` and `POST /offline-install` (at most 10 MiB, what Next passes
+  through middleware); and `POST /api/internal/plugins/reconcile` for the recon orchestrator.
+  Every one answers 404 while the switch is off; a lease conflict is `409 plugin_busy`, an
+  operation another one overtook `409 plugin_changed`. A rollback names the version the admin
+  confirmed (`{toVersion}`); the export refuses a cross-site request, since it opens the purge
+  gate.
+- The page: one card per catalog plugin (and per installed or kept plugin the catalog does not
+  list) with the actions its state allows, the consent prompt, the uninstall dialog (keep, or
+  export then delete everything with the plugin id typed; the same gates for Delete kept data),
+  Install from file (worded as an update for an installed plugin, with the restore question
+  when one is needed), the catalog's state, a banner when the runner is down, and for admins a
+  details drawer with the plugin's log.
 
 ### 7.2 Loader
 
@@ -800,6 +805,7 @@ stateDiagram-v2
         Ready --> Failed: cannot start
         Failed --> Ready: retry ok
         Ready --> Incompatible: out of range
+        Failed --> Incompatible: out of range
         Incompatible --> Ready: back in range
     }
     Installed --> Updating: Update
@@ -822,7 +828,9 @@ Overrides keep applying during an update because they are approved data, not plu
 Every state change is a **compare-and-swap** on `status`
 (`UPDATE … WHERE pluginId = $1 AND status = $expected`). If no row matches, another
 operation is in progress and the request is refused, so two admins can never race the same
-plugin.
+plugin. Install, update and rollback also match the versions they were planned with (active,
+previous and data version): one that another operation overtook answers `plugin_changed`
+instead of running a migration twice.
 
 ### 9.2 Layout of the plugins volume
 
