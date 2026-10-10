@@ -146,6 +146,47 @@ describe('purge', () => {
   })
 })
 
+describe('delete kept data (purge of a plugin uninstalled with "keep")', () => {
+  beforeEach(async () => {
+    await go('keep')
+    h.audit = []
+  })
+
+  test('after an export: rows, versions, model choice and the row gone, audited as kept', async () => {
+    await exportPluginData('echo', ADMIN)
+    const out = await go('purge')
+    expect(out.plugin).toBeNull()
+    expect(row()).toBeUndefined()
+    expect(db.rows('pluginData')).toEqual([])
+    expect(db.rows('pluginOverride')).toEqual([])
+    expect(db.rows('userSettings').find((s) => s.userId === 'user-alice')!.featureModels).toEqual({ skiller: 'anthropic/claude' })
+    expect(db.rows('pluginPlatformState').some((s) => String(s.key).startsWith('export:echo'))).toBe(false)
+    expect(h.audit.find((e) => e.action === 'plugin.purge')!.after).toMatchObject({ mode: 'purge', kept: true, dataRows: 2, overrideRows: 1 })
+  })
+
+  test('the same gates: a fresh export and the typed id', async () => {
+    expect((await refusal(go('purge'))).code).toBe('export_required')
+    await exportPluginData('echo', ADMIN)
+    expect((await refusal(go('purge', 'ech'))).code).toBe('confirm_mismatch')
+    expect(row()!.status).toBe('available')
+    expect(db.rows('pluginData')).toHaveLength(2)
+  })
+
+  test('an install holding the row (a live lease): 409, nothing deleted', async () => {
+    await exportPluginData('echo', ADMIN)
+    db.tables.pluginInstall.set('echo', { ...row()!, status: 'installing', operationId: 'op-1', leaseExpiresAt: new Date(NOW.getTime() + 60_000) })
+    const e = await refusal(go('purge'))
+    expect(e.status).toBe(409)
+    expect(db.rows('pluginData')).toHaveLength(2)
+    expect(db.rows('pluginOverride')).toHaveLength(1)
+  })
+
+  test('"keep" again is still not_installed; a plugin never seen is not_installed too', async () => {
+    expect((await refusal(go('keep'))).code).toBe('not_installed')
+    expect((await refusal(uninstall('other', { mode: 'purge', confirm: 'other' }, ADMIN))).code).toBe('not_installed')
+  })
+})
+
 describe('refusals', () => {
   test('an unknown mode → 400', async () => {
     const e = await refusal(uninstall('echo', { mode: 'wipe' as never, confirm: 'echo' }, ADMIN))

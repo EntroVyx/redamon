@@ -17,7 +17,7 @@ import styles from './page.module.css'
 type Dialog =
   | { kind: 'install'; entry: PluginEntry; restoreCount: number }
   | { kind: 'update'; entry: PluginEntry }
-  | { kind: 'uninstall'; entry: PluginEntry }
+  | { kind: 'uninstall'; entry: PluginEntry; keptOnly?: boolean }
   | { kind: 'offline' }
   | null
 
@@ -48,6 +48,7 @@ export function PluginsPageClient() {
     if (a === 'install') setDialog({ kind: 'install', entry, restoreCount: 0 })
     else if (a === 'update') setDialog({ kind: 'update', entry })
     else if (a === 'uninstall') setDialog({ kind: 'uninstall', entry })
+    else if (a === 'deleteKept') setDialog({ kind: 'uninstall', entry, keptOnly: true })
     else if (a === 'details') setDetails(entry.id)
     else if (a === 'enable') await run(`${base}/enable`)
     else if (a === 'disable') {
@@ -170,6 +171,7 @@ export function PluginsPageClient() {
           pluginId={dialog.entry.id}
           pluginName={dialog.entry.displayName}
           busy={busy}
+          keptOnly={dialog.keptOnly}
           onCancel={close}
           onConfirm={async (mode) => {
             const out = await run(`/api/plugins/${dialog.entry.id}/uninstall`, { mode, confirm: dialog.entry.id })

@@ -4,7 +4,7 @@ import { compareVersions, parseVersion } from '@/lib/semver'
 import { CatalogError, chooseRelease, loadCatalog, type LoadedCatalog } from './catalog'
 import { now } from './clock'
 import { likePrefix } from './dataStore'
-import { rollbackCheck, type RollbackCheck } from './lifecycle'
+import { hasKeptAnything, rollbackCheck, type RollbackCheck } from './lifecycle'
 import { PERMISSION_TEXT, isPluginPermission } from './permissions'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
 import { overridesQualify } from './registry'
@@ -76,6 +76,8 @@ export interface PluginEntry {
   installBlocked: string | null
   /** Admins only: why the last install attempt of a plugin not installed failed. */
   lastAttemptError?: string | null
+  /** Admins only: data or skill versions an uninstall with "keep data" left, which Delete kept data removes. */
+  keptData?: boolean
 }
 
 export interface PluginsPage {
@@ -233,6 +235,11 @@ export async function buildPluginsPage(isAdmin: boolean): Promise<PluginsPage> {
   for (const row of byId.values()) {
     if (row.status === 'available' && !isAdmin) continue
     plugins.push(entryOf(row.pluginId, null, null, row, loaded, isAdmin))
+  }
+  if (isAdmin) {
+    for (const e of plugins) {
+      if (e.state === 'not_installed' && rows.some((r) => r.pluginId === e.id) && (await hasKeptAnything(e.id))) e.keptData = true
+    }
   }
   plugins.sort((a, b) => a.displayName.localeCompare(b.displayName))
   return { enabled: true, platformVersion: PLUGIN_PLATFORM_VERSION, isAdmin, catalog: catalogView(loaded, error), plugins }

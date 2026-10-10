@@ -171,6 +171,25 @@ describe('GET /api/plugins', () => {
     expect(body.plugins[0]).toMatchObject({ id: 'echo', inCatalog: false, state: 'ready', available: null })
   })
 
+  test('kept data of a plugin uninstalled with "keep" is flagged for admins only, listed or not', async () => {
+    install({ status: 'available', enabled: false, activeVersion: null })
+    db.seed('pluginData', [{ pluginId: 'echo', namespace: 'live', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: 'items', key: 'a', value: 1, sizeBytes: 1 }])
+    h.session = { userId: 'user-admin', role: 'admin' }
+    expect((await list()).body.plugins[0]).toMatchObject({ id: 'echo', state: 'not_installed', keptData: true })
+    h.catalog = catalog([])
+    expect((await list()).body.plugins[0]).toMatchObject({ id: 'echo', keptData: true })
+    h.catalog = catalog([echo()])
+    h.session = { userId: 'user-alice', role: 'standard' }
+    expect((await list()).body.plugins[0].keptData).toBeUndefined()
+  })
+
+  test('only internal rows (usage, jobs) are not kept data', async () => {
+    install({ status: 'available', enabled: false, activeVersion: null })
+    db.seed('pluginData', [{ pluginId: 'echo', namespace: 'live', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: '__usage', key: 'a', value: 1, sizeBytes: 1 }])
+    h.session = { userId: 'user-admin', role: 'admin' }
+    expect((await list()).body.plugins[0].keptData).toBeUndefined()
+  })
+
   test('an empty catalog and nothing installed: no plugins', async () => {
     h.catalog = catalog([])
     expect((await list()).body.plugins).toEqual([])

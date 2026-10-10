@@ -47,6 +47,19 @@ describe('UninstallDialog', () => {
     expect(onConfirm).toHaveBeenCalledWith('purge')
   })
 
+  test('kept data only: no keep choice, what goes, the export and the typed id', () => {
+    const onConfirm = vi.fn()
+    render(<UninstallDialog isOpen keptOnly pluginId="echo" pluginName="Echo" onConfirm={onConfirm} onCancel={vi.fn()} />)
+    expect(screen.getByRole('dialog').textContent).toMatch(/not installed.*kept.*every user and project/i)
+    expect(screen.queryByRole('radio')).toBeNull()
+    const go = screen.getByRole('button', { name: 'Delete kept data' }) as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    fireEvent.click(screen.getByRole('link', { name: /download the export/i }))
+    fireEvent.change(screen.getByRole('textbox', { name: /type echo/i }), { target: { value: 'echo' } })
+    fireEvent.click(go)
+    expect(onConfirm).toHaveBeenCalledWith('purge')
+  })
+
   test('cancel', () => {
     const { onCancel, onConfirm } = open()
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))

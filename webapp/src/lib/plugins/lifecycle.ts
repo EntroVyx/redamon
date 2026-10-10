@@ -117,6 +117,12 @@ function busyOrNotInstalled(row: PluginInstall | null, pluginId: string): Lifecy
 }
 
 /** The plugin's own data rows (not the platform's `__` rows) that a reinstall would find. */
+/** What an uninstall with "keep data" left: data rows or approved skill versions. */
+export async function hasKeptAnything(pluginId: string): Promise<boolean> {
+  if (await hasKeptData(pluginId)) return true
+  return !!(await prisma.pluginOverride.findFirst({ where: { pluginId }, select: { id: true } }))
+}
+
 export async function hasKeptData(pluginId: string): Promise<boolean> {
   const row = await prisma.pluginData.findFirst({
     where: { pluginId, namespace: 'live', NOT: { collection: { startsWith: likePrefix('__') } } },
@@ -881,17 +887,61 @@ export async function stripFeatureModelKey(db: Pick<Prisma.TransactionClient, '$
   return db.$executeRaw`UPDATE "user_settings" SET "feature_models" = "feature_models" - ${key} WHERE jsonb_exists("feature_models", ${key})`
 }
 
-export async function purgeRows(tx: Prisma.TransactionClient, op: Operation) {
-  const pluginId = op.pluginId
+async function deleteRows(tx: Prisma.TransactionClient, pluginId: string) {
   const data = await tx.pluginData.deleteMany({ where: { pluginId } })
   const overrides = await tx.pluginOverride.deleteMany({ where: { pluginId } })
   await stripFeatureModelKey(tx, pluginId)
   await tx.pluginPlatformState.deleteMany({ where: { key: exportMarkerKey(pluginId) } })
-  const { count } = await tx.pluginInstall.deleteMany({
-    where: { pluginId, status: 'uninstalling', operationId: op.operationId },
-  })
-  if (count !== 1) throw new PluginConflictError(pluginId, 'the uninstall lost its lease')
   return { dataRows: data.count, overrideRows: overrides.count }
+}
+
+export async function purgeRows(tx: Prisma.TransactionClient, op: Operation) {
+  const counts = await deleteRows(tx, op.pluginId)
+  const { count } = await tx.pluginInstall.deleteMany({
+    where: { pluginId: op.pluginId, status: 'uninstalling', operationId: op.operationId },
+  })
+  if (count !== 1) throw new PluginConflictError(op.pluginId, 'the uninstall lost its lease')
+  return counts
+}
+
+async function requireFreshExport(pluginId: string) {
+  const at = await lastExportAt(pluginId)
+  if (!at || now().getTime() - at.getTime() > EXPORT_FRESH_MS) {
+    throw new LifecycleError(409, 'export_required', 'Download the export of this plugin\'s data first (within the last hour).')
+  }
+}
+
+/**
+ * "Delete kept data" of a plugin uninstalled with "keep data": no code and no worker are
+ * left, so one transaction does it, gated on the row still being available with no live
+ * lease (an install that starts meanwhile makes it roll back with nothing deleted).
+ */
+async function purgeKept(pluginId: string, before: PluginInstall, actorId: string): Promise<{ plugin: null }> {
+  let counts: { dataRows: number; overrideRows: number }
+  try {
+    counts = await prisma.$transaction(
+      async (tx) => {
+        const c = await deleteRows(tx, pluginId)
+        const { count } = await tx.pluginInstall.deleteMany({
+          where: { pluginId, status: 'available', OR: [{ operationId: null }, { leaseExpiresAt: { lt: now() } }] },
+        })
+        if (count !== 1) throw new PluginConflictError(pluginId, 'it changed while its kept data was being deleted')
+        return c
+      },
+      { maxWait: 10_000, timeout: 120_000 },
+    )
+  } catch (e) {
+    if (e instanceof PluginConflictError) throw busyOrNotInstalled(await findInstall(pluginId), pluginId)
+    throw e
+  }
+  await auditPlugin('plugin.purge', {
+    actorId,
+    pluginId,
+    before: snapshot(before),
+    after: { mode: 'purge', kept: true, ...counts },
+    source: 'admin',
+  })
+  return { plugin: null }
 }
 
 export async function uninstall(
@@ -907,13 +957,12 @@ export async function uninstall(
     throw new LifecycleError(400, 'confirm_mismatch', `Type the plugin id (${pluginId}) to confirm.`)
   }
   const before = await findInstall(pluginId)
-  if (!before || !isInstalled(before.status) || liveLease(before)) throw busyOrNotInstalled(before, pluginId)
-  if (input.mode === 'purge') {
-    const at = await lastExportAt(pluginId)
-    if (!at || now().getTime() - at.getTime() > EXPORT_FRESH_MS) {
-      throw new LifecycleError(409, 'export_required', 'Download the export of this plugin\'s data first (within the last hour).')
-    }
+  if (input.mode === 'purge' && before?.status === 'available' && !liveLease(before)) {
+    await requireFreshExport(pluginId)
+    return purgeKept(pluginId, before, actorId)
   }
+  if (!before || !isInstalled(before.status) || liveLease(before)) throw busyOrNotInstalled(before, pluginId)
+  if (input.mode === 'purge') await requireFreshExport(pluginId)
 
   let op: Operation
   try {

@@ -208,6 +208,7 @@ describe('the catalog', () => {
 describe('card states, as an admin', () => {
   test.each<[PluginEntry['state'], Partial<PluginEntry>, string[]]>([
     ['not_installed', {}, ['Install']],
+    ['not_installed', { keptData: true }, ['Install', 'Delete kept data']],
     ['ready', {}, ['Disable', 'Uninstall']],
     ['ready', { update: { version: '1.1.0', newPermissions: [], migratesData: false } }, ['Update to 1.1.0', 'Disable', 'Uninstall']],
     ['disabled', {}, ['Enable', 'Uninstall']],
@@ -329,6 +330,23 @@ describe('actions', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Uninstall' }))
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0]).toEqual({ url: '/api/plugins/echo/uninstall', body: { mode: 'keep', confirm: 'echo' } })
+  })
+
+  test('Delete kept data: only the purge, behind the export and the typed id, then posts it', async () => {
+    page = model([entry('not_installed', { keptData: true })])
+    show()
+    const c = await card()
+    expect(c.getByText(/data kept/)).toBeTruthy()
+    fireEvent.click(c.getByRole('button', { name: 'Delete kept data' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByRole('radio')).toBeNull()
+    const go = within(dialog).getByRole('button', { name: 'Delete kept data' }) as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    fireEvent.click(within(dialog).getByRole('link', { name: /download the export/i }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /type echo/i }), { target: { value: 'echo' } })
+    fireEvent.click(go)
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({ url: '/api/plugins/echo/uninstall', body: { mode: 'purge', confirm: 'echo' } })
   })
 
   test('Details opens the admin drawer; a rollback from it asks first, then posts', async () => {

@@ -5,7 +5,7 @@ import { PERMISSION_TEXT, isPluginPermission } from '@/lib/plugins/permissions'
 import { PluginBadge } from './PluginBadge'
 import styles from './plugins.module.css'
 
-export type CardAction = 'install' | 'update' | 'enable' | 'disable' | 'uninstall' | 'details'
+export type CardAction = 'install' | 'update' | 'enable' | 'disable' | 'uninstall' | 'deleteKept' | 'details'
 
 const ADMIN_LABEL: Record<CardState, { text: string; chip: string }> = {
   not_installed: { text: 'Not installed', chip: 'chipSecondary' },
@@ -52,6 +52,7 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
   if (isAdmin && !TRANSIENT.includes(state)) {
     if (state === 'not_installed') {
       buttons.push({ action: 'install', label: 'Install', disabled: !entry.available })
+      if (entry.keptData) buttons.push({ action: 'deleteKept', label: 'Delete kept data', danger: true })
     } else {
       if (entry.update && state !== 'revoked') buttons.push({ action: 'update', label: `Update to ${entry.update.version}` })
       if (state === 'ready') buttons.push({ action: 'disable', label: 'Disable' })
@@ -91,6 +92,7 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
             {entry.installed?.version ? `Installed ${entry.installed.version}` : 'Not installed'}
             {entry.update ? ` · ${entry.update.version} available` : !entry.installed && entry.available ? ` · ${entry.available.version} available` : ''}
             {entry.inCatalog === false && ' · no longer in the catalog'}
+            {entry.keptData && ' · data kept from an earlier install'}
           </span>
           {permissions.length > 0 && (
             <span className={styles.permissions}>
