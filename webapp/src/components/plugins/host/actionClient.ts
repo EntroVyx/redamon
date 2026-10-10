@@ -1,0 +1,92 @@
+import { pluginFeatureId } from '@/lib/llmFeatures'
+import type { FeatureModelGateApi } from '@/components/shared/FeatureModelGate'
+
+/**
+ * The browser side of POST /api/plugins/<id>/actions/<action> (lib/plugins/actions.ts):
+ * a sync action answers `{ok, result | error}`, an async one a job id (202, or 200 with
+ * `existing` when the same job is already running), and the platform refuses with
+ * `{error, code}` and a status. Everything that is not a result becomes a PluginActionError
+ * whose message is safe to show.
+ */
+export class PluginActionError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message)
+    this.name = 'PluginActionError'
+  }
+}
+
+export interface ActionContext {
+  projectId?: string | null
+  sessionId?: string | null
+}
+
+export type ActionAnswer = { kind: 'result'; result: Record<string, unknown> } | { kind: 'job'; jobId: string }
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+export function postPluginAction(
+  pluginId: string,
+  action: string,
+  body: { context?: ActionContext; params?: Record<string, unknown> },
+): Promise<Response> {
+  return fetch(`/api/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(action)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function readActionAnswer(res: Response): Promise<ActionAnswer> {
+  const body: unknown = await res.json().catch(() => null)
+  if (!res.ok) {
+    const b = isObj(body) ? body : {}
+    throw new PluginActionError(
+      typeof b.code === 'string' ? b.code : `http_${res.status}`,
+      typeof b.error === 'string' ? b.error : `The plugin action failed (HTTP ${res.status}).`,
+      res.status,
+    )
+  }
+  if (isObj(body) && typeof body.jobId === 'string') return { kind: 'job', jobId: body.jobId }
+  if (isObj(body) && body.ok === true && isObj(body.result)) return { kind: 'result', result: body.result }
+  if (isObj(body) && body.ok === false) {
+    const e = body.error
+    if (isObj(e)) {
+      throw new PluginActionError(
+        typeof e.code === 'string' ? e.code : 'action_failed',
+        typeof e.message === 'string' ? e.message : 'The plugin action failed.',
+      )
+    }
+    throw new PluginActionError('action_failed', typeof e === 'string' && e ? e : 'The plugin action failed.')
+  }
+  throw new PluginActionError('bad_answer', 'The plugin answered in a form RedAmon cannot read.')
+}
+
+/**
+ * The action runner a plugin screen uses: through the model gate (an LLM action with no
+ * model chosen opens "Choose a model" and runs once more), and only sync actions, since a
+ * screen needs the data now; a job answer is an error the screen shows.
+ */
+export function createScreenRunAction(opts: {
+  pluginId: string
+  displayName: string
+  context: ActionContext
+  gate: Pick<FeatureModelGateApi, 'fetchWithFeatureModel'>
+}) {
+  const { pluginId, displayName, context, gate } = opts
+  return async (action: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const res = await gate.fetchWithFeatureModel(
+      pluginFeatureId(pluginId),
+      () => postPluginAction(pluginId, action, { context, params }),
+      { label: displayName },
+    )
+    const answer = await readActionAnswer(res)
+    if (answer.kind === 'job') {
+      throw new PluginActionError('async_action', 'This action runs as a background job and cannot fill this screen.')
+    }
+    return answer.result
+  }
+}
