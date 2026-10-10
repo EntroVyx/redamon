@@ -224,13 +224,14 @@ def get_part_by_key(key: str) -> SkillPart | None:
 # The agent's untrusted-data fences (prompt_safety.py) and the prompt-cache split marker
 # (base.py). A value holding one could fake the end of a fenced tool output or move the
 # cache boundary.
-RESERVED_MARKERS = ("<<<UNTRUSTED_", "<<<END_UNTRUSTED_", "<<REDAMON_CACHE_PREFIX_END>>")
+RESERVED_MARKERS = ("<<<UNTRUSTED_", "<<<END_UNTRUSTED_", "<<REDAMON_CACHE_")
 # Matched the way the agent reads them: prompt_safety._MARKER_PREFIX_RE allows whitespace
-# after "<<<", and the cache split is found by a plain search for its marker.
+# after "<<<", and the cache split is found by a plain search for its markers. The single
+# "<<REDAMON_CACHE_" prefix covers all three cache-tier markers (base.CACHE_MARKERS).
 _MARKER_RES = (
     (re.compile(r"<<<\s*untrusted_", re.IGNORECASE), "<<<UNTRUSTED_"),
     (re.compile(r"<<<\s*end_untrusted_", re.IGNORECASE), "<<<END_UNTRUSTED_"),
-    (re.compile(r"<<\s*redamon_cache_prefix_end\s*>>", re.IGNORECASE), "<<REDAMON_CACHE_PREFIX_END>>"),
+    (re.compile(r"<<\s*redamon_cache_[a-z0-9_]*\s*>>", re.IGNORECASE), "<<REDAMON_CACHE_"),
 )
 
 # Headings of the sections the think node places AFTER the skill text (think_node.py,

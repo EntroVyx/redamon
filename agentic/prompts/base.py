@@ -226,6 +226,58 @@ def build_workspace_layout_block(project_id: str) -> str:
     return "\n".join(parts)
 
 
+def build_workspace_rules_block(project_id: str) -> str:
+    """Static workspace-layout rules (notes/ tool-outputs/ jobs/ + footer), with
+    the project root path resolved.
+
+    Excludes the live uploads/ listing — that part is volatile (it changes the
+    moment the user stages or removes a file), so it lives in the uncached suffix
+    via build_uploads_inbox_block. Keeping it out of this block means staging a
+    file no longer invalidates the cached Tier-0 prefix.
+    """
+    workspace_root_path = (
+        f"{_WORKSPACE_ROOT_FOR_PROMPT}/{project_id}" if project_id else
+        f"{_WORKSPACE_ROOT_FOR_PROMPT}/<projectId>"
+    )
+    header = _WORKSPACE_LAYOUT_HEADER.replace(
+        "__WORKSPACE_ROOT__", workspace_root_path
+    )
+    return header + "\n\n" + _WORKSPACE_LAYOUT_FOOTER
+
+
+def build_uploads_inbox_block(project_id: str) -> str:
+    """The live USER INBOX (`uploads/`) listing as a standalone block, or "" when
+    the folder is empty.
+
+    Volatile by nature, so think_node appends it to the uncached Tier-3 suffix
+    rather than to the cached workspace rules. Mirrors the uploads section that
+    build_workspace_layout_block renders inline.
+    """
+    uploads = _list_uploads(project_id)
+    if not uploads:
+        return ""
+    n = len(uploads)
+    plural = "s" if n != 1 else ""
+    more_hint = ""
+    try:
+        real_count = sum(
+            1 for p in (_WORKSPACE_ROOT_FOR_PROMPT / project_id / "uploads").iterdir()
+            if p.is_file() or p.is_symlink()
+        )
+        if real_count > n:
+            more_hint = f" (showing newest {n} of {real_count})"
+    except OSError:
+        pass
+    listing = "\n".join(f"  - `uploads/{name}`" for name in uploads)
+    return (
+        f"## Workspace Inbox (uploads/)\n\n"
+        f"The user has staged {n} file{plural}{more_hint} for you to use. "
+        f"CHECK THESE NOW:\n"
+        f"{listing}\n"
+        f"Read via fs_read / fs_glob `uploads/*`; do NOT write here."
+    )
+
+
 def _get_visible_tools(allowed_tools):
     """Get registry entries for allowed tools, preserving registry order.
 
@@ -875,13 +927,26 @@ MODE_DECISION_MATRIX = """
 # REACT SYSTEM PROMPT
 # =============================================================================
 
-# Opaque sentinel marking the boundary between the static system-prompt prefix
-# (persona, phase definitions, tool registry, attack skill) and the dynamic
-# per-iteration suffix (chain context, todo list, target info, etc.).
-# think_node splits on this string and emits the prefix as a cache_control
-# content block for Anthropic prompt caching. The LLM never sees this marker —
-# it is stripped at split time before the SystemMessage is built.
-CACHE_PREFIX_END_MARKER = "<<REDAMON_CACHE_PREFIX_END>>"
+# Opaque sentinels marking the THREE cache-tier boundaries in the system prompt.
+# think_node splits on these and emits each cached tier as its own cache_control
+# content block for Anthropic prompt caching (the API allows up to 4 breakpoints;
+# we use 3). Order is most-static -> most-volatile, so a change in one tier only
+# invalidates that tier and the ones below it, never the ones above:
+#   TIER 0 (eternal)      persona + untrusted boundary + workspace rules +
+#                         phase definitions + orchestrator auto-logic
+#   TIER 1 (per-session)  stealth rules + attack-skill selection menu
+#   TIER 2 (per-phase)    current phase + tools + active attack skill + Your Task
+#   (uncached suffix)     live uploads/session config + Current State + appended
+# The LLM never sees these markers — think_node turns them into block boundaries
+# (Anthropic) or strips them (other providers) before building the SystemMessage.
+# All three share the "<<REDAMON_CACHE_" prefix so skill-part validation forbids
+# them with one entry (see prompts/skill_parts.py RESERVED_MARKERS).
+CACHE_TIER0_END = "<<REDAMON_CACHE_TIER0_END>>"
+CACHE_TIER1_END = "<<REDAMON_CACHE_TIER1_END>>"
+CACHE_TIER2_END = "<<REDAMON_CACHE_TIER2_END>>"
+CACHE_MARKERS = (CACHE_TIER0_END, CACHE_TIER1_END, CACHE_TIER2_END)
+# Backward-compat alias: the end of the fully-cached prefix (== Tier 2 end).
+CACHE_PREFIX_END_MARKER = CACHE_TIER2_END
 
 
 REACT_SYSTEM_PROMPT = """You are RedAmon, an AI penetration testing assistant using the ReAct (Reasoning and Acting) framework.
@@ -896,7 +961,7 @@ You work step-by-step using the Thought-Tool-Output pattern:
 
 """ + UNTRUSTED_OUTPUT_GUIDANCE + """
 
-## Current Phase: {current_phase}
+{workspace_rules}
 
 {phase_definitions}
 
@@ -909,6 +974,16 @@ You work step-by-step using the Thought-Tool-Output pattern:
 - First `metasploit_console` call per session auto-resets msfconsole state
 - Tool output is auto-truncated to prevent context overflow
 
+""" + CACHE_TIER0_END + """
+
+{stealth_rules}
+
+{skill_selection_guide}
+
+""" + CACHE_TIER1_END + """
+
+## Current Phase: {current_phase}
+
 {informational_guidance}
 
 ## Available Tools
@@ -920,33 +995,6 @@ You work step-by-step using the Thought-Tool-Output pattern:
 {attack_path_behavior}
 
 Create minimal TODOs — follow the attack skill workflow for step-by-step guidance.
-
-{skill_selection_guide}
-
-""" + CACHE_PREFIX_END_MARKER + """
-
-## Current State
-
-**Iteration**: {iteration}/{max_iterations}
-**Current Objective**: {objective}
-
-### Previous Objectives
-{objective_history_summary}
-
-### Prior Attack Chain History
-{prior_chain_history}
-
-### Attack Chain Progress
-{chain_context}
-
-### Current Todo List
-{todo_list}
-
-### Known Target Information
-{target_info}
-
-### Previous Questions & Answers
-{qa_history}
 
 ## Your Task
 
@@ -1059,6 +1107,31 @@ An error you have not reproduced is a clue, not a conclusion. Most "the tool is 
 ### When to Ask User (action="ask_user"):
 Use ask_user ONLY when you need user input that cannot be determined from graph, tool output, target_info, or qa_history:
 - Multiple exploit options, target selection, parameter clarification (e.g., LHOST), session selection, risk decisions
+
+""" + CACHE_TIER2_END + """
+
+## Current State
+
+**Iteration**: {iteration}/{max_iterations}
+**Current Objective**: {objective}
+
+### Previous Objectives
+{objective_history_summary}
+
+### Prior Attack Chain History
+{prior_chain_history}
+
+### Attack Chain Progress
+{chain_context}
+
+### Current Todo List
+{todo_list}
+
+### Known Target Information
+{target_info}
+
+### Previous Questions & Answers
+{qa_history}
 """
 
 

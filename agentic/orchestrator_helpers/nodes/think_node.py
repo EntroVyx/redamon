@@ -61,13 +61,19 @@ from prompts import (
     DEEP_THINK_SECTION,
     DEEP_THINK_SELF_REQUEST_INSTRUCTION,
     get_phase_tools,
+    session_config_needed,
     build_phase_definitions,
     build_informational_guidance,
     build_attack_path_behavior,
     build_tool_name_enum,
     build_tool_args_section,
 )
-from prompts.base import build_fireteam_prompt_fragments, CACHE_PREFIX_END_MARKER
+from prompts.base import (
+    build_fireteam_prompt_fragments,
+    CACHE_MARKERS,
+    build_workspace_rules_block,
+    build_uploads_inbox_block,
+)
 from prompts.skill_part_seam import applied_skill_workflow
 from prompts.classification import build_skill_menu
 from prompt_safety import wrap_untrusted
@@ -492,13 +498,21 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
 
     # Get phase tools with attack path type for dynamic routing
     attack_path_type = state.get("attack_path_type", "")
+    # include_session_config=False: the LHOST/LPORT/tunnel block is queried live,
+    # so it is rendered in the uncached suffix below (not in this cached tools
+    # block). The gate is shared via session_config_needed().
+    _post_expl_type = get_setting('POST_EXPL_PHASE_TYPE', 'statefull')
     available_tools = get_phase_tools(
         phase,
         get_setting('ACTIVATE_POST_EXPL_PHASE', True),
-        get_setting('POST_EXPL_PHASE_TYPE', 'statefull'),
+        _post_expl_type,
         attack_path_type,
         execution_trace=state.get("execution_trace", []),
+        include_session_config=False,
     )
+    _session_config_text = ""
+    if session_config_needed(phase, _post_expl_type == "statefull", attack_path_type):
+        _session_config_text = get_session_config_prompt() or ""
     # Read now: a later LATS build in this node would overwrite it.
     skill_workflow = applied_skill_workflow.get()
 
@@ -517,8 +531,18 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
         propensity=int(get_setting("FIRETEAM_PROPENSITY", 3)),
     )
 
+    # Stealth rules now live in the cached Tier-1 segment (previously prepended
+    # to the whole prompt). Empty string when stealth mode is off.
+    if get_setting('STEALTH_MODE', False):
+        from prompts.stealth_rules import STEALTH_MODE_RULES
+        _stealth_rules_text = STEALTH_MODE_RULES
+    else:
+        _stealth_rules_text = ""
+
     system_prompt = REACT_SYSTEM_PROMPT.format(
         current_phase=phase,
+        workspace_rules=build_workspace_rules_block(project_id),
+        stealth_rules=_stealth_rules_text,
         phase_definitions=build_phase_definitions(),
         informational_guidance=build_informational_guidance(phase),
         attack_path_type=attack_path_type,
@@ -549,19 +573,18 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
     # strategic re-evaluation on the next iteration when it senses stagnation.
     system_prompt += DEEP_THINK_SELF_REQUEST_INSTRUCTION
 
-    # Inject the workspace-layout doc on every think step. The block teaches
-    # the agent which folder is for what (notes/ = scratch, tool-outputs/ +
-    # jobs/ = auto-managed, uploads/ = user inbox). The uploads/ section
-    # only appears when files are actually present - keeps the prompt lean
-    # when the user hasn't staged anything.
-    from prompts.base import build_workspace_layout_block
-    workspace_block = build_workspace_layout_block(project_id)
-    system_prompt = workspace_block + "\n\n" + system_prompt
-
-    # Inject stealth mode rules if enabled (prepended for maximum priority)
+    # Workspace rules and stealth rules are now part of the CACHED prefix (via the
+    # template's {workspace_rules}/{stealth_rules}), not prepended here. Only the
+    # VOLATILE environment bits go in the uncached Tier-3 suffix: the live
+    # uploads/ listing and the live LHOST/LPORT/tunnel config. Keeping them out of
+    # the cached blocks means staging a file or bringing up a tunnel no longer
+    # busts the prompt cache.
+    _uploads_block = build_uploads_inbox_block(project_id)
+    if _uploads_block:
+        system_prompt += "\n\n" + _uploads_block
+    if _session_config_text:
+        system_prompt += "\n\n" + _session_config_text
     if get_setting('STEALTH_MODE', False):
-        from prompts.stealth_rules import STEALTH_MODE_RULES
-        system_prompt = STEALTH_MODE_RULES + "\n\n" + system_prompt
         logger.info(f"[{user_id}/{project_id}/{session_id}] STEALTH MODE active — injected stealth rules into prompt")
 
     # Scope guardrail: remind agent to stay within authorized targets
@@ -871,29 +894,47 @@ async def think_node(state: AgentState, config, *, llm, guidance_queues, neo4j_c
         )
 
     # Anthropic prompt caching: when the LLM is ChatAnthropic, split the
-    # assembled system prompt at CACHE_PREFIX_END_MARKER and emit two content
-    # blocks. The prefix block (persona + phase definitions + tool registry +
-    # attack skill) is marked cache_control={"type": "ephemeral"} so Anthropic
-    # caches it once and bills subsequent reads at ~10% of base input cost.
-    # The dynamic suffix (current state, chain context, etc.) is uncached.
-    # langchain-anthropic>=0.3 auto-attaches the prompt-caching beta header
-    # when it sees cache_control content blocks; no extra_headers needed.
-    # Gated on ANTHROPIC_PROMPT_CACHING_ENABLED so operators can disable.
+    # assembled system prompt on the THREE tier markers (CACHE_MARKERS) and emit
+    # one ephemeral cache_control block per cached tier (0,1,2); the trailing
+    # suffix (tier 3) is uncached. Tiers run most-static -> most-volatile, so a
+    # phase/skill change only re-caches tier 2, a settings change only tiers 1-2,
+    # and the eternal tier 0 keeps hitting. The API allows up to 4 breakpoints;
+    # we use at most 3. Empty segments are dropped so we never send a zero-length
+    # text block. langchain-anthropic>=0.3 auto-attaches the prompt-caching beta
+    # header when it sees cache_control blocks. Gated on
+    # ANTHROPIC_PROMPT_CACHING_ENABLED so operators can disable.
     _caching_enabled = (
         get_setting('ANTHROPIC_PROMPT_CACHING_ENABLED', True)
         and type(llm).__name__ == 'ChatAnthropic'
-        and CACHE_PREFIX_END_MARKER in system_prompt
+        and all(_m in system_prompt for _m in CACHE_MARKERS)
     )
     if _caching_enabled:
-        _prefix, _, _suffix = system_prompt.partition(CACHE_PREFIX_END_MARKER)
-        system_message_content = [
-            {"type": "text", "text": _prefix.rstrip(), "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": _suffix.lstrip()},
-        ]
+        _rest = system_prompt
+        _segments = []
+        for _m in CACHE_MARKERS:
+            _head, _, _rest = _rest.partition(_m)
+            _segments.append(_head)
+        _segments.append(_rest)  # tier 3 (uncached)
+        system_message_content = []
+        for _i, _seg in enumerate(_segments):
+            _text = _seg.rstrip() if _i == 0 else _seg.strip()
+            if not _text:
+                continue
+            _block = {"type": "text", "text": _text}
+            if _i < len(CACHE_MARKERS):  # tiers 0..2 are cached
+                _block["cache_control"] = {"type": "ephemeral"}
+            system_message_content.append(_block)
+        if not system_message_content:
+            # Degenerate case (everything empty) — fall back to a plain string.
+            system_message_content = system_prompt
+            for _m in CACHE_MARKERS:
+                system_message_content = system_message_content.replace(_m, "")
     else:
-        # Caching disabled, non-Anthropic LLM, or marker absent — strip the
-        # marker so the LLM never sees the sentinel string.
-        system_message_content = system_prompt.replace(CACHE_PREFIX_END_MARKER, "")
+        # Caching disabled, non-Anthropic LLM, or a marker absent — strip all
+        # markers so the LLM never sees a sentinel string.
+        system_message_content = system_prompt
+        for _m in CACHE_MARKERS:
+            system_message_content = system_message_content.replace(_m, "")
 
     # Get LLM decision with retry on parse failures
     messages = [

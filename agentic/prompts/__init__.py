@@ -464,6 +464,24 @@ def _build_builtin_skill_workflow_parts(
     return parts
 
 
+def session_config_needed(phase: str, is_statefull: bool, attack_path_type: str) -> bool:
+    """Whether the LHOST/LPORT/tunnel payload-settings block applies.
+
+    Shared by get_phase_tools (which renders it inline when
+    include_session_config=True) and think_node (which renders it in the
+    uncached suffix). Keeping the gate in one place prevents the two call sites
+    from drifting. Conditions:
+      1. exploitation phase + statefull mode (CVE exploit, brute force)
+      2. phishing attack path in ANY phase — payloads are generated before the
+         exploitation phase (msfvenom during informational; the "exploitation"
+         in phishing is when the target opens the file)
+    """
+    return (
+        (phase == "exploitation" and is_statefull)
+        or attack_path_type == "phishing_social_engineering"
+    )
+
+
 def get_phase_tools(
     phase: str,
     activate_post_expl: bool = True,
@@ -471,6 +489,7 @@ def get_phase_tools(
     attack_path_type: str = "",
     execution_trace: list = None,
     tool_filter: set = None,
+    include_session_config: bool = True,
 ) -> str:
     """Get tool descriptions for the current phase with attack path-specific guidance.
 
@@ -564,19 +583,13 @@ def get_phase_tools(
             post_expl_note=post_expl_note
         ))
 
-    # Pre-configured payload settings (LHOST/LPORT/tunnel: ngrok or chisel) — injected BEFORE attack
-    # chain so the agent knows the payload direction regardless of attack path type.
-    #
-    # Injection conditions:
-    #   1. exploitation phase + statefull mode (CVE exploit, brute force)
-    #   2. phishing attack path in ANY phase — payloads are generated before
-    #      exploitation (agent runs msfvenom during informational phase,
-    #      and the "exploitation" in phishing IS when the target opens the file)
-    needs_session_config = (
-        (phase == "exploitation" and is_statefull)
-        or attack_path_type == "phishing_social_engineering"
-    )
-    if needs_session_config:
+    # Pre-configured payload settings (LHOST/LPORT/tunnel: ngrok or chisel).
+    # The gate lives in session_config_needed() so think_node can reuse it. The
+    # tunnel config is queried live, so the think node renders it in the uncached
+    # suffix (include_session_config=False) to keep it out of the cached tools
+    # block; other callers (e.g. fireteam members) keep the default and get it
+    # inline here.
+    if include_session_config and session_config_needed(phase, is_statefull, attack_path_type):
         session_config = get_session_config_prompt()
         if session_config:
             parts.append(session_config)

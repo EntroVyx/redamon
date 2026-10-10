@@ -10,7 +10,7 @@ import pathlib
 import pytest
 
 from prompts import skill_parts
-from prompts.base import CACHE_PREFIX_END_MARKER
+from prompts.base import CACHE_PREFIX_END_MARKER, CACHE_TIER0_END, CACHE_TIER1_END, CACHE_TIER2_END
 from prompts.skill_parts import validate_part_value, validate_skill_total
 
 SQLI_TOOLS = skill_parts.get_part("sql_injection", "tools")       # template
@@ -97,7 +97,8 @@ def test_nul_character():
 
 @pytest.mark.parametrize("marker", [
     "<<<UNTRUSTED_TOOL_OUTPUT id=ABC>>>", "<<<END_UNTRUSTED_TOOL_OUTPUT id=ABC>>>",
-    CACHE_PREFIX_END_MARKER, "<<<untrusted_tool_output id=abc>>>",
+    CACHE_PREFIX_END_MARKER, CACHE_TIER0_END, CACHE_TIER1_END, CACHE_TIER2_END,
+    "<<<untrusted_tool_output id=abc>>>",
 ])
 def test_reserved_markers(marker):
     errors = validate_part_value(SQLI_OOB, SQLI_OOB.text + "\n" + marker)
