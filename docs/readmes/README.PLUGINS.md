@@ -1058,7 +1058,8 @@ while `PLUGINS_ENABLED` is on (TD-20).
   Each run does bounded work: at most one heal download and a 20-second budget.
 - **An operation is recovered only once its lease has expired** (ten minutes), and is claimed
   first, so a slow request and a reconcile never work on one plugin together. An interrupted
-  install goes back to available; an interrupted update or rollback is finished when its
+  install goes back to available, deleting any copy of kept data it was migrating; an
+  interrupted update or rollback is finished when its
   target version is on the volume and moves no data, and undone otherwise (the database write
   is the commit, and a migrating update switches version and data in one transaction); an
   interrupted uninstall is finished, honouring a purge.
