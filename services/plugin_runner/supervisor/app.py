@@ -5,6 +5,7 @@ proxy (:7072). Every route, including an unknown one, demands the runner key fir
     POST /runner/v1/reload
     POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId, bootId}
     POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel
+    POST /runner/v1/plugins/{id}/migrate                {version, step, direction, rows} -> {results}
     GET  /runner/v1/plugins/{id}/logs?lines=N
 
 Errors are `{error, code}`. A PluginError raised by an action is a result, not a runner
@@ -22,7 +23,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import auth, jobs
+from . import auth, jobs, migrate as migrations
 from .clock import SYSTEM_CLOCK
 from .config import DEFAULT_PORT, Settings
 from .logs import LogBuffer
@@ -148,6 +149,28 @@ def create_app(settings: Settings, *, clock=SYSTEM_CLOCK, logs: LogBuffer | None
         if await state["manager"].cancel(plugin_id, job_id):
             return {"ok": True}
         return auth.error(404, "unknown_job", f"Job {job_id} is not running.")
+
+    @app.post("/runner/v1/plugins/{plugin_id}/migrate")
+    async def migrate(plugin_id: str, request: Request):
+        manager = state["manager"]
+        try:
+            body = await request.json()
+        except ValueError:
+            return _bad("The body is not JSON.")
+        try:
+            version, root, step, direction, rows = migrations.check_body(body, settings.plugins_dir, plugin_id)
+        except ValueError as e:
+            return _bad(str(e))
+        except RunnerError as e:
+            return auth.error(e.status, e.code, e.message)
+        if manager.state == "out_of_date":
+            return auth.error(503, "runner_out_of_date",
+                              "The plugin runner is out of date for this RedAmon version; rebuild it.")
+        try:
+            results = await migrations.run_batch(manager, plugin_id, version, root, step, direction, rows)
+        except RunnerError as e:
+            return auth.error(e.status, e.code, e.message)
+        return {"results": results}
 
     @app.get("/runner/v1/plugins/{plugin_id}/logs")
     async def plugin_logs(plugin_id: str, lines: str = str(LOG_LINES_DEFAULT)):

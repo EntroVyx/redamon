@@ -37,7 +37,15 @@ vi.mock('./lifecycle', async (orig) => {
     }
     return { plugin: { pluginId: args[0], status: 'ready' } }
   }
-  return { ...real, install: spy('install'), enable: spy('enable'), disable: spy('disable'), uninstall: spy('uninstall') }
+  return {
+    ...real,
+    install: spy('install'),
+    enable: spy('enable'),
+    disable: spy('disable'),
+    uninstall: spy('uninstall'),
+    update: spy('update'),
+    rollback: spy('rollback'),
+  }
 })
 
 import { createFakePrisma, type FakePrisma } from './__testing__/fakePrisma'
@@ -45,6 +53,8 @@ import { POST as installRoute } from '@/app/api/plugins/[pluginId]/install/route
 import { POST as enableRoute } from '@/app/api/plugins/[pluginId]/enable/route'
 import { POST as disableRoute } from '@/app/api/plugins/[pluginId]/disable/route'
 import { POST as uninstallRoute } from '@/app/api/plugins/[pluginId]/uninstall/route'
+import { POST as updateRoute } from '@/app/api/plugins/[pluginId]/update/route'
+import { POST as rollbackRoute } from '@/app/api/plugins/[pluginId]/rollback/route'
 import { GET as exportRoute } from '@/app/api/plugins/[pluginId]/export/route'
 import { GET as logsRoute } from '@/app/api/plugins/[pluginId]/logs/route'
 
@@ -89,6 +99,8 @@ const POSTS: Array<[string, Post, unknown]> = [
   ['enable', enableRoute as Post, {}],
   ['disable', disableRoute as Post, {}],
   ['uninstall', uninstallRoute as Post, { mode: 'keep', confirm: 'echo' }],
+  ['update', updateRoute as Post, { version: '1.1.0', acceptedPermissions: [] }],
+  ['rollback', rollbackRoute as Post, {}],
 ]
 
 describe.each(POSTS)('POST /api/plugins/[pluginId]/%s', (name, route, body) => {
@@ -164,6 +176,16 @@ describe('the routes hand the body to the lifecycle', () => {
   test('install', async () => {
     await installRoute(post('/api/plugins/echo/install', { version: '1.0.0', acceptedPermissions: ['session:read'], restoreOverrides: true }), ctx('echo'))
     expect(h.calls[0].slice(0, 4)).toEqual(['install', 'echo', { version: '1.0.0', acceptedPermissions: ['session:read'], restoreOverrides: true }, 'user-admin'])
+  })
+
+  test('update', async () => {
+    await updateRoute(post('/api/plugins/echo/update', { version: '1.1.0', acceptedPermissions: ['session:read'] }), ctx('echo'))
+    expect(h.calls[0].slice(0, 4)).toEqual(['update', 'echo', { version: '1.1.0', acceptedPermissions: ['session:read'] }, 'user-admin'])
+  })
+
+  test('rollback', async () => {
+    await rollbackRoute(post('/api/plugins/echo/rollback', {}), ctx('echo'))
+    expect(h.calls[0].slice(0, 3)).toEqual(['rollback', 'echo', 'user-admin'])
   })
 
   test('uninstall', async () => {

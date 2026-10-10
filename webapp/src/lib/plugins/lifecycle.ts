@@ -1,6 +1,8 @@
 import { Prisma, type PluginInstall, type PluginOverride } from '@prisma/client'
 import prisma from '@/lib/prisma'
-import { isValidVersion, satisfies } from '@/lib/semver'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { compareVersions, isValidVersion, parseVersion, satisfies } from '@/lib/semver'
 import { auditPlugin } from './audit'
 import { CatalogError, findCatalogPlugin, isRevoked, loadCatalog, type LoadedCatalog } from './catalog'
 import { now } from './clock'
@@ -17,6 +19,7 @@ import {
   installView,
   type InstallView,
 } from './lifecycleCommon'
+import { MigrationFailure, migrationSteps, runMigrations, type MigrationStats } from './migrations'
 import { markStale, type StaleReason } from './overrides'
 import { isPluginPermission } from './permissions'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
@@ -32,8 +35,18 @@ import {
   type PluginStatus,
 } from './registry'
 import { RunnerError, RunnerUnavailableError, runnerHealth, runnerReload } from './runnerClient'
+import { parseManifest, type PluginManifest } from './schemas/manifest'
+import type { CatalogRelease } from './schemas/catalog'
 import { registrySkill, type RegistrySkill } from './skillPartsRegistry'
-import { commitVersion, discardStaging, removePluginFolder, removeVersion, versionExists } from './staging'
+import {
+  commitVersion,
+  discardStaging,
+  listVersions,
+  removePluginFolder,
+  removeVersion,
+  versionExists,
+  versionPath,
+} from './staging'
 
 export { EXPORT_FRESH_MS, LifecycleError, installView, type InstallView } from './lifecycleCommon'
 
@@ -166,6 +179,63 @@ async function settleWorker(pluginId: string, version: string): Promise<PluginIn
   }
   if (!outcome.ok) console.warn(`[plugins] ${pluginId} ${version}: ${outcome.lastError}`)
   return (await findInstall(pluginId))!
+}
+
+const entryOf = (r: CatalogRelease) => ({
+  version: r.version,
+  url: r.url,
+  sha256: r.sha256,
+  platform: r.platform,
+  dataVersion: r.dataVersion,
+  permissions: r.permissions,
+})
+
+/** The pinned entry without its own `previous`: one level of history is enough to heal. */
+function withoutPrevious(entry: Prisma.JsonValue | null): Record<string, unknown> | null {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+  const rest = { ...(entry as Record<string, unknown>) }
+  delete rest.previous
+  return rest
+}
+
+const LEASE_CLEARED = { operationId: null, operationKind: null, operationArgs: Prisma.DbNull, leaseExpiresAt: null }
+
+/**
+ * The write that ends an operation as `ready`, for use inside a transaction: the data
+ * swap of a migration and the switch of version commit together, or neither does.
+ */
+function commitIn(op: Operation, from: PluginStatus, patch: Prisma.PluginInstallUpdateManyMutationInput) {
+  return async (tx: Prisma.TransactionClient) => {
+    const { count } = await tx.pluginInstall.updateMany({
+      where: { pluginId: op.pluginId, status: from, operationId: op.operationId },
+      data: { ...patch, ...LEASE_CLEARED, status: 'ready' },
+    })
+    if (count !== 1) throw new PluginConflictError(op.pluginId, 'the operation lost its lease')
+  }
+}
+
+/** A version's manifest as it is on the volume, checked again (rollback has no other copy). */
+async function manifestOnDisk(pluginId: string, version: string): Promise<PluginManifest | null> {
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(versionPath(pluginId, version), 'plugin.json'), 'utf8'))
+    const parsed = parseManifest(raw)
+    return parsed.ok && parsed.value.id === pluginId && parsed.value.version === version ? parsed.value : null
+  } catch {
+    return null
+  }
+}
+
+/** Back to the status the plugin had before a refused update or rollback (`updating` only goes to `ready`). */
+async function restoreStatus(op: Operation, previous: string, lastError: string) {
+  try {
+    await endOperation(op, 'ready', { pendingVersion: null, lastError: lastError.slice(0, 2000) })
+    if (previous === 'failed' || previous === 'incompatible') {
+      await transition(op.pluginId, { from: ['ready'], to: previous as PluginStatus })
+    }
+  } catch (e) {
+    if (!(e instanceof PluginConflictError)) throw e
+    console.warn(`[plugins] ${op.kind} ${op.pluginId}: the lease was lost; reconciliation finishes it`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -304,23 +374,20 @@ export async function install(
 
   const existing = await findInstall(pluginId)
   let activeSets = 0
+  let keptData = false
   if (existing) {
     if (existing.status !== 'available') {
       if (liveLease(existing)) throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: another operation is in progress.`)
       throw new LifecycleError(409, 'already_installed', `Plugin ${pluginId} is already installed; update or uninstall it.`)
     }
-    if (await hasKeptData(pluginId)) {
-      if (existing.dataVersion > release.dataVersion) {
-        throw new LifecycleError(
-          409,
-          'data_newer_than_release',
-          `The data kept from an earlier install is at data version ${existing.dataVersion}, newer than this ` +
-            `release's ${release.dataVersion}. Old code never runs on newer data: install a newer release, or export and purge the data.`,
-        )
-      }
-      if (existing.dataVersion < release.dataVersion) {
-        throw new LifecycleError(409, 'migration_required', `The kept data needs a migration to data version ${release.dataVersion}.`)
-      }
+    keptData = await hasKeptData(pluginId)
+    if (keptData && existing.dataVersion > release.dataVersion) {
+      throw new LifecycleError(
+        409,
+        'data_newer_than_release',
+        `The data kept from an earlier install is at data version ${existing.dataVersion}, newer than this ` +
+          `release's ${release.dataVersion}. Old code never runs on newer data: install a newer release, or export and purge the data.`,
+      )
     }
     activeSets = (await activeSetsOf(pluginId)).size
     if (activeSets && input.restoreOverrides === undefined) {
@@ -346,8 +413,10 @@ export async function install(
     throw e
   }
 
+  let committedFolder = false
   const refuse = async (code: string, message: string, status: number, details?: string[]) => {
     await discardStaging(op.operationId).catch(() => {})
+    if (committedFolder) await removeVersion(pluginId, release.version).catch(() => {})
     await endOperation(op, 'available', { lastError: `${code}: ${message}`.slice(0, 2000) }).catch(() => {})
     await auditPlugin('plugin.install_failed', {
       actorId,
@@ -380,29 +449,39 @@ export async function install(
     // A folder of this version no row references (an earlier crash) gives way to this one.
     if (await versionExists(pluginId, release.version)) await removeVersion(pluginId, release.version)
     await commitVersion(op.operationId, pluginId, release.version)
+    committedFolder = true
     const overrides = await settleOverrides(pluginId, input.restoreOverrides, actorId, d)
-    await endOperation(op, 'ready', {
+    const commit = commitIn(op, 'installing', {
       enabled: true,
       activeVersion: release.version,
       previousVersion: null,
       pendingVersion: null,
       dataVersion: release.dataVersion,
-      previousDataVersion: null,
+      previousDataVersion: existing && keptData && existing.dataVersion !== release.dataVersion ? existing.dataVersion : null,
       grantedPermissions: release.permissions,
       manifest: checked.manifest as unknown as Prisma.InputJsonValue,
-      catalogEntry: {
-        version: release.version,
-        url: release.url,
-        sha256: release.sha256,
-        platform: release.platform,
-        dataVersion: release.dataVersion,
-        permissions: release.permissions,
-      },
+      catalogEntry: entryOf(release),
       installedBy: actorId,
       installedAt: now(),
       lastError: null,
       revokedReason: null,
     })
+    let migration: MigrationStats | null = null
+    if (existing && keptData && existing.dataVersion < release.dataVersion) {
+      // Data kept from an earlier install, older than this release: migrated as an update would.
+      try {
+        migration = await runMigrations(
+          { operation: op, version: release.version, from: existing.dataVersion, to: release.dataVersion },
+          commit,
+        )
+      } catch (e) {
+        const f = e as MigrationFailure
+        if (f.code === 'plugin_busy') throw new PluginConflictError(pluginId, f.message)
+        throw await refuse(f.code, f.message, f.status)
+      }
+    } else {
+      await prisma.$transaction(commit)
+    }
     await auditPlugin('plugin.permissions_granted', {
       actorId,
       pluginId,
@@ -414,12 +493,13 @@ export async function install(
       actorId,
       pluginId,
       before: snapshot(existing),
-      after: { ...snapshot(row), overrides },
+      after: { ...snapshot(row), overrides, ...(migration ? { migration } : {}) },
       source: 'admin',
     })
     return { plugin: installView(row) }
   } catch (e) {
     await discardStaging(op.operationId).catch(() => {})
+    if (e instanceof LifecycleError) throw e
     if (e instanceof PluginConflictError) {
       throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the install lost its lease to another operation.`)
     }
@@ -477,6 +557,305 @@ export async function disable(pluginId: string, actorId: string): Promise<{ plug
   await tellRunner(pluginId, 'disable')
   const row = (await findInstall(pluginId))!
   await auditPlugin('plugin.disable', { actorId, pluginId, before: snapshot(before), after: snapshot(row), source: 'admin' })
+  return { plugin: installView(row) }
+}
+
+// ---------------------------------------------------------------------------
+// Update, rollback
+// ---------------------------------------------------------------------------
+
+export interface UpdateInput {
+  version: string
+  acceptedPermissions: string[]
+}
+
+/**
+ * Side by side (§9.5): the new release is checked and renamed in beside the active one,
+ * which keeps its run-list entry and contributions while the plugin is `updating`; then
+ * one write (with the data swap, when the data moves) makes it active. Only the active and
+ * the previous version stay on disk. A disabled plugin can be updated and stays disabled.
+ */
+export async function update(
+  pluginId: string,
+  input: UpdateInput,
+  actorId: string,
+  deps?: LifecycleDeps,
+): Promise<{ plugin: InstallView }> {
+  const d = withDefaults(deps)
+  checkPluginId(pluginId)
+  checkInstallInput(input)
+  const before = await findInstall(pluginId)
+  if (!before || !isInstalled(before.status) || liveLease(before) || !before.activeVersion) {
+    throw busyOrNotInstalled(before, pluginId)
+  }
+  const active = before.activeVersion as string
+
+  const loaded = await catalogOrFail(d)
+  const entry = findCatalogPlugin(loaded.catalog, pluginId)
+  if (!entry) throw new LifecycleError(404, 'not_in_catalog', `The catalog lists no plugin ${pluginId}.`)
+  const release = entry.releases.find((r) => r.version === input.version)
+  if (!release) throw new LifecycleError(404, 'release_not_found', `The catalog lists no release ${input.version} of ${pluginId}.`)
+  if (compareVersions(parseVersion(release.version), parseVersion(active)) <= 0) {
+    throw new LifecycleError(409, 'not_newer', `Release ${release.version} is not newer than ${active}; roll back instead.`)
+  }
+  const revoked = isRevoked(loaded.catalog, pluginId, release.version)
+  if (revoked !== null) throw new LifecycleError(409, 'release_revoked', `Release ${release.version} was revoked: ${revoked}`)
+  if (!release.permissions.every(isPluginPermission)) {
+    throw new LifecycleError(409, 'unknown_contribution', `Release ${release.version} asks for a permission this RedAmon does not know.`)
+  }
+  if (!satisfies(d.platformVersion, release.platform)) {
+    throw new LifecycleError(
+      409,
+      'platform_incompatible',
+      `Release ${release.version} needs platform ${release.platform}; this RedAmon runs ${d.platformVersion}.`,
+    )
+  }
+  if (!sameSet(input.acceptedPermissions, release.permissions)) {
+    throw new LifecycleError(400, 'permissions_mismatch', 'The accepted permissions must be exactly the ones this release asks for.')
+  }
+  const kept = await hasKeptData(pluginId)
+  if (kept && release.dataVersion < before.dataVersion) {
+    throw new LifecycleError(409, 'data_newer_than_release', `Release ${release.version} reads data version ${release.dataVersion}; the data is at ${before.dataVersion}.`)
+  }
+
+  let op: Operation
+  try {
+    op = await beginOperation(pluginId, [...INSTALLED_STATUSES], 'updating', 'update', {
+      version: release.version,
+      from: active,
+      fromDataVersion: before.dataVersion,
+      by: actorId,
+    })
+    await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: release.version } })
+  } catch (e) {
+    if (e instanceof PluginConflictError) throw busyOrNotInstalled(await findInstall(pluginId), pluginId)
+    throw e
+  }
+
+  let committedFolder = false
+  const fail = async (code: string, message: string, status: number, details?: string[]) => {
+    await discardStaging(op.operationId).catch(() => {})
+    if (committedFolder) await removeVersion(pluginId, release.version).catch(() => {})
+    await restoreStatus(op, before.status, `${code}: ${message}`)
+    await auditPlugin('plugin.update', {
+      actorId,
+      pluginId,
+      before: snapshot(before),
+      after: { outcome: 'failed', version: release.version, code, message },
+      source: 'admin',
+    })
+    console.warn(`[plugins] update ${pluginId} ${active} → ${release.version} refused: ${code}`)
+    return new LifecycleError(status, code, message, details)
+  }
+
+  let bytes: Buffer
+  try {
+    bytes = await d.fetchArchive(release.url)
+  } catch (e) {
+    const why = e instanceof FetchRemoteError ? `${e.code}: ${e.message}` : (e as Error).message
+    throw await fail('download_failed', `The archive could not be downloaded (${why}).`, 502)
+  }
+  const checked = await checkAndStage(op.operationId, { pluginId, archiveBytes: bytes, release, platformVersion: d.platformVersion })
+  if (!checked.ok) throw await fail(checked.code, checked.message, 422, checked.details)
+
+  try {
+    await heartbeat(op)
+    if (await versionExists(pluginId, release.version)) await removeVersion(pluginId, release.version)
+    await commitVersion(op.operationId, pluginId, release.version)
+    committedFolder = true
+    const commit = commitIn(op, 'updating', {
+      activeVersion: release.version,
+      previousVersion: active,
+      pendingVersion: null,
+      dataVersion: release.dataVersion,
+      previousDataVersion: before.dataVersion,
+      grantedPermissions: release.permissions,
+      manifest: checked.manifest as unknown as Prisma.InputJsonValue,
+      catalogEntry: { ...entryOf(release), previous: withoutPrevious(before.catalogEntry) } as Prisma.InputJsonValue,
+      lastError: null,
+    })
+    let migration: MigrationStats | null = null
+    if (kept && release.dataVersion !== before.dataVersion) {
+      try {
+        migration = await runMigrations({ operation: op, version: release.version, from: before.dataVersion, to: release.dataVersion }, commit)
+      } catch (e) {
+        const f = e as MigrationFailure
+        if (f.code === 'plugin_busy') throw new PluginConflictError(pluginId, f.message)
+        throw await fail(f.code, f.message, f.status)
+      }
+    } else {
+      await prisma.$transaction(commit)
+    }
+    for (const v of await listVersions(pluginId)) {
+      if (v !== release.version && v !== active) await removeVersion(pluginId, v).catch(() => {})
+    }
+    const granted = Array.isArray(before.grantedPermissions) ? (before.grantedPermissions as string[]) : []
+    const added = release.permissions.filter((p) => !granted.includes(p))
+    if (added.length) {
+      await auditPlugin('plugin.permissions_granted', {
+        actorId,
+        pluginId,
+        after: { version: release.version, permissions: release.permissions, added },
+        source: 'admin',
+      })
+    }
+    let row: PluginInstall
+    if (before.enabled) row = await settleWorker(pluginId, release.version)
+    else {
+      await tellRunner(pluginId, 'update')
+      row = (await findInstall(pluginId))!
+    }
+    await auditPlugin('plugin.update', {
+      actorId,
+      pluginId,
+      before: snapshot(before),
+      after: { ...snapshot(row), previousVersion: row.previousVersion, ...(migration ? { migration } : {}) },
+      source: 'admin',
+    })
+    return { plugin: installView(row) }
+  } catch (e) {
+    await discardStaging(op.operationId).catch(() => {})
+    if (e instanceof LifecycleError) throw e
+    if (e instanceof PluginConflictError) {
+      throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the update lost its lease to another operation.`)
+    }
+    throw e
+  }
+}
+
+export type RollbackCheck =
+  | { possible: true; migrates: boolean }
+  | { possible: false; reason: 'not_installed' | 'no_previous_version' | 'no_down_migration'; missing?: string[] }
+
+/** Whether a rollback is possible now, and why not: the Plugins page shows it before an update. */
+export async function rollbackCheck(pluginId: string): Promise<RollbackCheck> {
+  const row = await findInstall(pluginId)
+  if (!row || !isInstalled(row.status) || !row.activeVersion) return { possible: false, reason: 'not_installed' }
+  const prev = row.previousVersion
+  const prevManifest = prev && (await versionExists(pluginId, prev)) ? await manifestOnDisk(pluginId, prev) : null
+  if (!prev || !prevManifest) return { possible: false, reason: 'no_previous_version' }
+  if (prevManifest.dataVersion === row.dataVersion || !(await hasKeptData(pluginId))) return { possible: true, migrates: false }
+  if (prevManifest.dataVersion > row.dataVersion) return { possible: false, reason: 'no_down_migration', missing: [] }
+  const missing: string[] = []
+  for (const { step } of migrationSteps(row.dataVersion, prevManifest.dataVersion)) {
+    const name = `migrations/${String(step).padStart(4, '0')}_down.py`
+    const ok = await fs.stat(path.join(versionPath(pluginId, row.activeVersion), name)).then((st) => st.isFile(), () => false)
+    if (!ok) missing.push(name)
+  }
+  return missing.length ? { possible: false, reason: 'no_down_migration', missing } : { possible: true, migrates: true }
+}
+
+/**
+ * The previous version active again (§9.5). Data migrated forward is first taken back by
+ * the newer version's down migrations (copy and swap); without them the rollback is
+ * refused, because old code never runs on newer data.
+ */
+export async function rollback(pluginId: string, actorId: string, deps?: LifecycleDeps): Promise<{ plugin: InstallView }> {
+  const d = withDefaults(deps)
+  checkPluginId(pluginId)
+  const before = await findInstall(pluginId)
+  if (!before || !isInstalled(before.status) || liveLease(before) || !before.activeVersion) {
+    throw busyOrNotInstalled(before, pluginId)
+  }
+  const check = await rollbackCheck(pluginId)
+  if (!check.possible) {
+    if (check.reason === 'no_down_migration') {
+      throw new LifecycleError(
+        409,
+        'no_down_migration',
+        `Version ${before.activeVersion} moved the data and ships no way back${check.missing?.length ? ` (${check.missing.join(', ')})` : ''}; ` +
+          'old code never runs on newer data.',
+      )
+    }
+    throw new LifecycleError(409, check.reason, `Plugin ${pluginId} has no previous version on disk to roll back to.`)
+  }
+  const prev = before.previousVersion as string
+  const prevManifest = (await manifestOnDisk(pluginId, prev))!
+  if (!satisfies(d.platformVersion, prevManifest.platform)) {
+    throw new LifecycleError(409, 'platform_incompatible', `Version ${prev} needs platform ${prevManifest.platform}.`)
+  }
+  try {
+    const loaded = await d.loadCatalog()
+    const revoked = isRevoked(loaded.catalog, pluginId, prev)
+    if (revoked !== null) throw new LifecycleError(409, 'release_revoked', `Version ${prev} was revoked: ${revoked}`)
+  } catch (e) {
+    if (e instanceof LifecycleError) throw e
+    // Offline: the rollback goes ahead; reconciliation applies a revocation once the catalog is back.
+    console.warn(`[plugins] rollback ${pluginId}: the catalog could not be checked for a revocation of ${prev}`)
+  }
+
+  let op: Operation
+  try {
+    op = await beginOperation(pluginId, [...INSTALLED_STATUSES], 'updating', 'rollback', {
+      to: prev,
+      from: before.activeVersion,
+      by: actorId,
+    })
+    await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: prev } })
+  } catch (e) {
+    if (e instanceof PluginConflictError) throw busyOrNotInstalled(await findInstall(pluginId), pluginId)
+    throw e
+  }
+  const previousEntry = (withoutPrevious(before.catalogEntry)?.version === before.activeVersion
+    ? (before.catalogEntry as Record<string, unknown>)?.previous
+    : null) as Record<string, unknown> | null
+  const commit = commitIn(op, 'updating', {
+    activeVersion: prev,
+    previousVersion: before.activeVersion,
+    pendingVersion: null,
+    dataVersion: prevManifest.dataVersion,
+    previousDataVersion: before.dataVersion,
+    grantedPermissions: prevManifest.permissions,
+    manifest: prevManifest as unknown as Prisma.InputJsonValue,
+    catalogEntry: (previousEntry
+      ? { ...previousEntry, previous: withoutPrevious(before.catalogEntry) }
+      : before.catalogEntry ?? Prisma.DbNull) as Prisma.InputJsonValue,
+    lastError: null,
+  })
+  let migration: MigrationStats | null = null
+  try {
+    if (check.migrates) {
+      try {
+        migration = await runMigrations(
+          { operation: op, version: before.activeVersion, from: before.dataVersion, to: prevManifest.dataVersion },
+          commit,
+        )
+      } catch (e) {
+        const f = e as MigrationFailure
+        if (f.code === 'plugin_busy') throw new PluginConflictError(pluginId, f.message)
+        await restoreStatus(op, before.status, `${f.code}: ${f.message}`)
+        await auditPlugin('plugin.rollback', {
+          actorId,
+          pluginId,
+          before: snapshot(before),
+          after: { outcome: 'failed', to: prev, code: f.code, message: f.message },
+          source: 'admin',
+        })
+        throw new LifecycleError(f.status, f.code, f.message)
+      }
+    } else {
+      await prisma.$transaction(commit)
+    }
+  } catch (e) {
+    if (e instanceof LifecycleError) throw e
+    if (e instanceof PluginConflictError) {
+      throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the rollback lost its lease to another operation.`)
+    }
+    throw e
+  }
+  let row: PluginInstall
+  if (before.enabled) row = await settleWorker(pluginId, prev)
+  else {
+    await tellRunner(pluginId, 'rollback')
+    row = (await findInstall(pluginId))!
+  }
+  await auditPlugin('plugin.rollback', {
+    actorId,
+    pluginId,
+    before: snapshot(before),
+    after: { ...snapshot(row), previousVersion: row.previousVersion, ...(migration ? { migration } : {}) },
+    source: 'admin',
+  })
   return { plugin: installView(row) }
 }
 

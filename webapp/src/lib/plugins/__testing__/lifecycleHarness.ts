@@ -5,11 +5,13 @@
  * test file still mocks `@/lib/prisma` (and the session) itself: vi.mock must.
  */
 import fs from 'node:fs/promises'
+import { readdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { FakePrisma, Row } from './fakePrisma'
 import { startFakeRunner, type FakeRunner, type FakeWorker } from './fakeRunner'
 import { echoArchive, type EchoArchive, type EchoArchiveOptions } from './echoArchive'
+import { ECHO_MIGRATIONS } from './echoMigrations'
 import type { LoadedCatalog } from '../catalog'
 import type { LifecycleDeps } from '../lifecycle'
 import type { RegistrySkill } from '../skillPartsRegistry'
@@ -86,6 +88,15 @@ export async function startLifecycleWorld(db: () => FakePrisma, releases: EchoAr
   const runner = await startFakeRunner({
     runnerKey: RUNNER_KEY,
     actions: { 'echo/echo': () => ({ result: {} }) },
+    migrations: { ...ECHO_MIGRATIONS },
+    // The supervisor migrates with a version folder that is on the volume, running or not.
+    diskVersions: (pluginId) => {
+      try {
+        return readdirSync(path.join(root, pluginId, 'versions'))
+      } catch {
+        return []
+      }
+    },
     // The supervisor converges on the run list: enabled, not revoked, ready or updating.
     onReload: async (options) => {
       const rows = db().rows('pluginInstall').filter(

@@ -552,8 +552,16 @@ async function copyPage(tx: Prisma.TransactionClient, pluginId: string, to: stri
 /**
  * Replaces the plugin rows of `to` with those of `from`, in one transaction: a migrated
  * copy becomes live at once or not at all. Platform rows of `to` are left alone.
+ * `inTx` runs in the same transaction (the install row's new version and data version),
+ * so the data and the code that reads it change together; when it throws, nothing moves.
  */
-export async function swapNamespace(pluginId: string, from: string, to: string, db: Db = prisma): Promise<void> {
+export async function swapNamespace(
+  pluginId: string,
+  from: string,
+  to: string,
+  db: Db = prisma,
+  inTx?: (tx: Prisma.TransactionClient) => Promise<void>,
+): Promise<void> {
   checkPair(pluginId, from, to)
   await db.$transaction(async (tx) => {
     await tx.pluginData.deleteMany({ where: { AND: [{ pluginId, namespace: to }, notReserved] } })
@@ -562,5 +570,68 @@ export async function swapNamespace(pluginId: string, from: string, to: string, 
       data: { namespace: to },
     })
     await tx.pluginData.deleteMany({ where: { pluginId, namespace: from } })
+    if (inTx) await inTx(tx)
   }, MIGRATION_TRANSACTION)
 }
+
+/**
+ * A data migration's answer for one row of its copy (TD-28): the new value, with the
+ * store's value checks, or the row's deletion. Only a `migrating:` namespace: live rows
+ * change only through the swap.
+ */
+export async function applyMigrationAnswer(
+  pluginId: string,
+  namespace: string,
+  rowId: string,
+  answer: { value: unknown } | { delete: true },
+  db: Db = prisma,
+): Promise<{ sizeBytes: number }> {
+  checkPluginId(pluginId)
+  checkNamespace(namespace)
+  if (namespace === LIVE_NAMESPACE) throw new PluginDataError('invalid_namespace', 'a migration writes only into its copy')
+  const where = { id: rowId, pluginId, namespace }
+  if ('delete' in answer) {
+    const { count } = await db.pluginData.deleteMany({ where })
+    if (count !== 1) throw new PluginDataError('invalid_value', `row ${rowId} is not in the migration's copy`)
+    return { sizeBytes: 0 }
+  }
+  const { text, sizeBytes } = serialize(answer.value)
+  const limits = dataLimits()
+  if (sizeBytes > limits.maxValueBytes) {
+    throw new PluginDataError(
+      'value_too_large',
+      `a value is limited to ${limits.maxValueBytes} bytes of JSON, the migrated row ${rowId} has ${sizeBytes}`,
+      limits.maxValueBytes,
+    )
+  }
+  const parsed = JSON.parse(text) as Prisma.InputJsonValue | null
+  const { count } = await db.pluginData.updateMany({
+    where,
+    data: { value: parsed === null ? Prisma.JsonNull : parsed, sizeBytes },
+  })
+  if (count !== 1) throw new PluginDataError('invalid_value', `row ${rowId} is not in the migration's copy`)
+  return { sizeBytes }
+}
+
+/** The plugin's quotas, checked on a whole namespace (a migrated copy before its swap). */
+export async function checkNamespaceQuotas(pluginId: string, namespace: string, db: Db = prisma): Promise<void> {
+  checkPluginId(pluginId)
+  checkNamespace(namespace)
+  const limits = dataLimits()
+  const usage = await db.pluginData.aggregate({
+    where: { AND: [{ pluginId, namespace }, notReserved] },
+    _count: { _all: true },
+    _sum: { sizeBytes: true },
+  })
+  if (usage._count._all > limits.maxRows) {
+    throw new PluginDataError('rows_exceeded', `this plugin's data is limited to ${limits.maxRows} rows`, limits.maxRows)
+  }
+  if ((usage._sum.sizeBytes ?? 0) > limits.maxBytes) {
+    throw new PluginDataError('bytes_exceeded', `this plugin's data is limited to ${limits.maxBytes} bytes`, limits.maxBytes)
+  }
+}
+
+/** Where a migration reads its copy: the plugin's own rows, never the platform's. */
+export const pluginRowsOf = (pluginId: string, namespace: string): Prisma.PluginDataWhereInput => ({
+  AND: [{ pluginId, namespace }, notReserved],
+})

@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeRunner, type FakeRunnerOptions } from './__testing__/fakeRunner'
 import { closeAllFakeServers } from './__testing__/fakeHttpServer'
+import { ECHO_MIGRATIONS } from './__testing__/echoMigrations'
 
 interface Request {
   method: 'GET' | 'POST'
@@ -80,7 +81,7 @@ describe('runner contract cases on the fake runner', () => {
   test.each(CONTRACT.cases.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
     const r = await startFakeRunner({
       runnerKey: CONTRACT.runnerKey, platformVersion: CONTRACT.platformVersion, actions: ECHO,
-      state: c.runnerState ?? 'ok',
+      migrations: ECHO_MIGRATIONS, state: c.runnerState ?? 'ok',
     })
     for (const before of c.before ?? []) await (await send(r.baseUrl, before)).body?.cancel()
     await check(await send(r.baseUrl, c.request), c.expect)
@@ -93,7 +94,7 @@ describe('runner contract cases on the fake runner', () => {
 
   test('every case names a real supervisor route', () => {
     for (const c of CONTRACT.cases) {
-      expect(c.request.path).toMatch(/^\/runner\/v1\/(health|reload|plugins\/[a-z0-9-]+\/(actions\/[a-z_]+|jobs\/[A-Za-z0-9-]+\/cancel|logs\?lines=\d+))$/)
+      expect(c.request.path).toMatch(/^\/runner\/v1\/(health|reload|plugins\/[a-z0-9-]+\/(actions\/[a-z_]+|jobs\/[A-Za-z0-9-]+\/cancel|migrate|logs\?lines=\d+))$/)
     }
   })
 })

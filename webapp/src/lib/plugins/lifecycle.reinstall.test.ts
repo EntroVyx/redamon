@@ -169,11 +169,26 @@ describe('overrides', () => {
 })
 
 describe('migrations', () => {
-  test('kept data older than the release needs a migration (5.4): refused until then', async () => {
+  test('kept data older than the release is migrated by the release, as an update would', async () => {
     await go('1.0.0')
     db.seed('pluginData', [{ pluginId: 'echo', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: 'items', key: 'a', value: 1, sizeBytes: 1 }])
     await uninstall('echo', { mode: 'keep', confirm: 'echo' }, ADMIN)
+    const out = await go('1.1.0')
+    expect(out.plugin).toMatchObject({ status: 'ready', activeVersion: '1.1.0', dataVersion: 2 })
+    expect(db.rows('pluginData').map((r) => r.value)).toEqual([{ v: 2, data: 1 }])
+    expect(w.runner.migrateCalls.at(-1)!.body).toMatchObject({ version: '1.1.0', step: 2, direction: 'up' })
+  })
+
+  test('a failing migration at reinstall leaves the row available with the old data and no folder', async () => {
+    await go('1.0.0')
+    db.seed('pluginData', [{ pluginId: 'echo', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: 'items', key: 'a', value: { raise: true }, sizeBytes: 14 }])
+    await uninstall('echo', { mode: 'keep', confirm: 'echo' }, ADMIN)
     const e = await refusal(go('1.1.0'))
-    expect([e.status, e.code]).toEqual([409, 'migration_required'])
+    expect([e.status, e.code]).toEqual([422, 'migration_failed'])
+    expect(row()).toMatchObject({ status: 'available', dataVersion: 1, activeVersion: null })
+    expect(db.rows('pluginData').map((r) => [r.namespace, r.value])).toEqual([['live', { raise: true }]])
+    const { exists } = await import('./__testing__/lifecycleHarness')
+    const { versionPath } = await import('./staging')
+    expect(await exists(versionPath('echo', '1.1.0'))).toBe(false)
   })
 })

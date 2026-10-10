@@ -12,7 +12,8 @@
     "Gateway's /api/plugin-gateway/v1/jobs/complete with the job's own bearer token.",
     "`before`: requests sent first, their answers ignored (a job left running). `runnerState`:",
     "\"out_of_date\" sets the runner up out of date (the webapp runs another platform version).",
-    "An async 202 carries the runner's `bootId`, which the webapp stores on the job."
+    "An async 202 carries the runner's `bootId`, which the webapp stores on the job.",
+    "`migrate` runs the rows through echo's migrations/NNNN_{up,down}.py `migrate_row` (TD-28)."
   ],
   "runnerKey": "contract-runner-key-0123456789abcdef",
   "platformVersion": "1.0.0",
@@ -178,6 +179,61 @@
       "name": "the plugin log",
       "request": { "method": "GET", "path": "/runner/v1/plugins/echo/logs?lines=5", "key": "valid" },
       "expect": { "status": 200, "keys": ["lines"] }
+    },
+    {
+      "name": "a migration batch",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up",
+                  "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 },
+                           { "id": "r1", "collection": "items", "key": "k1", "ownerType": "user", "value": { "delete": true } },
+                           { "id": "r2", "collection": "items", "key": "k2", "ownerType": "user", "value": { "a": 1 } }] }
+      },
+      "expect": { "status": 200, "body": { "results": [
+        { "id": "r0", "value": { "v": 2, "data": 5 } },
+        { "id": "r1", "delete": true },
+        { "id": "r2", "value": { "v": 2, "data": { "a": 1 } } }
+      ] } }
+    },
+    {
+      "name": "a migration down",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "down", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": { "v": 2, "data": 5 } }] }
+      },
+      "expect": { "status": 200, "body": { "results": [{ "id": "r0", "value": 5 }] } }
+    },
+    {
+      "name": "a migration row that raises",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }, { "id": "r1", "collection": "items", "key": "k1", "ownerType": "user", "value": { "raise": true } }] }
+      },
+      "expect": { "status": 422, "code": "migration_failed" }
+    },
+    {
+      "name": "a migration step the plugin does not ship",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 3, "direction": "down", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }] }
+      },
+      "expect": { "status": 422, "code": "migration_missing" }
+    },
+    {
+      "name": "a migration of a version not on the volume",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "9.9.9", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }] }
+      },
+      "expect": { "status": 404, "code": "unknown_version" }
+    },
+    {
+      "name": "a migration request carrying a token",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }], "token": "call-token" }
+      },
+      "expect": { "status": 400, "code": "bad_request" }
     }
   ],
   "unconfigured": {

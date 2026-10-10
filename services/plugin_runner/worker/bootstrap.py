@@ -9,6 +9,7 @@ creates its private temp directory; a failure there ends it with exit code 70 an
 `fatal` line. Then it serves requests:
 
     stdin (JSON lines)   {type: invoke, id, action, entry, params, ctx, token}
+                         {type: migrate, id, step, direction, rows}
                          {type: cancel, id}        {type: shutdown}
     --proto-fd           {type: ready, pid}
                          {type: result, id, ok: true, result}
@@ -23,6 +24,7 @@ import argparse
 import asyncio
 import ctypes
 import importlib
+import importlib.util
 import inspect
 import json
 import os
@@ -53,10 +55,19 @@ M_ARENA_MAX = -8
 ENTRY_RE = re.compile(r"^(engine(?:/[a-z0-9_]+)+)\.py:([a-z_][a-z0-9_]*)$")
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 GENERIC_ERROR = ("internal_plugin_error", "The plugin failed. Details are in its log.")
+# What a data migration's migrate_row(row) is given of each row (TD-28).
+MIGRATION_ROW_FIELDS = ("collection", "key", "ownerType", "value")
+MIGRATION_STEP_MAX = 9999
 
 
 class EntryError(Exception):
     pass
+
+
+class MigrationError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 class RequestError(Exception):
@@ -223,8 +234,10 @@ class Worker:
         self.proto = proto
         self.gateway_url = gateway_url
         self.tasks: dict = {}
-        from redamon_plugin_sdk import Context, GatewayTransport, PluginError, Sdk
+        self._migrations: dict = {}
+        from redamon_plugin_sdk import DELETE, Context, GatewayTransport, PluginError, Sdk
         self._sdk = (Context, GatewayTransport, PluginError, Sdk)
+        self._delete = DELETE
 
     # -- answers ---------------------------------------------------------------
 
@@ -314,6 +327,52 @@ class Worker:
             return self._error(rid, *GENERIC_ERROR)
         self._result(rid, result)
 
+    # -- data migrations -------------------------------------------------------
+
+    def migration(self, step: int, direction: str):
+        """migrate_row of migrations/NNNN_<direction>.py, loaded once."""
+        key = (step, direction)
+        if key in self._migrations:
+            return self._migrations[key]
+        name = f"{step:04d}_{direction}.py"
+        base = os.path.realpath(os.path.join(self.root, "migrations"))
+        path = os.path.realpath(os.path.join(base, name))
+        if not base.startswith(self.root + os.sep) or not path.startswith(base + os.sep) or not os.path.isfile(path):
+            raise MigrationError("migration_missing", f"The plugin has no migrations/{name}.")
+        spec = importlib.util.spec_from_file_location(f"_redamon_migration_{step:04d}_{direction}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fn = getattr(module, "migrate_row", None)
+        if not callable(fn) or inspect.iscoroutinefunction(fn):
+            raise MigrationError("invalid_migration", f"migrations/{name} must define a plain function migrate_row(row).")
+        self._migrations[key] = fn
+        return fn
+
+    def migrate(self, rid: str, msg: dict) -> None:
+        """Runs one batch through migrate_row; any failure fails the whole batch."""
+        step, direction, rows = msg.get("step"), msg.get("direction"), msg.get("rows")
+        if (not isinstance(step, int) or isinstance(step, bool) or not 2 <= step <= MIGRATION_STEP_MAX
+                or direction not in ("up", "down") or not isinstance(rows, list)):
+            return self._error(rid, "bad_request", "A migration needs a step (2-9999), a direction (up or down) and rows.")
+        try:
+            fn = self.migration(step, direction)
+        except MigrationError as e:
+            return self._error(rid, e.code, str(e))
+        except Exception:
+            traceback.print_exc()
+            return self._error(rid, "invalid_migration", "The migration could not be loaded. Details are in its log.")
+        results = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                return self._error(rid, "bad_request", "Every row needs an id.")
+            try:
+                out = fn({k: row.get(k) for k in MIGRATION_ROW_FIELDS})
+            except Exception as e:
+                traceback.print_exc()
+                return self._error(rid, "migration_failed", f"migrate_row raised {type(e).__name__} on row {row['id']}.")
+            results.append({"id": row["id"], "delete": True} if out is self._delete else {"id": row["id"], "value": out})
+        self._result(rid, {"results": results})
+
     async def serve(self, req_fd: int) -> None:
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=EXECUTOR_THREADS,
@@ -346,6 +405,13 @@ class Worker:
                 task = self.tasks.get(rid)
                 if task is not None:
                     task.cancel()
+                continue
+            if kind == "migrate":
+                # Only a temporary migration worker is sent these; nothing else runs in it.
+                if not isinstance(rid, str) or not rid:
+                    self._error(None, "bad_request", "A migrate needs a request id.")
+                else:
+                    self.migrate(rid, msg)
                 continue
             if kind != "invoke":
                 self._error(rid if isinstance(rid, str) else None, "bad_request", "Unknown request type.")

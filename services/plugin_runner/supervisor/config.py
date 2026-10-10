@@ -53,6 +53,8 @@ class Settings:
     # How long a new worker may take to say `ready`; generous for a loaded host.
     ready_timeout: float = 30.0
     log_lines: int = 1000
+    # One batch of a data migration (at most MIGRATE_ROWS_MAX rows) in its temporary worker.
+    migrate_timeout: float = 120.0
 
     @property
     def configured(self) -> bool:

@@ -8,6 +8,7 @@
  *   POST /runner/v1/reload
  *   POST /runner/v1/plugins/{id}/actions/{action}      sync 200 | async 202 {jobId, bootId}
  *   POST /runner/v1/plugins/{id}/jobs/{jobId}/cancel     200 | 404 unknown_job
+ *   POST /runner/v1/plugins/{id}/migrate                 {version, step, direction, rows} -> {results}
  *   GET  /runner/v1/plugins/{id}/logs?lines=N
  *
  * Every route requires `X-Plugin-Runner-Key`; no key configured → 503
@@ -39,6 +40,12 @@ export interface ActionCall {
   body: Record<string, unknown>
 }
 
+/** Returned by a migration script to delete the row (the SDK's DELETE). */
+export const FAKE_DELETE = Symbol('DELETE')
+
+/** A plugin's `migrate_row(row)`; throwing fails the batch as the real worker does. */
+export type MigrationScript = (row: { collection: string; key: string; ownerType: string; value: unknown }) => unknown
+
 /** The scripted outcome of one action call; `result` is wrapped as `{ok: true, result}`. */
 export type ActionScript = (call: ActionCall) => FakeResponse | { result: unknown } | Promise<FakeResponse | { result: unknown }>
 
@@ -63,6 +70,12 @@ export interface FakeRunnerOptions {
    * then: a test sets here the workers (and their state) the reload leaves running.
    */
   onReload?: (options: FakeRunnerOptions) => void | Promise<void>
+  /** Keyed `${pluginId}/${NNNN}_${up|down}`, like the files under migrations/. */
+  migrations?: Record<string, MigrationScript>
+  /** The versions on the volume per plugin (default: `versions`, else 1.0.0). */
+  diskVersions?: Record<string, string[]> | ((pluginId: string) => string[])
+  /** Answers a migrate call instead of the scripts (a timeout, an outage). */
+  migrateHook?: (call: { pluginId: string; body: Record<string, unknown> }) => FakeResponse | undefined | Promise<FakeResponse | undefined>
 }
 
 export interface FakeRunner {
@@ -71,6 +84,7 @@ export interface FakeRunner {
   options: Required<Pick<FakeRunnerOptions, 'platformVersion' | 'bootId' | 'state'>> & FakeRunnerOptions
   reloads: number
   actionCalls: ActionCall[]
+  migrateCalls: Array<{ pluginId: string; body: Record<string, unknown> }>
   /** Accepted cancels: of jobs whose script was still running. */
   cancels: Array<{ pluginId: string; jobId: string }>
   /** Calls refused for a missing or wrong key. */
@@ -119,6 +133,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
   const record = {
     reloads: 0,
     actionCalls: [] as ActionCall[],
+    migrateCalls: [] as Array<{ pluginId: string; body: Record<string, unknown> }>,
     cancels: [] as Array<{ pluginId: string; jobId: string }>,
     refused: [] as FakeRequest[],
   }
@@ -179,6 +194,18 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
       const out = await script(call)
       return 'result' in out ? json(200, { ok: true, result: out.result }) : out
     }
+    m = /^\/runner\/v1\/plugins\/([^/]+)\/migrate$/.exec(p)
+    if (req.method === 'POST' && m) {
+      const pluginId = decodeURIComponent(m[1])
+      let body: Record<string, unknown>
+      try {
+        body = JSON.parse(req.body.toString('utf8') || '{}')
+      } catch {
+        return json(400, { error: 'The body is not JSON.', code: 'bad_request' })
+      }
+      record.migrateCalls.push({ pluginId, body })
+      return migrate(pluginId, body)
+    }
     m = /^\/runner\/v1\/plugins\/([^/]+)\/jobs\/([^/]+)\/cancel$/.exec(p)
     if (req.method === 'POST' && m) {
       const [pluginId, jobId] = [decodeURIComponent(m[1]), decodeURIComponent(m[2])]
@@ -195,6 +222,61 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
       return json(200, { lines: lines.slice(-n) })
     }
     return json(404, { error: 'Not found.', code: 'not_found' })
+  }
+
+  // The supervisor's migrate route (supervisor/migrate.py): its checks in its order.
+  const migrate = async (pluginId: string, body: Record<string, unknown>): Promise<FakeResponse> => {
+    const bad = (error: string) => json(400, { error, code: 'bad_request' })
+    if ('token' in body) return bad('A migration takes no call token: migration code has no Gateway access.')
+    const { version, step, direction, rows } = body as { version: unknown; step: unknown; direction: unknown; rows: unknown }
+    if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) return bad('version must be a version x.y.z.')
+    if (typeof step !== 'number' || !Number.isInteger(step) || step < 2 || step > 9999) return bad('step must be a whole number from 2 to 9999.')
+    if (direction !== 'up' && direction !== 'down') return bad('direction must be "up" or "down".')
+    if (!Array.isArray(rows) || rows.length > 1000) return bad('rows must be a list of at most 1000 rows.')
+    for (const r of rows as Record<string, unknown>[]) {
+      const ok = r && typeof r === 'object' && typeof r.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(r.id) &&
+        typeof r.collection === 'string' && typeof r.key === 'string' && (r.ownerType === 'user' || r.ownerType === 'project') && 'value' in r
+      if (!ok) return bad('Every row needs id, collection, key, ownerType (user or project) and value.')
+    }
+    const disk = typeof options.diskVersions === 'function'
+      ? options.diskVersions(pluginId)
+      : options.diskVersions?.[pluginId] ?? options.versions?.[pluginId] ?? ['1.0.0']
+    if (!/^[a-z][a-z0-9-]{1,39}$/.test(pluginId) || !disk.includes(version)) {
+      return json(404, { error: `Plugin ${pluginId} ${version} is not on the volume.`, code: 'unknown_version' })
+    }
+    if (options.state === 'out_of_date') {
+      return json(503, { error: 'The plugin runner is out of date for this RedAmon version; rebuild it.', code: 'runner_out_of_date' })
+    }
+    const hooked = await options.migrateHook?.({ pluginId, body })
+    if (hooked) return hooked
+    const name = `${String(step).padStart(4, '0')}_${direction}`
+    const script = options.migrations?.[`${pluginId}/${name}`]
+    if (!script) return json(422, { error: `The plugin has no migrations/${name}.py.`, code: 'migration_missing' })
+    const results: unknown[] = []
+    for (const r of rows as Array<{ id: string; collection: string; key: string; ownerType: string; value: unknown }>) {
+      let out: unknown
+      try {
+        out = script({ collection: r.collection, key: r.key, ownerType: r.ownerType, value: structuredClone(r.value) })
+      } catch (e) {
+        return json(422, { error: `migrate_row raised ${(e as Error).name} on row ${r.id}.`, code: 'migration_failed' })
+      }
+      // Python has no undefined: a migrate_row that returns nothing returns None, a JSON null.
+      results.push(out === FAKE_DELETE ? { id: r.id, delete: true } : { id: r.id, value: out === undefined ? null : out })
+    }
+    let text: string
+    try {
+      text = JSON.stringify({ results }, (_k, v) => {
+        if (typeof v === 'number' && !Number.isFinite(v)) throw new Error('not JSON')
+        if (typeof v === 'function' || typeof v === 'symbol' || typeof v === 'bigint') throw new Error('not JSON')
+        return v
+      })
+    } catch {
+      return json(422, { error: "The plugin's result cannot be sent as JSON.", code: 'invalid_result' })
+    }
+    if (Buffer.byteLength(text) > 2 * 1024 * 1024) {
+      return json(422, { error: "The plugin's result is too large.", code: 'result_too_large' })
+    }
+    return { status: 200, body: text, headers: { 'Content-Type': 'application/json' } }
   }
 
   const server = await startFakeServer({}, { fallback: handle })

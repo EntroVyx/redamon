@@ -19,7 +19,7 @@ const DEFAULT_RUNNER_URL = 'http://plugin-gateway:7072'
 const JOB_ID_RE = /^[A-Za-z0-9_-]{1,200}$/
 // A reload waits for new workers to say ready (up to 30 s), then stops and scrubs the
 // replaced ones.
-export const RUNNER_TIMEOUTS = { health: 3_000, reload: 90_000, small: 10_000 }
+export const RUNNER_TIMEOUTS = { health: 3_000, reload: 90_000, small: 10_000, migrate: 150_000 }
 // The plugin-gateway proxy's own answers (gateway_proxy/proxy.py): the runner behind it was
 // not reached, so they are not the runner's errors.
 const PROXY_UNAVAILABLE: Record<string, UnavailableReason> = {
@@ -216,6 +216,50 @@ export async function cancelJob(pluginId: string, jobId: string, config: RunnerC
     if (e instanceof RunnerError && e.status === 404 && e.code === 'unknown_job') return false
     throw e
   }
+}
+
+export interface MigrationRow {
+  /** The data row's id: how the answer is matched back to it. */
+  id: string
+  collection: string
+  key: string
+  ownerType: 'user' | 'project'
+  value: unknown
+}
+
+export type MigrationAnswer = { id: string; value: unknown } | { id: string; delete: true }
+
+export interface MigrationRequest {
+  version: string
+  step: number
+  direction: 'up' | 'down'
+  rows: MigrationRow[]
+}
+
+const VERSION_RE = /^\d+\.\d+\.\d+$/
+
+/**
+ * One batch of a data migration (TD-28): the rows through the plugin's `migrate_row` of
+ * `step` in a temporary worker of `version`. The request carries no call token. A batch
+ * that fails is a RunnerError with the runner's code (`migration_failed`,
+ * `migration_missing`, `invalid_migration`, `invalid_result`, `result_too_large`,
+ * `migration_timeout`, `unknown_version`).
+ */
+export async function runMigration(
+  pluginId: string,
+  req: MigrationRequest,
+  config: RunnerConfig = runnerConfig(),
+): Promise<MigrationAnswer[]> {
+  const path = `/runner/v1/plugins/${segment(pluginId, PLUGIN_ID_RE, 'plugin id')}/migrate`
+  if (typeof req.version !== 'string' || !VERSION_RE.test(req.version)) throw new TypeError(`invalid version ${JSON.stringify(req.version)}`)
+  if (!Number.isInteger(req.step) || req.step < 2 || req.step > 9999) throw new TypeError(`invalid migration step ${req.step}`)
+  if (req.direction !== 'up' && req.direction !== 'down') throw new TypeError(`invalid direction ${JSON.stringify(req.direction)}`)
+  const body = { version: req.version, step: req.step, direction: req.direction, rows: req.rows }
+  const out = await call(config, 'POST', path, config.timeouts?.migrate ?? RUNNER_TIMEOUTS.migrate, body)
+  if (!Array.isArray(out.body.results)) {
+    throw new RunnerUnavailableError('The plugin runner answered a migration without results.', 'bad_response')
+  }
+  return out.body.results as MigrationAnswer[]
 }
 
 export async function pluginLogs(pluginId: string, lines: number, config: RunnerConfig = runnerConfig()): Promise<string[]> {

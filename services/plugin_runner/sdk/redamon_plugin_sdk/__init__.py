@@ -13,4 +13,18 @@ from .errors import PluginError
 # services/plugin_runner/platform_version.py (tests/test_sdk_contract.py).
 PLATFORM_VERSION = "1.0.0"
 
-__all__ = ["Context", "GatewayTransport", "PLATFORM_VERSION", "PluginError", "Sdk"]
+
+class _Delete:
+    """The type of DELETE; there is one instance."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "DELETE"
+
+
+# What a data migration's `migrate_row(row)` returns to delete the row it was given
+# (migrations/NNNN_up.py or NNNN_down.py; TD-28). The runner compares by identity.
+DELETE = _Delete()
+
+__all__ = ["Context", "DELETE", "GatewayTransport", "PLATFORM_VERSION", "PluginError", "Sdk"]
