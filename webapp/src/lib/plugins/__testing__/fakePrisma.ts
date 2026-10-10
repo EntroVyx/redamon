@@ -17,7 +17,8 @@
  * - `$transaction(fn)` rolls back only its own writes when `fn` throws, and
  *   `SELECT pg_advisory_xact_lock(hashtext(<key>))` through `$executeRaw` takes a real
  *   (async) lock held until the transaction ends, so two interleaved transactions
- *   serialize exactly where Postgres would and nowhere else;
+ *   serialize exactly where Postgres would and nowhere else; the only other raw
+ *   statement is the purge's removal of a `feature_models` key;
  * - `@default(cuid())`, `@default(now())` and `@updatedAt` are applied, with the
  *   platform clock.
  *
@@ -476,6 +477,21 @@ export function createFakePrisma(): FakePrisma {
         // Outside a transaction the lock would end with its own statement.
         if (ctx.locks) ctx.locks.push(await mutex.acquire(String(values[0])))
         return 1
+      }
+      // The purge's removal of one plugin's model choice from every user (TD-10).
+      if (sql === 'UPDATE "user_settings" SET "feature_models" = "feature_models" - ? WHERE jsonb_exists("feature_models", ?)') {
+        const key = String(values[0])
+        let count = 0
+        for (const row of [...tables.userSettings.values()]) {
+          const fm = row.featureModels
+          if (!fm || typeof fm !== 'object' || Array.isArray(fm) || !Object.hasOwn(fm, key)) continue
+          const next = clone(row)
+          delete (next.featureModels as Row)[key]
+          next.updatedAt = now()
+          write(ctx, 'userSettings', row.id, next)
+          count++
+        }
+        return count
       }
       throw new Error(`fakePrisma: raw SQL not supported: ${sql}`)
     }

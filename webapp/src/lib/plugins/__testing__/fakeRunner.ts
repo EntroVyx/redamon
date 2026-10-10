@@ -29,6 +29,8 @@ export interface FakeWorker {
   inFlight: number
   startedAt: string
   restarts: number
+  /** As the supervisor's describe(): starting, ready, failed, restarting, stopping, stopped. */
+  state?: string
 }
 
 export interface ActionCall {
@@ -56,6 +58,11 @@ export interface FakeRunnerOptions {
   logs?: Record<string, string[]>
   /** The versions running per plugin id; a plugin not listed runs 1.0.0. */
   versions?: Record<string, string[]>
+  /**
+   * Called on each reload before it answers, as the supervisor converges on the run list
+   * then: a test sets here the workers (and their state) the reload leaves running.
+   */
+  onReload?: (options: FakeRunnerOptions) => void | Promise<void>
 }
 
 export interface FakeRunner {
@@ -131,6 +138,7 @@ export async function startFakeRunner(opts: FakeRunnerOptions = {}): Promise<Fak
     }
     if (req.method === 'POST' && p === '/runner/v1/reload') {
       record.reloads++
+      await options.onReload?.(options)
       return json(200, { ok: options.state === 'ok', state: options.state, workers: (options.workers ?? []).length })
     }
     let m = /^\/runner\/v1\/plugins\/([^/]+)\/actions\/([^/]+)$/.exec(p)
