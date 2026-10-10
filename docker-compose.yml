@@ -583,6 +583,9 @@ services:
       # Wired HERE because recon-orchestrator has NO env_file: a value set only
       # in .env is silently inert (the documented 6.2.7 class of bug).
       MCP_TOKEN_PRUNE_INTERVAL: ${MCP_TOKEN_PRUNE_INTERVAL:-86400}
+      # Plugin reconciliation tick (TD-20): skipped entirely unless the platform is on.
+      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}
+      PLUGIN_RECONCILE_INTERVAL: ${PLUGIN_RECONCILE_INTERVAL:-300}
       # D3: global + per-user concurrent-scan ceilings enforced at admission.
       # SAFE, GENEROUS DEFAULTS so unset resolves to a real limit (never "no cap").
       RECON_MAX_CONCURRENT_GLOBAL: ${RECON_MAX_CONCURRENT_GLOBAL:-30}

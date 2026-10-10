@@ -1,5 +1,6 @@
 import { Prisma, type PluginInstall, type PluginOverride } from '@prisma/client'
 import prisma from '@/lib/prisma'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { compareVersions, isValidVersion, parseVersion, satisfies } from '@/lib/semver'
@@ -116,7 +117,7 @@ function busyOrNotInstalled(row: PluginInstall | null, pluginId: string): Lifecy
 }
 
 /** The plugin's own data rows (not the platform's `__` rows) that a reinstall would find. */
-async function hasKeptData(pluginId: string): Promise<boolean> {
+export async function hasKeptData(pluginId: string): Promise<boolean> {
   const row = await prisma.pluginData.findFirst({
     where: { pluginId, namespace: 'live', NOT: { collection: { startsWith: likePrefix('__') } } },
     select: { id: true },
@@ -181,7 +182,7 @@ async function settleWorker(pluginId: string, version: string): Promise<PluginIn
   return (await findInstall(pluginId))!
 }
 
-const entryOf = (r: CatalogRelease) => ({
+export const entryOf = (r: CatalogRelease) => ({
   version: r.version,
   url: r.url,
   sha256: r.sha256,
@@ -191,7 +192,7 @@ const entryOf = (r: CatalogRelease) => ({
 })
 
 /** The pinned entry without its own `previous`: one level of history is enough to heal. */
-function withoutPrevious(entry: Prisma.JsonValue | null): Record<string, unknown> | null {
+export function withoutPrevious(entry: Prisma.JsonValue | null): Record<string, unknown> | null {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
   const rest = { ...(entry as Record<string, unknown>) }
   delete rest.previous
@@ -204,7 +205,7 @@ const LEASE_CLEARED = { operationId: null, operationKind: null, operationArgs: P
  * The write that ends an operation as `ready`, for use inside a transaction: the data
  * swap of a migration and the switch of version commit together, or neither does.
  */
-function commitIn(op: Operation, from: PluginStatus, patch: Prisma.PluginInstallUpdateManyMutationInput) {
+export function commitIn(op: Operation, from: PluginStatus, patch: Prisma.PluginInstallUpdateManyMutationInput) {
   return async (tx: Prisma.TransactionClient) => {
     const { count } = await tx.pluginInstall.updateMany({
       where: { pluginId: op.pluginId, status: from, operationId: op.operationId },
@@ -215,7 +216,7 @@ function commitIn(op: Operation, from: PluginStatus, patch: Prisma.PluginInstall
 }
 
 /** A version's manifest as it is on the volume, checked again (rollback has no other copy). */
-async function manifestOnDisk(pluginId: string, version: string): Promise<PluginManifest | null> {
+export async function manifestOnDisk(pluginId: string, version: string): Promise<PluginManifest | null> {
   try {
     const raw = JSON.parse(await fs.readFile(path.join(versionPath(pluginId, version), 'plugin.json'), 'utf8'))
     const parsed = parseManifest(raw)
@@ -625,6 +626,8 @@ export async function update(
       from: active,
       fromDataVersion: before.dataVersion,
       by: actorId,
+      // What reconciliation needs to finish the update if this request dies after the rename.
+      release: entryOf(release),
     })
     await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: release.version } })
   } catch (e) {
@@ -878,7 +881,7 @@ export async function stripFeatureModelKey(db: Pick<Prisma.TransactionClient, '$
   return db.$executeRaw`UPDATE "user_settings" SET "feature_models" = "feature_models" - ${key} WHERE jsonb_exists("feature_models", ${key})`
 }
 
-async function purgeRows(tx: Prisma.TransactionClient, op: Operation) {
+export async function purgeRows(tx: Prisma.TransactionClient, op: Operation) {
   const pluginId = op.pluginId
   const data = await tx.pluginData.deleteMany({ where: { pluginId } })
   const overrides = await tx.pluginOverride.deleteMany({ where: { pluginId } })
@@ -957,4 +960,52 @@ export async function uninstall(
     }
     throw e
   }
+}
+
+// ---------------------------------------------------------------------------
+// Offline install
+// ---------------------------------------------------------------------------
+
+export interface OfflineInput {
+  archive: Buffer
+  catalog: Buffer
+  signature: Buffer
+  acceptedPermissions: string[]
+  restoreOverrides?: boolean
+}
+
+/**
+ * An archive uploaded with a catalog and signature that cover it (§9.7), through exactly
+ * the checks of a download: the uploaded catalog is verified (keyring, serial, expiry) and
+ * must pin this archive's sha256; then the normal install, or the update of an installed
+ * plugin, runs with that catalog and these bytes.
+ */
+export async function offlineInstall(input: OfflineInput, actorId: string, deps?: LifecycleDeps): Promise<{ plugin: InstallView }> {
+  let loaded: LoadedCatalog
+  try {
+    loaded = await loadCatalog({ source: 'upload', bytes: input.catalog, sigBytes: input.signature })
+  } catch (e) {
+    if (e instanceof CatalogError) {
+      throw new LifecycleError(422, 'catalog_invalid', `The uploaded catalog cannot be used: ${e.message}`, [e.code])
+    }
+    throw e
+  }
+  const sha = createHash('sha256').update(input.archive).digest('hex')
+  const hit = loaded.catalog.plugins
+    .flatMap((p) => p.releases.map((r) => ({ pluginId: p.id, release: r })))
+    .find((x) => x.release.sha256 === sha)
+  if (!hit) {
+    throw new LifecycleError(422, 'sha256_mismatch', `The catalog in use pins no release with this archive's SHA-256 (${sha}).`)
+  }
+  const d: LifecycleDeps = { ...deps, loadCatalog: async () => loaded, fetchArchive: async () => input.archive }
+  const row = await findInstall(hit.pluginId)
+  if (row && isInstalled(row.status)) {
+    return update(hit.pluginId, { version: hit.release.version, acceptedPermissions: input.acceptedPermissions }, actorId, d)
+  }
+  return install(
+    hit.pluginId,
+    { version: hit.release.version, acceptedPermissions: input.acceptedPermissions, restoreOverrides: input.restoreOverrides },
+    actorId,
+    d,
+  )
 }

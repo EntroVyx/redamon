@@ -13,6 +13,9 @@
 import { describe, test, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
 import { stripFeatureModelKey } from './lifecycle'
+import { runMigrations } from './migrations'
+import { createForInstall } from './registry'
+import type { MigrationAnswer, MigrationRequest } from './runnerClient'
 
 const URL = process.env.PLUGINS_PG_TEST_URL
 const MARKER = 'plugins_pg_integration_test_marker'
@@ -53,6 +56,65 @@ describe.skipIf(!URL)('lifecycle on a real Postgres (PLUGINS_PG_TEST_URL)', () =
       ['carol', {}],
     ])
     expect(await stripFeatureModelKey(db, 'echo')).toBe(0)
+  })
+
+  describe('a data migration (TD-28)', () => {
+    async function world(perOwner: number) {
+      await db.project.create({ data: { id: 'p1', userId: 'alice', name: 'p1' } })
+      const op = await createForInstall('echo', undefined, db)
+      const rows = []
+      for (const [ownerType, ownerId] of [['user', 'alice'], ['user', 'bob'], ['project', 'p1']] as const) {
+        for (let i = 0; i < perOwner; i++) {
+          rows.push({
+            pluginId: 'echo', ownerType, ownerId, userId: ownerType === 'user' ? ownerId : null,
+            projectId: ownerType === 'project' ? ownerId : null, collection: 'items', key: `k${i}`, value: { i }, sizeBytes: 7,
+          })
+        }
+      }
+      await db.pluginData.createMany({ data: rows })
+      await db.pluginData.create({
+        data: { pluginId: 'echo', ownerType: 'user', ownerId: 'alice', userId: 'alice', collection: '__jobs', key: 'j', value: { s: 1 }, sizeBytes: 7 },
+      })
+      return op
+    }
+    const wrap = async (_p: string, req: MigrationRequest): Promise<MigrationAnswer[]> =>
+      req.rows.map((r) => ((r.value as { i: number }).i === 3
+        ? { id: r.id, delete: true as const }
+        : { id: r.id, value: { v: 2, data: r.value } }))
+
+    test('every row of every owner migrated, platform rows untouched, data version committed with the swap', async () => {
+      const op = await world(300)
+      const stats = await runMigrations(
+        { operation: op, version: '1.1.0', from: 1, to: 2 },
+        async (tx) => {
+          await tx.pluginInstall.update({ where: { pluginId: 'echo' }, data: { dataVersion: 2 } })
+        },
+        { migrate: wrap },
+        db,
+      )
+      expect(stats).toMatchObject({ steps: 1, rows: 900, deleted: 3 })
+      const live = await db.pluginData.findMany({ where: { pluginId: 'echo', namespace: 'live', collection: 'items' } })
+      expect(live).toHaveLength(897)
+      expect(live.every((r) => (r.value as { v: number }).v === 2)).toBe(true)
+      expect(live.every((r) => r.sizeBytes === Buffer.byteLength(JSON.stringify(r.value)))).toBe(true)
+      expect(await db.pluginData.count({ where: { namespace: { startsWith: 'migrating:' } } })).toBe(0)
+      const job = await db.pluginData.findFirst({ where: { collection: '__jobs' } })
+      expect(job?.value).toEqual({ s: 1 })
+      expect((await db.pluginInstall.findUnique({ where: { pluginId: 'echo' } }))?.dataVersion).toBe(2)
+    }, 60_000)
+
+    test('a failing commit swaps nothing and discards the copy', async () => {
+      const op = await world(50)
+      await expect(
+        runMigrations({ operation: op, version: '1.1.0', from: 1, to: 2 }, async () => {
+          throw new Error('lease lost')
+        }, { migrate: wrap }, db),
+      ).rejects.toThrow()
+      const live = await db.pluginData.findMany({ where: { pluginId: 'echo', namespace: 'live', collection: 'items' } })
+      expect(live).toHaveLength(150)
+      expect(live.every((r) => !('v' in (r.value as object)))).toBe(true)
+      expect(await db.pluginData.count({ where: { namespace: { startsWith: 'migrating:' } } })).toBe(0)
+    }, 60_000)
   })
 
   test('deleting the install row cascades to its data and overrides only', async () => {
