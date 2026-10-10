@@ -233,10 +233,13 @@ describe('jobs/complete and jobs/progress', () => {
     expect((await answer(await jobProgress(gatewayRequest('jobs/progress', progress, { token: tokenOf() })))).status).toBe(400)
   })
 
-  test('progress after the end is ignored', async () => {
+  test('progress after the end is refused: the job token ended with its job', async () => {
     const { body } = await start()
     await jobComplete(gatewayRequest('jobs/complete', { status: 'succeeded', result: {} }, { token: tokenOf() }))
-    expect((await answer(await jobProgress(gatewayRequest('jobs/progress', { message: 'late' }, { token: tokenOf() })))).body).toEqual({ ok: true, ignored: true })
+    expect(await answer(await jobProgress(gatewayRequest('jobs/progress', { message: 'late' }, { token: tokenOf() })))).toMatchObject({
+      status: 403,
+      body: { code: 'job_ended' },
+    })
     expect((await read(body.jobId as string)).body.progress).toBeNull()
   })
 

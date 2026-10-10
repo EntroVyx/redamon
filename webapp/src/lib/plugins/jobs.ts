@@ -3,20 +3,28 @@ import { Prisma, type PluginData } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { now } from './clock'
 import { runnerHealth } from './runnerClient'
+import { isStorableJson, storableText } from './storableText'
 
 /**
  * Async plugin actions as jobs (README.PLUGINS.md §7.7, TD-22). A job is a reserved
  * PluginData row (`__jobs`, keyed by its id, owned by the user who started it, kept 30
  * days), so any webapp copy can serve the poll and nothing lives in memory.
  *
- * - One active job per (plugin, action, user, session): the job row is written first, then
- *   a lock row (`__jobs_active`, key `<actionId>:<sessionId|->`) with a plain insert that
- *   fails on the table's unique index when a job is already active. The loser deletes its
- *   own job row and answers the winner's, which already exists. A lock whose job ended,
- *   vanished or expired is replaced.
+ * - One active job per (plugin, action, user, project, session): the job row is written
+ *   first, then a lock row (`__jobs_active`, key `<actionId>:<projectId|->:<sessionId|->`)
+ *   with a plain insert that fails on the table's unique index when a job is already
+ *   active. The loser deletes its own job row and answers the winner's, which already
+ *   exists. A lock whose job ended, vanished or expired is replaced. The project is part of
+ *   the key because without a session the same action in another project is another job.
  * - Every status change is a compare-and-swap on the stored status (a JSON path filter), so
  *   a result arriving after a cancel, or twice, changes nothing: a terminal job stays as
  *   it is. Ending a job deletes its lock.
+ * - Only the user cancels a job: the cancel route marks the row first, then asks the
+ *   runner. A `cancelled` report for a job still active therefore comes from plugin code,
+ *   which holds the job's token too, and is recorded as `failed`.
+ * - A result Postgres cannot store (U+0000, an unpaired surrogate) ends the job as
+ *   `failed: invalid_result` instead of failing the report, which would leave the job
+ *   running until its deadline.
  * - A running job past its deadline, or taken by a runner whose boot id has since changed,
  *   reads as failed (`timeout`, `runner_restarted`) instead of waiting (RV-23).
  */
@@ -108,6 +116,8 @@ const owner = (pluginId: string, userId: string) => ({
 function jobWhere(pluginId: string | null, userId: string, jobId: string): Prisma.PluginDataWhereInput {
   return {
     ...(pluginId ? { pluginId } : {}),
+    // Indexed: without the plugin id the unique index cannot serve a poll.
+    userId,
     namespace: 'live',
     ownerType: 'user',
     ownerId: userId,
@@ -116,7 +126,7 @@ function jobWhere(pluginId: string | null, userId: string, jobId: string): Prism
   }
 }
 
-const lockKey = (actionId: string, sessionId: string | null) => `${actionId}:${sessionId ?? '-'}`
+const lockKey = (actionId: string, context: JobContext) => `${actionId}:${context.projectId ?? '-'}:${context.sessionId ?? '-'}`
 
 async function readJobRow(pluginId: string | null, userId: string, jobId: string): Promise<PluginData | null> {
   if (!isJobId(jobId)) return null
@@ -128,7 +138,7 @@ async function releaseLock(job: Job) {
     where: {
       ...owner(job.pluginId, job.userId),
       collection: JOB_LOCKS_COLLECTION,
-      key: lockKey(job.actionId, job.context.sessionId),
+      key: lockKey(job.actionId, job.context),
       value: { path: ['jobId'], equals: job.jobId },
     },
   })
@@ -200,7 +210,7 @@ export async function startJob(input: StartJobInput): Promise<{ job: Job; create
         expiresAt: new Date(at.getTime() + JOB_TTL_MS),
       },
     })
-    const key = lockKey(input.actionId, input.context.sessionId)
+    const key = lockKey(input.actionId, input.context)
     try {
       await prisma.pluginData.create({
         data: { ...base, collection: JOB_LOCKS_COLLECTION, key, value: { jobId }, sizeBytes: 50, expiresAt: input.deadline },
@@ -245,6 +255,12 @@ export async function cancelJobRow(job: Job): Promise<{ job: Job; changed: boole
   const row = await readJobRow(job.pluginId, job.userId, job.jobId)
   if (!row) return { job, changed: false }
   return transition(row, ACTIVE, () => ({ status: 'cancelled', error: { code: 'cancelled', message: 'Cancelled by the user.' } }))
+}
+
+/** Whether a job token's job is still queued or running: the Gateway refuses its token after. */
+export async function jobIsActive(pluginId: string, userId: string, jobId: string): Promise<boolean> {
+  const row = await readJobRow(pluginId, userId, jobId)
+  return !!row && !isTerminal(toJob(row).status)
 }
 
 /** The job a user owns, of any plugin, or null. */
@@ -303,7 +319,7 @@ function checkedError(raw: unknown): JobError {
   if (!e || typeof e !== 'object' || typeof e.code !== 'string' || !e.code || typeof e.message !== 'string') {
     throw new JobReportError('invalid_report', 'error must be {code, message}')
   }
-  return { code: e.code.slice(0, ERROR_CODE_MAX), message: e.message.slice(0, ERROR_MESSAGE_MAX) }
+  return { code: storableText(e.code.slice(0, ERROR_CODE_MAX)), message: storableText(e.message.slice(0, ERROR_MESSAGE_MAX)) }
 }
 
 export interface CompleteReport {
@@ -329,22 +345,31 @@ export function checkedReport(body: Record<string, unknown>): CompleteReport {
   throw new JobReportError('invalid_report', 'status is succeeded, failed or cancelled')
 }
 
-/** Ends a job with what its worker reported. A job already over is left as it is. */
+/**
+ * Ends a job with what its worker reported. A job already over is left as it is. `lapsed`
+ * says why the job's result may no longer be kept (its plugin stopped serving, or its
+ * project or session is gone): the job then fails with it, and the result is dropped.
+ */
 export async function completeJob(
   pluginId: string,
   userId: string,
   jobId: string,
   report: CompleteReport,
+  opts: { lapsed?: JobError | null } = {},
 ): Promise<{ found: boolean; changed: boolean; job: Job | null }> {
   const row = await readJobRow(pluginId, userId, jobId)
   if (!row) return { found: false, changed: false, job: null }
   let patch: Partial<JobValue>
-  if (report.status === 'succeeded' && jsonBytes(report.result) > JOB_RESULT_MAX_BYTES) {
+  if (opts.lapsed) {
+    patch = { status: 'failed', error: opts.lapsed }
+  } else if (report.status === 'succeeded' && !isStorableJson(report.result)) {
+    patch = { status: 'failed', error: { code: 'invalid_result', message: 'The result holds text that cannot be stored (U+0000 or an unpaired surrogate).' } }
+  } else if (report.status === 'succeeded' && jsonBytes(report.result) > JOB_RESULT_MAX_BYTES) {
     patch = { status: 'failed', error: { code: 'result_too_large', message: `A job result is limited to ${JOB_RESULT_MAX_BYTES} bytes of JSON.` } }
   } else if (report.status === 'succeeded') {
     patch = { status: 'succeeded', result: report.result ?? {} }
   } else {
-    patch = { status: report.status, error: report.error ?? null }
+    patch = { status: 'failed', error: report.error ?? null }
   }
   const { job, changed } = await transition(row, ACTIVE, () => patch)
   return { found: true, changed, job }

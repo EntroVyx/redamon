@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { callFeatureAgent } from '@/lib/featureAgentCall'
 import { readFeatureModel } from '@/lib/featureModels'
 import { pluginFeatureId } from '@/lib/llmFeatures'
-import { GatewayError, gatewayError, withGateway, type GatewayContext } from '@/lib/plugins/gateway'
+import { GATEWAY_BODY_MAX_BYTES, GatewayError, gatewayError, withGateway, type GatewayContext } from '@/lib/plugins/gateway'
 import { chargeLlmCall, recordLlmUsage } from '@/lib/plugins/llmBudget'
 
 /**
@@ -111,5 +111,5 @@ async function invoke(ctx: GatewayContext) {
 }
 
 export function POST(request: NextRequest) {
-  return withGateway(request, { op: 'llm/invoke', permission: 'llm:invoke' }, invoke)
+  return withGateway(request, { op: 'llm/invoke', permission: 'llm:invoke', maxBodyBytes: GATEWAY_BODY_MAX_BYTES }, invoke)
 }

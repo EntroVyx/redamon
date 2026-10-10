@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import * as store from '@/lib/plugins/dataStore'
-import { GatewayError, dataOwner, withGateway } from '@/lib/plugins/gateway'
+import { GATEWAY_BODY_MAX_BYTES, GatewayError, dataOwner, withGateway } from '@/lib/plugins/gateway'
 
 /**
  * POST /api/plugin-gateway/v1/data/put (`sdk.data.put`): writes one value of the calling
@@ -10,7 +10,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export function POST(request: NextRequest) {
-  return withGateway(request, { op: 'data/put' }, async (ctx) => {
+  return withGateway(request, { op: 'data/put', maxBodyBytes: GATEWAY_BODY_MAX_BYTES }, async (ctx) => {
     const { collection, key, ttlSeconds } = ctx.body
     // A stored null is a value; a missing one is a malformed call.
     if (!('value' in ctx.body)) throw new GatewayError(400, 'invalid_value', 'value is required.')

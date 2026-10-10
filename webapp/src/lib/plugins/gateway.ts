@@ -5,11 +5,13 @@ import { isJsonContentType } from '@/lib/jsonBody'
 import { CallTokenConfigError, verifyCallToken, type CallTokenClaims, type CallTokenKind } from './callToken'
 import { now } from './clock'
 import { PluginDataError, type PluginOwner } from './dataStore'
+import { jobIsActive, type JobError } from './jobs'
 import { PluginOverrideError } from './overrides'
 import type { PluginPermission } from './permissions'
-import { hasPermission, servesActions } from './registry'
+import { hasPermission, servesActions, showsContributions } from './registry'
 import { gatewayCallsPerToken } from './settings'
 import { SkillPartsRegistryError } from './skillPartsRegistry'
+import { isStorableJson } from './storableText'
 import { pluginsDisabledResponse, pluginsEnabled } from './switch'
 
 /**
@@ -18,18 +20,32 @@ import { pluginsDisabledResponse, pluginsEnabled } from './switch'
  * call, because an admin may disable the plugin, revoke a permission or delete the user
  * while a 900 s action still holds a valid token.
  *
- * Per call: the switch; JSON only; the token; its call budget; the body (≤ 8 MB); the
- * install row (enabled, ready, not revoked, at the token's version); the permission,
- * granted by the admin AND declared by the stored manifest; the user; the project and
- * session, compared with the token's user directly. Strict on purpose: never through
- * requireProjectAccess, which only logs under ACCESS_ENFORCE=0 (RV-33). The frame never
- * reads cookies, the session, the effective user or X-Internal-Key: these routes are
- * cookie-less in middleware.ts and plugin code must not borrow a browser's identity.
+ * Per call: the switch; JSON only; the token; its call budget; for a job's token, the job
+ * still active (a token outlives neither its job nor, for a sync action, its action);
+ * the body (64 KB, up to 8 MB for the operations that carry data, bounded in depth and
+ * containers, its text storable); the install row (enabled, ready, not revoked, at the
+ * token's version); the permission, granted by the admin AND declared by the stored
+ * manifest; the user; the project and session, compared with the token's user directly.
+ * Strict on purpose: never through requireProjectAccess, which only logs under
+ * ACCESS_ENFORCE=0 (RV-33). The frame never reads cookies, the session, the effective
+ * user or X-Internal-Key: these routes are cookie-less in middleware.ts and plugin code
+ * must not borrow a browser's identity.
  *
  * The budget is counted right after the token is verified, before any database read, so
  * a plugin that floods the Gateway with refused calls exhausts its token, not Postgres.
  */
 export const GATEWAY_BODY_MAX_BYTES = 8 * 1024 * 1024
+/** The body limit of an operation that names a key, a query or a short report. */
+export const GATEWAY_SMALL_BODY_BYTES = 64 * 1024
+// A body is parsed on the webapp's one thread and held while the handler runs. An empty
+// container costs ~64 bytes of heap (8 MB of `{}` took 179 MB and 380 ms to parse), so
+// containers are counted before parsing, and nesting too: no operation needs it deep,
+// and JSON.stringify cannot write a value nested a few thousand levels back.
+const BODY_MAX_DEPTH = 64
+const BODY_MAX_CONTAINERS = 200_000
+// jobs/complete is outside the call budget, so a job that used its calls still ends; it
+// has this many reports of its own (the runner tries a report four times).
+const JOB_END_REPORTS = 10
 const DEFAULT_KINDS: readonly CallTokenKind[] = ['action', 'job']
 const NO_STORE = { 'Cache-Control': 'no-store' }
 const BUDGET_SWEEP_AT = 5_000
@@ -75,6 +91,8 @@ export interface GatewayContext {
   sessionId: string | null
   conversation: GatewayConversation | null
   body: Record<string, unknown>
+  /** jobs/complete only: why the job's result may no longer be kept, or null. */
+  lapsed?: JobError | null
 }
 
 export interface GatewayOptions {
@@ -85,8 +103,18 @@ export interface GatewayOptions {
    */
   permission?: PluginPermission | ((body: Record<string, unknown>) => PluginPermission | null)
   kinds?: readonly CallTokenKind[]
-  /** False only for jobs/complete: a job that used its calls must still report its result. */
-  budgeted?: boolean
+  /**
+   * The largest body the operation takes: GATEWAY_SMALL_BODY_BYTES unless it carries a
+   * value, messages for a model, a proposal or a job's result.
+   */
+  maxBodyBytes?: number
+  /**
+   * jobs/complete only: the report of a job's end. It has its own small allowance instead
+   * of the call budget. The plugin no longer serving, or the job's project or session gone,
+   * reaches the handler as `ctx.lapsed` rather than refusing the report, which would leave
+   * the job running until its deadline; text Postgres cannot store is the handler's too.
+   */
+  jobEnd?: boolean
 }
 
 type Handler = (ctx: GatewayContext) => Promise<Record<string, unknown> | NextResponse>
@@ -98,24 +126,70 @@ export function gatewayError(status: number, code: string, error: string, extra:
 // ---------------------------------------------------------------------------
 // Call budget, per token id, in this process's memory (RV-39). Several webapp copies
 // each count their own share; the bound is per copy, which is enough against a flood.
+// On globalThis, like the other in-process limiters (mcpAuth.ts, loginThrottle.ts), so a
+// dev reload or a route bundled with its own copy of this module cannot split the count.
 // ---------------------------------------------------------------------------
 
-const budgets = new Map<string, { count: number; expiresAt: number }>()
+interface CallLedger {
+  budgets: Map<string, { count: number; expiresAt: number }>
+  /** Tokens of sync actions that have returned, until they expire. */
+  retired: Map<string, number>
+}
+const globalForLedger = globalThis as unknown as { __pluginCallLedger?: CallLedger }
+const ledger: CallLedger = globalForLedger.__pluginCallLedger ?? { budgets: new Map(), retired: new Map() }
+globalForLedger.__pluginCallLedger = ledger
 
-function charge(claims: CallTokenClaims): number {
-  const t = now().getTime()
-  if (budgets.size >= BUDGET_SWEEP_AT) {
-    for (const [jti, b] of budgets) if (b.expiresAt <= t) budgets.delete(jti)
+function sweep(t: number) {
+  if (ledger.budgets.size >= BUDGET_SWEEP_AT) {
+    for (const [key, b] of ledger.budgets) if (b.expiresAt <= t) ledger.budgets.delete(key)
   }
-  const entry = budgets.get(claims.jti) ?? { count: 0, expiresAt: claims.exp * 1000 }
+  if (ledger.retired.size >= BUDGET_SWEEP_AT) {
+    for (const [jti, expiresAt] of ledger.retired) if (expiresAt <= t) ledger.retired.delete(jti)
+  }
+}
+
+function charge(key: string, claims: CallTokenClaims): number {
+  sweep(now().getTime())
+  const entry = ledger.budgets.get(key) ?? { count: 0, expiresAt: claims.exp * 1000 }
   entry.count += 1
-  budgets.set(claims.jti, entry)
+  ledger.budgets.set(key, entry)
   return entry.count
+}
+
+/**
+ * Ends a sync action's token when the action returns: plugin code that left a thread
+ * running must not go on calling the Gateway with it. Job tokens end with their job row.
+ */
+export function retireCallToken(jti: string, expiresAt: Date): void {
+  sweep(now().getTime())
+  ledger.retired.set(jti, expiresAt.getTime())
 }
 
 /** Tests only: how many tokens are being counted. */
 export function callBudgetEntries(): number {
-  return budgets.size
+  return ledger.budgets.size
+}
+
+/** Why a body is refused before it is parsed (too deep, too many containers), or null. */
+function bodyShapeError(text: string): string | null {
+  let depth = 0
+  let containers = 0
+  let inString = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (inString) {
+      if (c === 0x5c) i++
+      else if (c === 0x22) inString = false
+    } else if (c === 0x22) {
+      inString = true
+    } else if (c === 0x7b || c === 0x5b) {
+      if (++depth > BODY_MAX_DEPTH) return `The body is nested deeper than ${BODY_MAX_DEPTH} levels.`
+      if (++containers > BODY_MAX_CONTAINERS) return `The body holds more than ${BODY_MAX_CONTAINERS} objects and arrays.`
+    } else if (c === 0x7d || c === 0x5d) {
+      depth--
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -313,13 +387,28 @@ async function run(
   if (!claims) return gatewayError(401, 'invalid_token', 'Invalid or expired call token.')
   identify(claims.pid)
 
-  const limit = gatewayCallsPerToken()
-  if (opts.budgeted !== false && charge(claims) > limit) {
-    return gatewayError(429, 'call_budget_exceeded', `This call token has made its ${limit} calls.`)
+  if (ledger.retired.has(claims.jti)) {
+    return gatewayError(403, 'action_ended', 'The action this call token was issued for has ended.')
+  }
+  if (opts.jobEnd) {
+    if (charge(`${claims.jti}:end`, claims) > JOB_END_REPORTS) {
+      return gatewayError(429, 'call_budget_exceeded', `This job has reported its end ${JOB_END_REPORTS} times.`)
+    }
+  } else {
+    const limit = gatewayCallsPerToken()
+    if (charge(claims.jti, claims) > limit) {
+      return gatewayError(429, 'call_budget_exceeded', `This call token has made its ${limit} calls.`)
+    }
+    if (claims.kind === 'job' && !(await jobIsActive(claims.pid, claims.sub, claims.jid!))) {
+      return gatewayError(403, 'job_ended', 'The job this call token was issued for has ended.')
+    }
   }
 
-  const text = await readBounded(request, GATEWAY_BODY_MAX_BYTES)
-  if (text === null) return gatewayError(413, 'body_too_large', `The body is limited to ${GATEWAY_BODY_MAX_BYTES} bytes.`)
+  const maxBytes = opts.maxBodyBytes ?? GATEWAY_SMALL_BODY_BYTES
+  const text = await readBounded(request, maxBytes)
+  if (text === null) return gatewayError(413, 'body_too_large', `The body of ${opts.op} is limited to ${maxBytes} bytes.`, { limit: maxBytes })
+  const shapeError = bodyShapeError(text)
+  if (shapeError) return gatewayError(400, 'invalid_json', shapeError)
   let body: unknown
   try {
     body = JSON.parse(text)
@@ -329,14 +418,35 @@ async function run(
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return gatewayError(400, 'invalid_json', 'The body must be a JSON object.')
   }
+  if (!opts.jobEnd && !isStorableJson(body)) {
+    return gatewayError(400, 'invalid_text', 'The body holds text that cannot be stored: U+0000 or an unpaired surrogate.')
+  }
 
-  const plugin = await checkPlugin(claims)
+  let lapsed: JobError | null = null
+  let plugin: PluginInstall
+  if (opts.jobEnd) {
+    const row = await prisma.pluginInstall.findUnique({ where: { pluginId: claims.pid } })
+    if (!row) throw new GatewayError(404, 'not_found', 'No such job.')
+    plugin = row
+    // Still in service as a version that runs: an update keeps the active one running.
+    if (!showsContributions(row) || row.activeVersion !== claims.ver) {
+      lapsed = { code: 'plugin_unavailable', message: `Plugin ${claims.pid} ${claims.ver} stopped serving before the job ended.` }
+    }
+  } else {
+    plugin = await checkPlugin(claims)
+  }
   if (opts.permission) {
     const permission = typeof opts.permission === 'function' ? opts.permission(body as Record<string, unknown>) : opts.permission
     if (!permission) throw new GatewayError(400, 'invalid_target', `unknown extension point ${JSON.stringify((body as Record<string, unknown>).point)}`)
     checkPermission(plugin, permission)
   }
-  const conversation = await checkTenancy(claims)
+  let conversation: GatewayConversation | null = null
+  try {
+    conversation = await checkTenancy(claims)
+  } catch (e) {
+    if (!opts.jobEnd || !(e instanceof GatewayError) || e.code !== 'not_found') throw e
+    lapsed ??= { code: 'context_gone', message: 'The project or chat session this job ran for no longer exists.' }
+  }
 
   const out = await handler({
     op: opts.op,
@@ -351,6 +461,7 @@ async function run(
     sessionId: claims.ses ?? null,
     conversation,
     body: body as Record<string, unknown>,
+    lapsed,
   })
   if (out instanceof NextResponse) {
     out.headers.set('Cache-Control', 'no-store')

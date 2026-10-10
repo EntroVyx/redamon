@@ -51,6 +51,7 @@ describe.skipIf(!URL)('jobs and transcript paging on a real Postgres (PLUGINS_PG
     )
     await db().user.create({ data: { id: 'alice', name: 'Alice', email: 'alice@example.invalid' } })
     await db().project.create({ data: { id: 'p1', userId: 'alice', name: 'p1' } })
+    await db().project.create({ data: { id: 'p2', userId: 'alice', name: 'p2' } })
     await db().conversation.create({ data: { id: 'c1', sessionId: 's1', userId: 'alice', projectId: 'p1' } })
     await db().pluginInstall.create({ data: { pluginId: 'echo', status: 'ready', enabled: true } })
   })
@@ -76,6 +77,14 @@ describe.skipIf(!URL)('jobs and transcript paging on a real Postgres (PLUGINS_PG
       const next = await start()
       expect(next.created).toBe(true)
       expect(next.job.jobId).not.toBe(job.jobId)
+    })
+
+    test('without a session, the same action in two projects is two jobs', async () => {
+      const inProject = (projectId: string) =>
+        jobs.startJob({ pluginId: 'echo', userId: 'alice', actionId: 'sleep', context: { projectId, sessionId: null, conversationId: null }, deadline: new Date(Date.now() + 3_600_000) })
+      const [a, b] = [await inProject('p1'), await inProject('p2')]
+      expect([a.created, b.created]).toEqual([true, true])
+      expect(await rows(jobs.JOB_LOCKS_COLLECTION)).toHaveLength(2)
     })
 
     test('a lock left by a job that ended is replaced', async () => {
@@ -140,6 +149,24 @@ describe.skipIf(!URL)('jobs and transcript paging on a real Postgres (PLUGINS_PG
       const read = await jobs.refreshJob(job)
       expect(read).toMatchObject({ status: 'failed', error: { code: 'timeout' } })
       expect(await rows(jobs.JOB_LOCKS_COLLECTION)).toHaveLength(0)
+    })
+
+    test.each([
+      ['U+0000', { out: 'a\u0000b' }],
+      ['an unpaired surrogate', { out: 'a\ud800b' }],
+    ])('a result with %s, which Postgres cannot store, ends the job as failed and frees its lock', async (_n, result) => {
+      const { job } = await start()
+      await jobs.markRunning(job, 'boot-1')
+      expect((await jobs.completeJob('echo', 'alice', job.jobId, { status: 'succeeded', result })).changed).toBe(true)
+      expect(await jobs.findUserJob('alice', job.jobId)).toMatchObject({ status: 'failed', error: { code: 'invalid_result' }, result: null })
+      expect(await rows(jobs.JOB_LOCKS_COLLECTION)).toHaveLength(0)
+    })
+
+    test('an error report with such text is stored with U+FFFD in its place', async () => {
+      const { job } = await start()
+      const report = jobs.checkedReport({ status: 'failed', error: { code: 'e\u0000', message: 'bad \u0000 \udc80' } })
+      expect((await jobs.completeJob('echo', 'alice', job.jobId, report)).changed).toBe(true)
+      expect((await jobs.findUserJob('alice', job.jobId))!.error).toEqual({ code: 'e\ufffd', message: 'bad \ufffd \ufffd' })
     })
 
     test('a 2 MB result is measured in bytes of JSON', async () => {

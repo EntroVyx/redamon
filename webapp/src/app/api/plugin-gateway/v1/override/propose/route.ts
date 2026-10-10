@@ -11,5 +11,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export function POST(request: NextRequest) {
-  return withGateway(request, { op: 'override/propose', permission: overridePermission }, proposeOverride)
+  // A whole skill's text at its growth bound, escaped as JSON, stays well within 2 MB.
+  return withGateway(request, { op: 'override/propose', permission: overridePermission, maxBodyBytes: 2 * 1024 * 1024 }, proposeOverride)
 }

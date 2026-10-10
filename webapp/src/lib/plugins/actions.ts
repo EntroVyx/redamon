@@ -8,10 +8,11 @@ import { getEffectiveUser, getSession } from '@/lib/session'
 import { CallTokenConfigError, mintCallToken } from './callToken'
 import { now } from './clock'
 import { isValidPluginId } from './ids'
+import { retireCallToken } from './gateway'
 import { failJob, markRunning, startJob, type JobContext } from './jobs'
 import * as ov from './overrides'
 import { findInstall, hasPermission, servesActions } from './registry'
-import { RunnerError, RunnerUnavailableError, runAction } from './runnerClient'
+import { RunnerError, RunnerUnavailableError, cancelJob, runAction } from './runnerClient'
 import { crossOriginResponse, sameOrigin } from './sameOrigin'
 import { ACTION_ID_RE } from './schemas/common'
 import { actionMaxTimeoutSeconds } from './settings'
@@ -79,19 +80,34 @@ export async function checkReviewProposal(
   return rest
 }
 
-function runnerFailure(e: unknown, extra: Json = {}): NextResponse | null {
+// The runner's own named failures: a busy or crashed worker, a timeout.
+const RUNNER_NAMED_5XX = new Set([502, 503, 504])
+
+/** A runner failure as the browser receives it, [status, code, message]; null for any other error. */
+function runnerRefusal(e: unknown): [number, string, string] | null {
   if (e instanceof RunnerUnavailableError) {
-    return refuse(503, 'runner_unavailable', 'The plugin runner is not available right now; try again shortly.', extra)
+    return [503, 'runner_unavailable', 'The plugin runner is not available right now; try again shortly.']
   }
-  if (e instanceof RunnerError) {
-    // The plugin is installed here but the runner has not started it yet (it reloads
-    // within a minute of an install).
-    if (e.status === 404 && e.code === 'unknown_plugin') {
-      return refuse(503, 'plugin_not_running', 'The plugin runner has not started this plugin yet; try again in a minute.', extra)
-    }
-    return refuse(e.status, e.code, e.message, extra)
+  if (!(e instanceof RunnerError)) return null
+  // The plugin is installed here but the runner has not started it yet (it reloads
+  // within a minute of an install).
+  if (e.status === 404 && e.code === 'unknown_plugin') {
+    return [503, 'plugin_not_running', 'The plugin runner has not started this plugin yet; try again in a minute.']
   }
-  return null
+  // The runner refusing the webapp's key, or its request, or failing without saying how,
+  // is no fault of the user's: a 401 would also read as a lost login in the UI.
+  if (e.status === 401) {
+    return [502, 'runner_misconfigured', 'The plugin runner refused the webapp: PLUGIN_RUNNER_KEY differs between them.']
+  }
+  if (e.status === 400 || e.status === 403 || (e.status >= 500 && !RUNNER_NAMED_5XX.has(e.status))) {
+    return [502, 'runner_error', 'The plugin runner could not run this action; its log has the details.']
+  }
+  return [e.status, e.code, e.message]
+}
+
+function runnerFailure(e: unknown, extra: Json = {}): NextResponse | null {
+  const refusal = runnerRefusal(e)
+  return refusal ? refuse(...refusal, extra) : null
 }
 
 async function strictContext(raw: unknown, userId: string): Promise<JobContext | NextResponse> {
@@ -183,8 +199,13 @@ async function act(request: NextRequest, pluginId: string, actionId: string): Pr
 
   try {
     if (!action.async) {
-      const { token } = await mintCallToken({ ...tokenBase, kind: 'action' })
-      const out = await runAction(pluginId, actionId, { token, params, ctx, timeoutSeconds })
+      const { token, jti, expiresAt } = await mintCallToken({ ...tokenBase, kind: 'action' })
+      let out
+      try {
+        out = await runAction(pluginId, actionId, { token, params, ctx, timeoutSeconds })
+      } finally {
+        retireCallToken(jti, expiresAt)
+      }
       if (out.kind !== 'result') return refuse(502, 'runner_bad_answer', 'The plugin runner answered a sync action as a job.')
       if (!out.ok) return NextResponse.json({ ok: false, error: out.error })
       const result = await checkReviewProposal(out.result, { pluginId, userId: eff.userId, projectId: context.projectId })
@@ -205,13 +226,19 @@ async function act(request: NextRequest, pluginId: string, actionId: string): Pr
         jobId: job.jobId,
       })
       if (out.kind !== 'accepted') throw new RunnerError(502, 'runner_bad_answer', 'The plugin runner answered an async action without a job.')
-      await markRunning(job, out.bootId)
+      const taken = await markRunning(job, out.bootId)
+      // Cancelled while it was being handed over: the cancel found no job on the runner
+      // then, so the runner is told now, or the run would go on with nobody able to stop it.
+      if (taken.status === 'cancelled') {
+        await cancelJob(pluginId, job.jobId).catch((e) =>
+          console.warn(`[plugins] job ${job.jobId} cancelled during dispatch, but the runner could not be told:`, e instanceof Error ? e.message : e),
+        )
+      }
       return NextResponse.json({ jobId: job.jobId }, { status: 202 })
     } catch (e) {
-      const failure = runnerFailure(e, { jobId: job.jobId })
-      const code = e instanceof RunnerUnavailableError ? 'runner_unavailable' : e instanceof RunnerError ? e.code : 'start_failed'
-      await failJob(job, { code, message: 'The job could not be handed to the plugin runner.' })
-      if (failure) return failure
+      const refusal = runnerRefusal(e)
+      await failJob(job, { code: refusal?.[1] ?? 'start_failed', message: 'The job could not be handed to the plugin runner.' })
+      if (refusal) return refuse(...refusal, { jobId: job.jobId })
       throw e
     }
   } catch (e) {

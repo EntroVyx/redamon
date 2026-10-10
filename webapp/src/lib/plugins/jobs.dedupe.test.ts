@@ -57,7 +57,7 @@ function lockRow(jobId: string, over: Record<string, unknown> = {}) {
     ownerId: ALICE,
     userId: ALICE,
     collection: JOB_LOCKS_COLLECTION,
-    key: `sleep:${ALICE_SESSION}`,
+    key: `sleep:${ALICE_PROJECT}:${ALICE_SESSION}`,
     value: { jobId },
     sizeBytes: 10,
     expiresAt: new Date(Date.now() + 3_600_000),
