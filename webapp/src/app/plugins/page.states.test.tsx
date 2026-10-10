@@ -129,6 +129,14 @@ describe('the page', () => {
     expect(await screen.findByText('No plugins available')).toBeTruthy()
   })
 
+  test('the catalog unreachable with nothing installed: no claim about what it lists', async () => {
+    page = model([], { catalog: { state: 'unreachable', message: 'The plugin catalog could not be reached (http_error).', official: false, extraKey: false, replayed: false, serial: null, expiresAt: null, expiresInDays: null, expiresSoon: false } })
+    show()
+    expect(await screen.findByText('No plugins installed')).toBeTruthy()
+    expect(screen.queryByText(/catalog lists no plugin/)).toBeNull()
+    expect(screen.getByText(/until then an admin can use Install from file/)).toBeTruthy()
+  })
+
   test('the runner down: the banner says actions are unavailable and versions keep applying', async () => {
     status = { platformVersion: '1.0.0', runner: { reachable: false, error: 'runner_unavailable' } }
     show()

@@ -119,7 +119,14 @@ export function PluginsPageClient() {
         <RunnerStatusBanner />
         <CatalogStatus catalog={data.catalog} />
       </div>
-      {data.plugins.length === 0 ? (
+      {data.plugins.length === 0 && data.catalog.state !== 'ok' ? (
+        <div className="emptyState">
+          <div className="emptyStateTitle">No plugins installed</div>
+          <div className="emptyStateDescription">
+            The catalog&apos;s plugins appear here once it can be read; until then an admin can use Install from file.
+          </div>
+        </div>
+      ) : data.plugins.length === 0 ? (
         <div className="emptyState">
           <div className="emptyStateTitle">No plugins available</div>
           <div className="emptyStateDescription">The catalog lists no plugin for this RedAmon yet.</div>
