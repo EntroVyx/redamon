@@ -91,7 +91,7 @@ export interface PluginsPage {
 const CATALOG_MESSAGES: Record<string, (e: CatalogError) => string> = {
   catalog_unreachable: (e) =>
     `The plugin catalog could not be reached (${e.fetchCode ?? 'network'}). Installed plugins keep working; ` +
-    'to install one now, use Install from file with an archive, its catalog and signature.',
+    'an admin can install one now with Install from file, giving an archive, its catalog and signature.',
   signature_invalid: () => 'The plugin catalog failed its signature check, so it is not used. Installed plugins keep working.',
   schema_invalid: () => 'The plugin catalog is not a valid catalog for this RedAmon, so it is not used. Installed plugins keep working.',
   unknown_key: () =>
@@ -191,7 +191,7 @@ function entryOf(
   }
   let installBlocked: string | null = null
   if (!loaded) installBlocked = 'The catalog is unavailable.'
-  else if (!releases) installBlocked = 'The catalog no longer lists this plugin.'
+  else if (!releases) installBlocked = 'The catalog in use does not list this plugin.'
   else if (!best) installBlocked = 'No release of this plugin runs on this RedAmon; it needs a newer RedAmon.'
   const entry: PluginEntry = {
     id,
@@ -231,9 +231,10 @@ export async function buildPluginsPage(isAdmin: boolean): Promise<PluginsPage> {
     plugins.push(entryOf(p.id, p, p.releases, byId.get(p.id) ?? null, loaded, isAdmin))
     byId.delete(p.id)
   }
-  // Installed (or kept after "uninstall, keep data") but not in the catalog in use.
+  // Installed (or kept after "uninstall, keep data") but not in the catalog in use. A row that
+  // keeps nothing (an attempt that failed, a plugin delisted) has nothing to show or manage.
   for (const row of byId.values()) {
-    if (row.status === 'available' && !isAdmin) continue
+    if (row.status === 'available' && (!isAdmin || !(await hasKeptAnything(row.pluginId)))) continue
     plugins.push(entryOf(row.pluginId, null, null, row, loaded, isAdmin))
   }
   if (isAdmin) {

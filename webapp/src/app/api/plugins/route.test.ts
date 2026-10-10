@@ -183,6 +183,20 @@ describe('GET /api/plugins', () => {
     expect((await list()).body.plugins[0].keptData).toBeUndefined()
   })
 
+  test('a row that keeps nothing, of a plugin the catalog does not list, is not shown (nothing to manage)', async () => {
+    install({ status: 'available', enabled: false, activeVersion: null, lastError: 'sha256_mismatch: an earlier attempt' })
+    h.catalog = catalog([])
+    h.session = { userId: 'user-admin', role: 'admin' }
+    expect((await list()).body.plugins).toEqual([])
+    h.catalog = catalog([echo()])
+    expect((await list()).body.plugins.map((p: { id: string }) => p.id)).toEqual(['echo'])
+  })
+
+  test('unreachable: the message says Install from file is for an admin', async () => {
+    h.catalogError = new CatalogError('catalog_unreachable', 'detail')
+    expect((await list()).body.catalog.message).toMatch(/an admin can install one now with Install from file/)
+  })
+
   test('only internal rows (usage, jobs) are not kept data', async () => {
     install({ status: 'available', enabled: false, activeVersion: null })
     db.seed('pluginData', [{ pluginId: 'echo', namespace: 'live', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: '__usage', key: 'a', value: 1, sizeBytes: 1 }])
