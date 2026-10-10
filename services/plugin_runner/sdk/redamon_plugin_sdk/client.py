@@ -270,18 +270,45 @@ class DataApi(_Api):
         return out.get("deleted") is True
 
 
+def _read_hashes(got) -> dict:
+    """The factory hash of each part in an `override.get` answer."""
+    parts = got.get("parts") if isinstance(got, dict) else None
+    if not isinstance(parts, list):
+        return {}
+    return {p["partId"]: p["sha256"] for p in parts
+            if isinstance(p, dict) and isinstance(p.get("partId"), str) and isinstance(p.get("sha256"), str)}
+
+
 class OverrideApi(_Api):
+    def __init__(self, transport):
+        super().__init__(transport)
+        # The factory hashes each `get` answered, by (point, target group). `propose` sends
+        # them back, so a proposal built on factory text that a RedAmon update has changed
+        # since is refused instead of carrying the old wording past the update.
+        self._read: dict = {}
+
     async def get(self, point: str, target_group: str) -> dict:
         """The factory parts of a target, the version that applies (or None), the limits."""
-        return await self._post("override/get", {"point": point, "targetGroup": target_group})
+        got = await self._post("override/get", {"point": point, "targetGroup": target_group})
+        self._read[(point, target_group)] = _read_hashes(got)
+        return got
 
     async def propose(self, point: str, target_group: str, parts: dict, *, note: str,
-                      meta: Optional[dict] = None, scope: str = "user") -> dict:
-        """Stores a proposal for a person to review: `{changeSetId, fromRevision, ...}`."""
+                      meta: Optional[dict] = None, scope: str = "user",
+                      based_on: Optional[dict] = None) -> dict:
+        """Stores a proposal for a person to review: `{changeSetId, fromRevision, ...}`.
+
+        `based_on` is the `get` answer the parts were built from; by default, the last `get`
+        of the same target in this action. If the factory text changed since, the proposal
+        is refused with `factory_changed`: read the target again and redo it.
+        """
         body: dict = {"point": point, "targetGroup": target_group, "parts": parts,
                       "note": note, "scope": scope}
         if meta is not None:
             body["meta"] = meta
+        read = _read_hashes(based_on) if based_on is not None else self._read.get((point, target_group))
+        if read:
+            body["readSha256"] = read
         return await self._post("override/propose", body)
 
     async def withdraw(self, change_set_id: str) -> None:

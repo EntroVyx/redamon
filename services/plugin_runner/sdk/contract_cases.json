@@ -2029,6 +2029,158 @@
       }
     },
     {
+      "name": "override.propose based on what override.get returned sends the hashes read",
+      "call": {
+        "method": "override.propose",
+        "args": [
+          "skill.text",
+          "path_traversal",
+          {
+            "payload_reference": "Use ../ sequences.\nAlso try %2e%2e/."
+          }
+        ],
+        "kwargs": {
+          "note": "Encoded dots.",
+          "based_on": {
+            "point": "skill.text",
+            "targetGroup": "path_traversal",
+            "parts": [
+              {
+                "partId": "payload_reference",
+                "text": "Use ../ sequences.",
+                "sha256": "f2a6ba335390c6906e1f98a5390d692d4644e6f66755ae720b89df0c15db9cc7",
+                "chars": 18,
+                "maxChars": 4000
+              }
+            ],
+            "active": null
+          }
+        }
+      },
+      "request": {
+        "method": "POST",
+        "path": "/api/plugin-gateway/v1/override/propose",
+        "body": {
+          "point": "skill.text",
+          "targetGroup": "path_traversal",
+          "parts": {
+            "payload_reference": "Use ../ sequences.\nAlso try %2e%2e/."
+          },
+          "note": "Encoded dots.",
+          "scope": "user",
+          "readSha256": {
+            "payload_reference": "f2a6ba335390c6906e1f98a5390d692d4644e6f66755ae720b89df0c15db9cc7"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "changeSetId": "fake-cs-1",
+          "fromRevision": 1,
+          "proposedRevisionLabel": "v2"
+        }
+      },
+      "expect": {
+        "return": {
+          "changeSetId": "fake-cs-1",
+          "fromRevision": 1,
+          "proposedRevisionLabel": "v2"
+        }
+      },
+      "fake": {
+        "setup": {
+          "registry": {
+            "path_traversal": {
+              "displayName": "Path Traversal",
+              "skillMaxChars": 100,
+              "parts": {
+                "payload_reference": {
+                  "text": "Use ../ sequences.",
+                  "maxChars": 4000
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "override.propose built on factory text that has changed since it was read",
+      "call": {
+        "method": "override.propose",
+        "args": [
+          "skill.text",
+          "path_traversal",
+          {
+            "payload_reference": "Use ../ sequences.\nAlso try %2e%2e/."
+          }
+        ],
+        "kwargs": {
+          "note": "Encoded dots.",
+          "based_on": {
+            "point": "skill.text",
+            "targetGroup": "path_traversal",
+            "parts": [
+              {
+                "partId": "payload_reference",
+                "text": "Use ../ sequences.",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "chars": 18,
+                "maxChars": 4000
+              }
+            ],
+            "active": null
+          }
+        }
+      },
+      "request": {
+        "method": "POST",
+        "path": "/api/plugin-gateway/v1/override/propose",
+        "body": {
+          "point": "skill.text",
+          "targetGroup": "path_traversal",
+          "parts": {
+            "payload_reference": "Use ../ sequences.\nAlso try %2e%2e/."
+          },
+          "note": "Encoded dots.",
+          "scope": "user",
+          "readSha256": {
+            "payload_reference": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "The factory text of path_traversal/payload_reference changed since this plugin read it (a RedAmon update): read it again and redo the proposal.",
+          "code": "factory_changed"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": "factory_changed",
+          "message": "The factory text of path_traversal/payload_reference changed since this plugin read it (a RedAmon update): read it again and redo the proposal."
+        }
+      },
+      "fake": {
+        "setup": {
+          "registry": {
+            "path_traversal": {
+              "displayName": "Path Traversal",
+              "skillMaxChars": 100,
+              "parts": {
+                "payload_reference": {
+                  "text": "Use ../ sequences.",
+                  "maxChars": 4000
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "override.withdraw of the plugin's own proposal",
       "call": {
         "method": "override.withdraw",

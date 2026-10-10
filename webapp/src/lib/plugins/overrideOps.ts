@@ -18,6 +18,18 @@ import { registrySkill, validateSkillParts, type RegistrySkill } from './skillPa
  * factory text. Parts the plugin does not send are factory text in that version, so the
  * agent validates exactly the parts sent, over the factory text of the rest; a plugin
  * that builds on the active version reads its parts from `override.get` and sends them.
+ *
+ * The recorded base must be what the plugin really built on (phase 04 review):
+ * - `get` shows a version as active only while its parts' factory hashes are the
+ *   registry's, as the agent runs it only then; otherwise a plugin would carry wording
+ *   from before a RedAmon update into a proposal stamped with the new hash;
+ * - the hashes the plugin read (`readSha256`, filled in by the SDK) must still be the
+ *   registry's when it proposes, or 409 `factory_changed`;
+ * - `fromRevision` is the revision of the proposal's scope that `get` showed for the same
+ *   call context. When `get` showed something else (another scope's version, or factory
+ *   text over a version that does not run), the proposal built on no revision of its
+ *   scope: `fromRevision` is the factory's, so the review warns that approving replaces
+ *   the scope's active version, and `meta.basedOn` names what was shown.
  */
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 const MAX_PARTS = 50
@@ -51,22 +63,30 @@ async function target(ctx: GatewayContext): Promise<{ point: BehaviourExtensionP
 
 const userScope = (ctx: GatewayContext): ov.OverrideScope => ({ type: 'user', id: ctx.userId })
 
+/** Whether every part of `set` was built on the factory text the registry has now. */
+function builtOnCurrentFactory(set: ov.ChangeSet, skill: RegistrySkill): boolean {
+  const current = new Map(skill.parts.map((p) => [p.partId, p.sha256]))
+  return set.parts.every((p) => current.get(p.partId) === p.baseSha256)
+}
+
 /** The version the agent runs for this call's project (or the user, outside one), or null for factory text. */
-async function appliedSet(ctx: GatewayContext, point: string, group: string): Promise<ov.ChangeSet | null> {
+async function appliedSet(ctx: GatewayContext, point: string, group: string, skill: RegistrySkill): Promise<ov.ChangeSet | null> {
+  let set: ov.ChangeSet | null
   if (ctx.projectId) {
-    const set = await ov.effectiveForProject(ctx.projectId, group)
-    return set && set.applies ? set : null
+    const effective = await ov.effectiveForProject(ctx.projectId, group)
+    set = effective && effective.applies ? effective : null
+  } else {
+    set = await ov.activeChangeSet(userScope(ctx), point, group)
+    const plugin = set ? await prisma.pluginInstall.findUnique({ where: { pluginId: set.pluginId } }) : null
+    if (!plugin || !overridesQualify(plugin)) set = null
   }
-  const set = await ov.activeChangeSet(userScope(ctx), point, group)
-  if (!set) return null
-  const plugin = await prisma.pluginInstall.findUnique({ where: { pluginId: set.pluginId } })
-  return plugin && overridesQualify(plugin) ? set : null
+  return set && builtOnCurrentFactory(set, skill) ? set : null
 }
 
 export async function getOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
   const { point, group, skill } = await target(ctx)
   const [set, pendingCount] = await Promise.all([
-    appliedSet(ctx, point, group),
+    appliedSet(ctx, point, group, skill),
     ov.pendingCount(userScope(ctx), point, group),
   ])
   return {
@@ -114,6 +134,27 @@ function proposedParts(ctx: GatewayContext, skill: RegistrySkill, group: string)
   return Object.fromEntries(entries.filter(([partId, text]) => text !== known.get(partId)!.text)) as Record<string, string>
 }
 
+/** Refuses a proposal built on factory text that has changed since the plugin read it. */
+function checkReadHashes(ctx: GatewayContext, skill: RegistrySkill, group: string): void {
+  const raw = ctx.body.readSha256
+  if (raw === undefined || raw === null) return
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw invalidProposal(400, 'readSha256 must be an object of part id to the sha256 read')
+  const current = new Map(skill.parts.map((p) => [p.partId, p.sha256]))
+  const changed: string[] = []
+  for (const [partId, read] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof read !== 'string') throw invalidProposal(400, `readSha256 of ${group}/${partId} must be a string`)
+    if (!current.has(partId)) throw invalidProposal(422, `unknown part ${group}/${partId}`)
+    if (current.get(partId) !== read) changed.push(`${group}/${partId}`)
+  }
+  if (changed.length) {
+    throw new GatewayError(
+      409,
+      'factory_changed',
+      `The factory text of ${changed.join(', ')} changed since this plugin read it (a RedAmon update): read it again and redo the proposal.`,
+    )
+  }
+}
+
 export async function proposeOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
   const { point, group, skill } = await target(ctx)
   const scope = proposalScope(ctx)
@@ -123,6 +164,7 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
     throw invalidProposal(400, 'meta must be an object')
   }
   const parts = proposedParts(ctx, skill, group)
+  checkReadHashes(ctx, skill, group)
   if (Object.keys(parts).length === 0) {
     throw invalidProposal(422, `This proposal changes no part of ${group}: every text equals the factory text.`)
   }
@@ -139,8 +181,9 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
   }
 
   const factory = new Map(skill.parts.map((p) => [p.partId, p]))
-  const active = await ov.activeChangeSet(scope, point, group)
-  const fromRevision = active?.revision ?? ov.FACTORY_REVISION
+  const [active, shown] = await Promise.all([ov.activeChangeSet(scope, point, group), appliedSet(ctx, point, group, skill)])
+  const builtOnActive = (active?.changeSetId ?? null) === (shown?.changeSetId ?? null)
+  const fromRevision = builtOnActive ? (active?.revision ?? ov.FACTORY_REVISION) : ov.FACTORY_REVISION
   const { changeSetId } = await ov.propose({
     pluginId: ctx.pluginId,
     point,
@@ -156,6 +199,9 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
     platformMeta: {
       fromRevision,
       baseFactoryText: Object.fromEntries(Object.keys(parts).map((partId) => [partId, factory.get(partId)!.text])),
+      ...(builtOnActive
+        ? {}
+        : { basedOn: shown ? { scope: shown.scope.type, changeSetId: shown.changeSetId, revision: shown.revision } : null }),
     },
     createdBy: ctx.userId,
   })

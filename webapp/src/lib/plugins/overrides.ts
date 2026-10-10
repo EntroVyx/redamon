@@ -49,7 +49,7 @@ export const NOTE_MAX_CHARS = 4_000
 export const META_MAX_BYTES = 65_536
 // Keys of `meta` the platform writes itself; a plugin's values for them are dropped.
 // fromRevision and baseFactoryText come with the proposal (TD-19), staleReason later.
-const PLATFORM_META_KEYS = ['staleReason', 'fromRevision', 'baseFactoryText']
+const PLATFORM_META_KEYS = ['staleReason', 'fromRevision', 'baseFactoryText', 'basedOn']
 
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 // Change set ids are crypto.randomUUID() values.
@@ -256,7 +256,12 @@ export interface ProposeInput {
   /** The plugin's own meta: a plain object of at most META_MAX_BYTES. */
   meta?: Prisma.InputJsonValue
   /** What the platform records with the proposal; not counted toward the plugin's bytes. */
-  platformMeta?: { fromRevision?: number; baseFactoryText?: Record<string, string> }
+  platformMeta?: {
+    fromRevision?: number
+    baseFactoryText?: Record<string, string>
+    /** What the plugin was shown, when it is not its scope's active version (null: factory text). */
+    basedOn?: { scope: ScopeType; changeSetId: string; revision: number | null } | null
+  }
   createdBy: string
 }
 
@@ -293,11 +298,12 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
     meta = own
   }
   if (input.platformMeta) {
-    const { fromRevision, baseFactoryText } = input.platformMeta
+    const { fromRevision, baseFactoryText, basedOn } = input.platformMeta
     meta = {
       ...meta,
       ...(fromRevision !== undefined ? { fromRevision } : {}),
       ...(baseFactoryText !== undefined ? { baseFactoryText } : {}),
+      ...(basedOn !== undefined ? { basedOn } : {}),
     }
   }
 

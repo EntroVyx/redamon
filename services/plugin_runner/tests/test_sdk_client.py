@@ -160,3 +160,23 @@ def test_plugin_error_carries_code_and_message():
 def test_contract_file_is_valid_json_with_cases():
     assert len(CASES) >= 30
     json.dumps(CASES)
+
+
+def test_a_proposal_sends_back_the_hashes_its_target_was_read_with(stub_server):
+    # A RedAmon update between override.get and override.propose changes the factory text
+    # the parts were built on: the hashes read let the Gateway refuse such a proposal.
+    read = {"parts": [{"partId": "payload_reference", "text": "Use ../ sequences.", "sha256": "a" * 64}], "active": None}
+    stub_server.answer_json(200, read)
+    sdk = _sdk(stub_server.base_url)
+
+    async def run():
+        await sdk.override.get("skill.text", "path_traversal")
+        await sdk.override.propose("skill.text", "path_traversal", {"payload_reference": "x"}, note="n")
+        await sdk.override.propose("skill.text", "sql_injection", {"tools": "x"}, note="n")
+        await sdk.override.propose("skill.text", "path_traversal", {"payload_reference": "x"}, note="n",
+                                   based_on={"parts": [{"partId": "payload_reference", "sha256": "b" * 64}]})
+
+    asyncio.run(run())
+    assert stub_server.requests[1].json()["readSha256"] == {"payload_reference": "a" * 64}
+    assert "readSha256" not in stub_server.requests[2].json()
+    assert stub_server.requests[3].json()["readSha256"] == {"payload_reference": "b" * 64}

@@ -381,3 +381,22 @@ def test_parts_equal_to_their_factory_text_are_dropped_and_none_left_is_refused(
     asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"a": "A", "b": "bbbbbbbbbb"}, note="n"))
     assert sdk.proposals[0]["parts"] == {"a": "A"}
     assert _refused(sdk.override.propose("skill.text", "path_traversal", {"b": "bbbbbbbbbb"}, note="n")) == "invalid_proposal"
+
+
+def test_a_proposal_built_on_a_factory_text_that_has_changed_is_refused():
+    sdk = FakeSdk(registry=SKILL)
+    got = asyncio.run(sdk.override.get("skill.text", "path_traversal"))
+    sdk.gateway.registry["path_traversal"]["parts"]["a"]["text"] = "a fixed upstream"
+    assert _refused(sdk.override.propose("skill.text", "path_traversal", {"b": "B"}, note="n", based_on=got)) == "factory_changed"
+    assert sdk.proposals == []
+
+
+def test_from_revision_is_the_version_of_its_own_scope_that_get_showed():
+    # Shown the project's version, a user-scope proposal built on no user revision: the
+    # review must warn that approving replaces the user's active version.
+    sdk = FakeSdk(registry=SKILL, project_id="project-1")
+    sdk.set_active("path_traversal", revision=2, parts={"a": "user"})
+    sdk.set_active("path_traversal", revision=2, parts={"b": "project"}, scope="project")
+    out = asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"b": "project edited"}, note="n"))
+    assert out["fromRevision"] == 1
+    assert asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"b": "p2"}, note="n", scope="project"))["fromRevision"] == 2

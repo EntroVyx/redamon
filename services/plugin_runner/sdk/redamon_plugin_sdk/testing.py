@@ -352,6 +352,7 @@ class FakeGateway:
         unknown = [f"unknown part {group}/{pid}" for pid in sent if pid not in reg["parts"]]
         if unknown:
             raise PluginError("invalid_proposal", "; ".join(unknown))
+        self._check_read_hashes(body.get("readSha256"), reg, group)
         # A proposal is a whole version: a part not sent is factory text in it, and a part
         # sent unchanged from its factory text is not a change.
         parts = {pid: t for pid, t in sent.items() if t != reg["parts"][pid]["text"]}
@@ -362,6 +363,9 @@ class FakeGateway:
             if len(text) > self._part_max(reg["parts"][pid]):
                 raise PluginError("invalid_proposal", f"{group}/{pid}: the text is too long")
         active = self.active.get((scope, group))
+        # What override.get showed in this context; a proposal shown anything other than
+        # its own scope's active version built on no revision of that scope.
+        shown = (self.active.get(("project", group)) if self.project_id else None) or self.active.get(("user", group))
         merged = {pid: e["text"] for pid, e in reg["parts"].items()}
         merged.update(parts)
         if sum(len(t) for t in merged.values()) > self._skill_max(group):
@@ -370,13 +374,32 @@ class FakeGateway:
             raise PluginError("too_many_pending",
                               f"There are already {MAX_PENDING_CHANGE_SETS} proposals waiting for a decision on {group}")
         self._change_sets += 1
-        from_revision = active["revision"] if active else 1
+        from_revision = active["revision"] if active and shown is active else 1
         cs = {"changeSetId": f"fake-cs-{self._change_sets}", "point": point, "targetGroup": group,
               "parts": parts, "note": body["note"], "meta": meta, "scope": scope,
               "status": "proposed", "fromRevision": from_revision}
         self.proposals.append(cs)
         return {"changeSetId": cs["changeSetId"], "fromRevision": from_revision,
                 "proposedRevisionLabel": f"v{from_revision + 1}"}
+
+    @staticmethod
+    def _check_read_hashes(read, reg: dict, group: str) -> None:
+        if read is None:
+            return
+        if not isinstance(read, dict):
+            raise PluginError("invalid_proposal", "readSha256 must be an object of part id to the sha256 read")
+        changed = []
+        for pid, sha in read.items():
+            if not isinstance(sha, str):
+                raise PluginError("invalid_proposal", f"readSha256 of {group}/{pid} must be a string")
+            if pid not in reg["parts"]:
+                raise PluginError("invalid_proposal", f"unknown part {group}/{pid}")
+            if hashlib.sha256(reg["parts"][pid]["text"].encode("utf-8")).hexdigest() != sha:
+                changed.append(f"{group}/{pid}")
+        if changed:
+            raise PluginError("factory_changed",
+                              f"The factory text of {', '.join(changed)} changed since this plugin read it "
+                              "(a RedAmon update): read it again and redo the proposal.")
 
     def _override_withdraw(self, body: dict) -> dict:
         self._need("override:skill.text")
