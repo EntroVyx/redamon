@@ -15,9 +15,13 @@ What a specific plugin does (for example the first one, **`skiller`**) is docume
 that plugin's own folder in `redamon-plugins`, never here. This file describes the host;
 the plugins are its guests.
 
-> **Status: design / target architecture.** The platform described here does not exist in
-> the tree yet. Anything marked *(proposed)* is intended layout, not a current file. Links
-> to existing code are real: they are the seams and precedents the platform builds on.
+> **Status: partly built.** The host side is built: the plugin tables and stores, the platform
+> switch, the Plugin Manager and the Plugins page, the catalog signature check, the Gateway, the
+> UI host ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
+> ([`services/plugin_runner/`](../../services/plugin_runner/)). Not yet: the `redamon-plugins`
+> repository with its first plugin and the published, signed catalog; until then the default
+> catalog cannot be reached and plugins install from files (§9.7). Anything marked
+> *(proposed)* is intended layout, not a current file. Links to existing code are real.
 >
 > **Diagram convention.** Every diagram sets its own colours on its first line, so it reads
 > the same in light and dark themes whatever the viewer's default. When you add a diagram,
@@ -74,6 +78,12 @@ flowchart LR
 
 Nobody clones `redamon-plugins` to use a plugin. The platform downloads a single plugin's
 release archive at install time into a persistent folder, and runs it from there.
+
+That folder is a Docker volume (§9.2), never the `redamon` git checkout: installing,
+updating or uninstalling a plugin changes no file in the base repository. The
+`redamon-plugins/` path that [`.gitignore`](../../.gitignore#L249) ignores at the root of the
+checkout is only where a developer may keep a clone of the plugin repository to write
+plugins; RedAmon never reads it at runtime.
 
 ### 2.1 The life of a plugin, in one picture
 
@@ -284,7 +294,14 @@ Plugins share a repo but are released one at a time. A release is a git tag of t
 Steps 5 for two tags pushed together run in one CI concurrency group, so they never race.
 The signing key lives in a protected GitHub environment that needs a reviewer; release tags
 are protected, and each plugin folder has its own CODEOWNERS, because one key signs every
-plugin in the repo.
+plugin in the repo. §6.4 covers the keys, the workflows and the one-time repository setup.
+
+**Why one repository carries independent versions.** A tag marks one commit, and CI packs
+only the tagged plugin's folder as it was at that commit. `skiller-v1.0.0` and
+`echo-v0.3.1` can point at different commits; later changes on `main` never alter an
+archive already published, whose bytes the catalog pins by sha256. The catalog keeps every
+release of every plugin, so an installation on an older platform still finds a release
+whose range includes it.
 
 ```jsonc
 {
@@ -317,7 +334,12 @@ plugin in the repo.
   key can be rotated by publishing the next key in a platform release before it is used.
 - **Freshness.** The platform remembers the highest `serial` it has accepted and refuses an
   older catalog, and refuses any catalog past `expires`. This stops an attacker serving an
-  old catalog that still lists a since-revoked version.
+  old catalog that still lists a since-revoked version. The serial alone cannot protect a
+  new installation, which has never seen a higher one; the expiry bounds how old a genuine
+  catalog can be. Refusing an older catalog is not an error: the platform keeps using the
+  last catalog it accepted, stored with its signature in `PluginPlatformState`, because the
+  raw GitHub CDN can serve the previous `catalog.json` for minutes after a release. An
+  expired catalog blocks install and update; it never stops an installed plugin.
 - **One mark per trust scope.** The highest serial is kept once for all the official keys, so
   a rotated-out key cannot replay below a newer key's serial, and once per extra trusted key,
   so a custom or development catalog never holds the official one back.
@@ -327,6 +349,10 @@ plugin in the repo.
   includes the running platform version, not simply the newest release.
 - **Download hosts.** Archive URLs must be `https` on an allowlisted host (GitHub release
   assets by default), so a catalog entry can never make the webapp fetch an internal address.
+  The check applies to **every redirect hop**, because a GitHub release URL redirects to a
+  separate storage host, and to the address actually connected to, which must be public, so
+  DNS rebinding cannot reach the internal network either. Downloads are streamed to disk
+  under a size cap and a timeout.
 - **Consent first.** Permissions are listed per release, so the Plugins page can show the
   consent prompt *before* anything is downloaded.
 
@@ -366,6 +392,135 @@ The platform decides what a plugin may do from its manifest alone and never insp
 Python for that. A capability missing from the manifest is a capability the plugin does not
 have. `timeoutSeconds` is capped by a platform maximum.
 
+### 6.4 Catalog signing: keys, CI and trust
+
+The signature is what makes a downloaded catalog trustworthy and, through the sha256 values it
+lists, every archive. The verifying side is built
+([`keyring.ts`](../../webapp/src/lib/plugins/keyring.ts),
+[`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)); the signing side lives in
+`redamon-plugins` and is *(proposed)* until that repository exists.
+
+**How the signature works.** Signing uses an **Ed25519** key pair. The private key signs; the
+public key can only verify, so publishing it is safe, and the private key cannot be derived
+from it. `sign(private key, bytes)` gives a 64-byte signature and `verify(public key, bytes,
+signature)` answers yes or no. One changed byte in the catalog, or a signature taken from
+another catalog, fails verification.
+
+**Why the signature is detached.** `catalog.json.sig` is a separate file, the JSON
+`{"keyId": "…", "sig": "<base64>"}`, over the exact bytes of `catalog.json`. A signature
+inside the JSON would have to cover a file that contains it: the verifier would remove the
+field and re-serialize, and re-serialized JSON rarely has the same bytes (spacing, key
+order) unless both sides implement a canonical form. A detached file is checked against the
+bytes exactly as downloaded. For the official key, the id is the first 16 hex characters of the
+SHA-256 of the raw public key.
+
+**Where the keys live.**
+
+| Key | Where | Used by |
+|---|---|---|
+| Production private key | generated outside both repositories; stored only as the secret `CATALOG_SIGNING_KEY` (with `CATALOG_SIGNING_KEY_ID`) of the GitHub environment `release` in `redamon-plugins`, plus an offline backup kept by the owner | the release and refresh workflows, after a reviewer approves the job |
+| Official public keys, the **keyring** | `webapp/src/lib/plugins/keyring.ts` in the base repository, compiled into the webapp image | the Plugin Manager, to verify catalogs |
+| Extra trusted keys | `PLUGINS_EXTRA_TRUSTED_KEYS` in `.env`: an admin opt-in that the Plugins page warns about | custom catalogs, and the dev key during local tests |
+| Dev key | generated by `tools/gen_key.py` outside both repositories | local tests only; never in the official keyring (a test fails if its id appears there) |
+
+A private key is never in a repository, an image or an installation's `.env`, and the
+`.gitignore` of `redamon-plugins` refuses `*.pem`. An installation holds public keys only, so
+even a fully compromised RedAmon server cannot sign a catalog that other installations accept.
+
+The keyring is code, not data, on purpose. A key stored in the database or in `.env` could be
+added by anyone able to write there, and would then validate their own catalogs. Compiled
+into the image, trusting a key is the same decision as trusting the RedAmon release that ships
+it: that release is the **root of trust**. Adding or removing an official key is therefore a
+RedAmon release, applied by `./redamon.sh update`.
+
+**Verification, in order**, with Node's built-in `crypto.verify(null, bytes, key, sig)` (no new
+dependency):
+
+1. Download `catalog.json` as raw bytes, without parsing it, and `catalog.json.sig`.
+2. Look up the signature's `keyId` in the keyring. An unknown key refuses the catalog.
+3. Verify the signature over those bytes. A failure refuses the catalog, and nothing in it is
+   used.
+4. Only then parse **the same bytes** as JSON and validate them against the catalog schema:
+   never a second download, and never bytes re-encoded from a decoded string, which can
+   silently replace invalid characters.
+5. Check `serial` and `expires`, both read from inside the signed bytes (§6.2), and store the
+   accepted catalog with its signature.
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#EEF2F7", "primaryTextColor": "#0F172A", "primaryBorderColor": "#475569", "secondaryColor": "#E2E8F0", "tertiaryColor": "#F8FAFC", "lineColor": "#7B8794", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#94A3B8", "titleColor": "#0F172A", "edgeLabelBackground": "#FFFFFF", "relationLabelBackground": "#FFFFFF", "relationLabelColor": "#0F172A", "attributeBackgroundColorOdd": "#FFFFFF", "attributeBackgroundColorEven": "#F8FAFC", "actorBkg": "#EEF2F7", "actorBorder": "#475569", "actorTextColor": "#0F172A", "actorLineColor": "#7B8794", "signalColor": "#7B8794", "signalTextColor": "#0F172A", "labelBoxBkgColor": "#E2E8F0", "labelBoxBorderColor": "#475569", "labelTextColor": "#0F172A", "loopTextColor": "#0F172A", "noteBkgColor": "#FFF7D6", "noteTextColor": "#0F172A", "noteBorderColor": "#B7A24A", "sequenceNumberColor": "#FFFFFF"}}}%%
+flowchart LR
+    K["keyring<br/>public keys compiled<br/>into the webapp image"] -- "verifies" --> S["catalog.json.sig"]
+    S -- "covers the exact bytes of" --> C["catalog.json"]
+    C -- "pins the sha256 of" --> A["skiller-1.0.0.tar.gz"]
+```
+
+Every link must hold before an install goes ahead, so no transport has to be trusted: not
+GitHub's servers, a CDN, a proxy or DNS. HTTPS is still required, for privacy and for the
+host allowlist, but integrity does not rest on it. This is also why an offline install (§9.7)
+is as safe as a download.
+
+A signature proves who published the bytes and that they are unchanged. It does not prove that
+the catalog is recent (the serial and the expiry do), nor that the plugin code is good (review
+in `redamon-plugins`, CODEOWNERS per folder and the Runner's isolation, §5, do). A signature
+never expires by itself, which is why the catalog carries its own expiry.
+
+**The CI of `redamon-plugins`.**
+
+| Workflow | Runs on | Does |
+|---|---|---|
+| `ci.yml` | every push and pull request | validates and tests every plugin and the tools |
+| `release.yml` | a tag `<pluginId>-v<version>` | the five steps of §6.2; signs in the `release` environment and commits the catalog and its signature to `main`; one concurrency group, `catalog` |
+| `catalog-refresh.yml` | monthly, and by hand | re-signs the unchanged catalog with a new expiry (default 90 days) and `serial` + 1 |
+
+Python tools in `tools/` do the work, inside `python:3.11-slim` containers: `validate.py`,
+`pack.py`, `catalog.py`, `sign.py` (which reads the PEM key from `CATALOG_SIGNING_KEY`) and
+`gen_key.py`. `pack.py` writes a deterministic ustar archive (sorted entries, zero timestamps
+and owners, no links), so two packs of one folder are byte-identical. Actions are pinned to
+commit SHAs.
+
+Every release and every refresh waits for the reviewer's approval of the `release`
+environment. A refresh left unapproved lets the catalog expire: installed plugins keep
+running, but installs and updates stop until a new signed catalog is published. The Plugins
+page warns 14 days before the expiry.
+
+**One-time setup of the plugin repository**, by its owner (none of it can be done from
+RedAmon):
+
+1. Create `redamon-plugins` as a **public** repository: installations download release
+   assets without credentials.
+2. Generate the production key outside both repositories with `tools/gen_key.py`, and keep its
+   public key and key id for the keyring.
+3. Settings → Environments: create `release` with the owner as required reviewer, and add the
+   secrets `CATALOG_SIGNING_KEY` (the PEM content) and `CATALOG_SIGNING_KEY_ID`. Then delete the
+   local private key file, keeping only the offline backup.
+4. Actions → Workflow permissions: read and write, because the release workflow commits the
+   catalog. If `main` is protected, allow GitHub Actions to push to it.
+5. Add a tag ruleset protecting `*-v*`, and CODEOWNERS for every plugin folder and for `tools/`,
+   `.github/` and `catalog.json*`.
+6. In the base repository, in one RedAmon release: add the public key to the keyring and set
+   the default catalog URL,
+   `https://raw.githubusercontent.com/<owner>/redamon-plugins/main/catalog.json`.
+
+**Rotating a key.**
+
+1. A RedAmon release adds the new public key next to the old one. CI still signs with the old
+   key.
+2. Once installations have updated, CI switches to the new key. The `keyId` in each signature
+   tells the verifier which key to use, so both keys work during the switch.
+3. A later RedAmon release removes the old key.
+
+An installation older than step 1 does not know the new key: after step 2 it refuses every new
+catalog and sees no plugin updates until RedAmon itself is updated. That is why a new key ships
+well before it is used.
+
+**A leaked private key** is the worst case: whoever holds it can sign any catalog. The fix is a
+RedAmon release that removes the key from the keyring, followed by catalogs signed with a new
+key. The recovery must also handle a forged catalog with a very high `serial`: an installation
+that accepted it would refuse every genuine catalog below it. The platform handles it: a stored
+mark counts only while the key that set it is still in the keyring
+([`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)), so the release that removes the
+leaked key also discards any serial that key set.
+
 ---
 
 ## 7. The platform components
@@ -379,6 +534,11 @@ whole lifecycle of §9, including **reconciliation and crash recovery** (§9.7).
 bar ([GlobalHeader.tsx](../../webapp/src/components/layout/GlobalHeader/GlobalHeader.tsx))
 and a page under `webapp/src/app/plugins/`.
 
+- **The platform switch.** `PLUGINS_ENABLED` in `.env`, off by default
+  ([switch.ts](../../webapp/src/lib/plugins/switch.ts)). While it is off, every plugin route
+  answers 404, the Plugins button is hidden and the product behaves as if plugins did not
+  exist. There are two gates: whoever runs the server turns the platform on, then an admin
+  installs.
 - **Who can do what.** Installing, updating, enabling, disabling and uninstalling are
   **instance-wide, admin-only** actions, because they put code on the host. The lifecycle
   routes read the admin role from the database on every request
@@ -390,6 +550,28 @@ and a page under `webapp/src/app/plugins/`.
 - **Audit.** Every lifecycle operation, every override proposal, approval and reset, and
   every permission grant is recorded with the existing
   [`writeAudit`](../../webapp/src/lib/audit.ts#L17) into the `AuditLog` table.
+
+**One installation, many users.** There is one `PluginInstall` row per plugin for the whole
+instance: `pluginId` is its primary key, and it has no user column. Therefore:
+
+- A plugin is installed once, for everyone, at **one active version**. A user cannot install
+  a plugin for themselves, and two users cannot run two versions of it.
+- Any admin manages any installed plugin, not only the admin who installed it. A second
+  install of an installed plugin is refused, and two admins who click Install together get
+  one install and one "plugin busy" (§9.3).
+- `installedBy` has no foreign key, so deleting that admin's account does not uninstall the
+  plugin for everyone.
+- Disabling or uninstalling applies to every user and project at once, and a purge deletes
+  every user's data and overrides (§9.6).
+
+What a plugin does with that single installation stays scoped:
+
+| | Scoped to |
+|---|---|
+| What an action may read | the acting user, project and session, bound into its call token (§7.3) |
+| Stored data | its owner, a user or a project (§7.4) |
+| Model, provider account and LLM budget | the user who runs the action (§7.3) |
+| Changes to agent instructions | a user scope or a project scope (§7.6) |
 
 **As built (platform 1.0.0).** The modules live in
 [`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/):
@@ -496,7 +678,7 @@ development and CI.
 
 ### 7.4 Generic data store
 
-Three platform-owned tables, created **once** when the platform itself is installed. No plugin
+Four platform-owned tables, created **once** when the platform itself is installed. No plugin
 ever adds a table.
 
 ```mermaid
@@ -511,32 +693,54 @@ erDiagram
         string status
         string activeVersion
         string previousVersion
+        string pendingVersion
         int dataVersion
+        int previousDataVersion
         json grantedPermissions
+        json manifest "read by the UI"
+        json catalogEntry "pinned url and sha256"
         string installedBy
         datetime installedAt
-        string lastError
+        string operationId "the lease"
+        string operationKind
+        json operationArgs
+        datetime leaseExpiresAt
+        text lastError
+        text revokedReason
     }
     PluginData {
+        string id PK
         string pluginId FK
+        string namespace "live or migrating"
         string ownerType "user or project"
         string ownerId
         string collection
         string key
         json value
+        int sizeBytes
+        datetime expiresAt
         datetime updatedAt
     }
     PluginOverride {
         string id PK
         string pluginId FK
         string extensionPoint
-        string projectId
-        string targetKey
+        string scopeType "user or project"
+        string scopeId
+        string targetGroup "skill id"
+        string targetKey "skill id / part id"
+        string changeSetId
+        int revision
         text value
         string baseSha256
         string status
         string createdBy
-        string approvedBy
+        string decidedBy
+        datetime decidedAt
+    }
+    PluginPlatformState {
+        string key PK
+        json value
         datetime updatedAt
     }
 ```
@@ -544,20 +748,39 @@ erDiagram
 - **`PluginInstall`** is the install registry: one row per plugin on this instance. It holds
   what the admin wants (`enabled`) separately from what the platform observed (`status`,
   §9.1), plus the active and previous versions, the stored `dataVersion` and the permissions
-  the admin granted. It is the **source of truth**; the volume and the Runner follow it.
+  the admin granted. It is the **source of truth**; the volume and the Runner follow it. It
+  also keeps a copy of the **manifest**, from which the UI reads contributions so that a page
+  load never touches the volume; the pinned **catalog entry**, used to re-download a lost
+  volume (§9.7); the **lease** of a running operation (§9.3); and `revokedReason`, set when the
+  catalog revokes the installed version.
 - **`PluginData`** is where plugins keep everything, as JSON, keyed by
-  `(pluginId, ownerType, ownerId, collection, key)`. Because every plugin shares this table,
-  install never runs a schema migration or regenerates the database client: the property that
-  makes install rebuild-free (principle 3). Each plugin has a quota on rows and bytes. When a
-  user or project is deleted, its rows are deleted with it.
+  `(pluginId, namespace, ownerType, ownerId, collection, key)`. Because every plugin shares
+  this table, install never runs a schema migration or regenerates the database client: the
+  property that makes install rebuild-free (principle 3). Each plugin has a quota on rows and
+  bytes. The `namespace` is `live`, or `migrating:<operationId>` for the copy a data migration
+  works on (§9.5). A row can carry an expiry. When a user or project is deleted, its rows are
+  deleted with it.
 - **`PluginOverride`** holds values proposed at behaviour extension points, with their
-  approval state (§7.6) and the checksum of the factory text they were made against. At most
-  one row per `(extensionPoint, projectId, targetKey)` can be **Active**. Rows are deleted
-  with their project.
+  approval state (§7.6) and the checksum of the factory text they were made against. The rows
+  proposed together for one skill form a **change set** and are decided together; an approved
+  change set is a **version** with a revision number. Each row belongs to a **scope**, a user or
+  a project (§7.6). At most one row per `(extensionPoint, scope, targetKey)` can be **Active**:
+  the store enforces it, and a partial unique index is the second wall
+  ([apply-plugin-constraints.mjs](../../webapp/scripts/apply-plugin-constraints.mjs)). Rows are
+  deleted with their user or project.
+- **`PluginPlatformState`** holds the facts the platform itself must remember: the highest
+  catalog `serial` accepted, stored with that catalog's bytes and signature (§6.2), the version
+  counters that never go down, and the reconciliation lease.
+- **Cascade.** `PluginData` and `PluginOverride` rows reference their `PluginInstall` row with
+  `ON DELETE CASCADE`, so deleting that row deletes the plugin's data and overrides with it. A
+  purge deletes them explicitly with the row, in one transaction, and also removes the plugin's
+  model choice from every user (§9.6).
 
 ### 7.5 Generic UI host
 
-The webapp is compiled at build time, so a plugin cannot ship real React screens. It ships
+The webapp is compiled at build time, so a plugin cannot ship real React screens. Even if it
+could, its JavaScript would run in the page with the signed-in user's session, able to call
+any RedAmon route as that user, including the approval of its own proposals. It ships
 **screen descriptions** in JSON, and the host draws them from a fixed set of **UI
 primitives** that ship once in base: page, list, table, form, select, button, Markdown view,
 before/after text comparison, badge, empty state.
@@ -583,11 +806,47 @@ Plugin content is untrusted, so the host draws it defensively:
 - Icons come from a fixed allowlist, and every plugin contribution carries a small plugin
   badge, so a plugin button cannot pass itself off as a core button.
 - Plugin pages are served with a Content Security Policy that allows images only from the
-  webapp itself, and action routes are protected against cross-site request forgery.
+  webapp itself, and action routes are protected against cross-site request forgery. The
+  strict policy covers the `/plugins` pages only: plugin contributions also appear in the chat
+  drawer and in project settings, where it would break existing pages, so there the controls
+  are React's escaping and the image-free Markdown primitive.
 
 This is the price of principle 3: plugin screens can cover list, detail, form and comparison
 flows, but only with the primitives the host provides. A new primitive is a **platform**
 change (§11).
+
+**How a plugin page is served.** Next.js routes are compiled too, so the platform
+ships one generic route that serves the pages of every plugin:
+
+```
+webapp/src/app/plugins/
+├── page.tsx                            /plugins: the Plugins page
+├── external-link/page.tsx              /plugins/external-link: the link confirmation page
+└── [pluginId]/[[...screen]]/page.tsx   /plugins/<id>/…: the screens of any plugin
+```
+
+- `[pluginId]` is a dynamic segment, so one file serves every plugin, including plugins
+  installed after the image was built. `[[...screen]]` is an optional catch-all for the
+  screens that the main one links to.
+- Next.js resolves a static folder before a dynamic one, so a plugin named after a static
+  segment (`external-link`, or `status` and `jobs` under `/api/plugins/`) would be
+  unreachable. Those names are reserved plugin ids
+  ([ids.ts](../../webapp/src/lib/plugins/ids.ts)), and a test fails when a new static folder
+  is not added there.
+- The route shows the not-found screen when the switch is off, when the plugin is not enabled
+  and `ready`, or when the screen is not listed in its manifest. With the switch off the
+  middleware gives it a 404 status; otherwise the status stays 200, because the root layout
+  renders every page inside a Suspense boundary (a known limit). When none of these apply, the
+  screen is validated again
+  against the schema and drawn by the host, which fetches its data from
+  `POST /api/plugins/<id>/actions/<action>`.
+- Contributions reach the browser from `GET /api/plugins/contributions`, built from the
+  manifest copy in `PluginInstall` for the enabled plugins. Installing a plugin makes its
+  entries appear at the next fetch and disabling it removes them: nothing is compiled or
+  rebuilt.
+- A plugin's `nav` entry is an **Open** entry on its card on the Plugins page and at the top
+  of its own pages, not an item in the top bar, which keeps a single Plugins button however
+  many plugins are installed.
 
 ### 7.6 Extension points
 
@@ -597,7 +856,7 @@ Extension points are the named slots where a plugin may contribute. There are tw
 
 | Point | What a plugin contributes |
 |---|---|
-| `nav` | a top-level navigation entry and its screen |
+| `nav` | an **Open** entry on the Plugins page and the screen it opens (§7.5) |
 | `chat.session.actions` | a button on a chat session; its action receives that session |
 | `project.skills.row` | a control next to each built-in skill in project settings; its action receives the project and skill |
 
@@ -628,6 +887,15 @@ agent follows. It is defined precisely:
   - *Plain-text parts* are inserted as they are and never formatted, so braces in them are
     harmless.
   - Every value is capped in length.
+- **Scope.** A proposal targets a **user scope**, which applies to every project that user
+  owns, or a **project scope**, which applies to one project and, for that skill, replaces the
+  user-scope version as a whole, never part by part. For each skill of a project the agent
+  uses the project's own version, otherwise the user-scope version of the project's
+  **owner**, read from the project row and never from the caller
+  ([overrides.ts](../../webapp/src/lib/plugins/overrides.ts)). A change approved in one
+  user's scope therefore never reaches another user's projects. A stale project version
+  leaves that skill on factory text; it does not fall back to a user version nobody chose for
+  the project.
 - **Approval (principle 5).** A valid proposal is stored as **Proposed** and changes nothing.
   The project's owner, or an admin, sees it in the **core** project settings as a before/after
   comparison against the factory text, with the plugin's note, and approves or rejects it.
@@ -891,11 +1159,17 @@ plugins/                          # persistent volume: Manager read-write, Runne
 - **Staging is per operation**, so concurrent installs of different plugins never share a
   folder.
 - **Staging is on the same volume** as the version folders, so moving a version into place is
-  a single atomic `rename`.
+  a single atomic `rename`: on one filesystem a rename only changes a directory entry, so the
+  folder is at the old path or at the new one, never half copied. Across filesystems a move
+  is a copy and a delete, which a crash can leave half done.
 - **The active version is recorded in the database**, not with a symlink, so the registry
   stays the single source of truth.
 - Files are written world-readable and owned by the Manager, so workers can read them and
   cannot change them.
+- **Where it is mounted**: read-write in the webapp at `/data/plugins`
+  (`PLUGINS_DIR`), read-only in the Runner. It is never mounted under `/app`, where the image's
+  code lives, and it is not part of the git checkout, so image rebuilds and
+  `./redamon.sh update` leave installed plugins untouched.
 
 ### 9.3 Install, step by step
 
@@ -928,13 +1202,12 @@ sequenceDiagram
         PM-->>AD: install refused, with the reason
     else all checks pass
         PM->>VOL: rename into {id}/versions/{version}/
-        PM->>DB: commit activeVersion, permissions, enabled
+        PM->>DB: commit activeVersion, permissions, manifest,<br/>catalogEntry, enabled, status = ready
         PM->>RUN: start a worker for it
         alt worker ready
-            PM->>DB: status = ready
             PM-->>AD: installed, its menu entries appear
         else worker cannot start
-            PM->>DB: status = failed, lastError = reason
+            PM->>DB: status ready to failed, lastError = reason
             PM-->>AD: installed but failed, with the reason
         end
     end
@@ -952,11 +1225,42 @@ sequenceDiagram
 5. The `platform` range includes the running platform version.
 6. Every extension point and UI primitive the plugin references exists on this platform.
 
+**Order of the checks.** All six run on the archive in memory, before anything is written: the
+sha256 of the downloaded bytes first, then every entry as the archive is read, then the
+`plugin.json` and screens it holds. Only an archive that passed all six is written to staging
+([installChecks.ts](../../webapp/src/lib/plugins/installChecks.ts)). Check 3 is what makes the
+consent binding: the admin approved the permissions listed in the signed catalog, and the
+archive cannot declare others.
+
+**The operation and its lease.** The first install of a plugin inserts its row directly in
+`installing`; `pluginId` is the primary key, so a second insert is refused. A reinstall moves
+an existing `available` row with a compare-and-swap. Either way the row records the operation
+that owns it (`operationId`, `operationKind`, `operationArgs`) and a **lease**
+(`leaseExpiresAt`, 10 minutes, extended by a heartbeat during long work)
+([registry.ts](../../webapp/src/lib/plugins/registry.ts)), and the staging folder is named
+after the operation id. A lease replaces a database lock because a pooled connection cannot
+hold a lock across HTTP requests. If the webapp dies during the operation, nobody releases the
+row; the lease expires and reconciliation takes over (§9.7).
+
+**Status after the commit.** The status machine lets `installing` move only to `ready` or back
+to `available`, so the commit lands on `ready`, and a worker that cannot start then moves the
+plugin from `ready` to `failed`. The code stays installed, and the admin can retry or disable
+it.
+
 **Where the commit happens.** Moving the folder into `versions/` and writing the database row
 are two steps. The **database write is the commit**: until it succeeds, the Runner, the UI and
 the agent ignore the folder. If the process dies between the two steps, reconciliation finds a
 folder no row references and deletes it (§9.7). The only trace a refused install leaves is the
 `lastError` on its row, shown on the Plugins page.
+
+**A crash at each stage** leaves a state reconciliation can always resolve:
+
+| Crash during | Left behind | Recovery (§9.7) |
+|---|---|---|
+| catalog fetch or consent | nothing | nothing to do |
+| download or checks | a row in `installing`, maybe a staging folder | once the lease expires: delete `.staging/<operationId>/`, status back to `available` |
+| the rename, before the commit | a row in `installing`, a version folder no row references | status back to `available`; the folder is deleted |
+| after the commit, before the worker | a row `ready` and enabled, no worker | the Loader is told to start it |
 
 Install is **rebuild-free**: it copies files onto a volume, writes rows and starts a process.
 Nothing is compiled and no schema changes.
@@ -996,6 +1300,9 @@ flowchart TB
 
 **Migrations.**
 
+- A plugin migration is a **data** migration of the plugin's own rows, never a schema
+  migration. It writes no SQL and cannot touch any other table; the database schema changes
+  only with a RedAmon release (§11.5).
 - Migrations are numbered files in the plugin's `migrations/` folder. Each moves the data up
   one `dataVersion`, and may have a matching down migration.
 - While a migration runs, the plugin's actions are **paused**, so nothing writes the data
@@ -1003,7 +1310,10 @@ flowchart TB
 - The migration runs in the new version's worker with a **migration token**. That token can
   only read and write the plugin's own data, and it writes into a **copy** in a staging
   namespace. On success the Gateway swaps the copy in with one database transaction. On
-  failure the copy is thrown away. Either way the data is never half-migrated.
+  failure the copy is thrown away. Either way the data is never half-migrated. The copy is the
+  `migrating:<operationId>` namespace of `PluginData`; copying and swapping are
+  `copyNamespace` and `swapNamespace` in
+  [dataStore.ts](../../webapp/src/lib/plugins/dataStore.ts).
 
 **Rollback** makes the previous version active again:
 
@@ -1066,6 +1376,32 @@ sequenceDiagram
   once the plugin is not installed those reads stop qualifying and the product behaves as it
   does from the factory. Nothing in the core needs to be undone.
 
+**What an uninstall removes and what it leaves.**
+
+| | Uninstall, keep | Uninstall, purge |
+|---|---|---|
+| Workers | stopped | stopped |
+| Code: `{id}/` on the volume, every version | deleted | deleted |
+| `PluginInstall` row | kept, in `available` | deleted |
+| `PluginData` rows of every user and project | kept, unread | deleted (§7.4) |
+| `PluginOverride` rows | kept, not applied | deleted |
+| Contributions in the UI | gone | gone |
+| Agent behaviour | factory text from the next turn | factory text from the next turn |
+
+Whatever the choice, these stay, because they belong to the platform and not to the plugin:
+the platform code and its four tables, `PluginPlatformState` (the accepted catalog serial and
+the version counters, so a revision number is never reused), the audit log, and the plugin's
+releases in the catalog. The `redamon` git checkout is never involved. A purge deletes the
+plugin's rows, versions and model choices with its `PluginInstall` row in one transaction; the
+JSON export downloaded first (audited as `plugin.export`) is the only copy that survives it.
+
+While a plugin is uninstalled with its data kept, **Reset to factory** still works on its old
+overrides, because it is core UI: nobody has to reinstall the plugin to clear them.
+
+A crash during an uninstall leaves the row in `uninstalling` with the admin's choice in
+`operationArgs` (for example `{"mode": "purge"}`), so reconciliation finishes the uninstall the
+way the admin chose (§9.7).
+
 ### 9.7 Reconciliation and recovery
 
 The registry is the source of truth, and the **Manager** owns keeping the world in line with
@@ -1094,7 +1430,8 @@ flowchart TB
 
 - **Crash recovery.** A crash in the middle of an operation leaves a row in `installing`,
   `updating` or `uninstalling`. The first reconciliation after restart rolls back the install,
-  finishes or rolls back the update, or finishes the uninstall.
+  finishes or rolls back the update, or finishes the uninstall. It takes over a row only once
+  that row's lease has expired (§9.3), so it never races an operation that is still running.
 - **Clean-up.** After the loop, the Manager deletes any version or staging folder that no
   row references, such as a folder left behind by a crash just before its database commit.
 - **Base updates.** The plugins volume and the plugin tables live outside the images, so
@@ -1102,6 +1439,8 @@ flowchart TB
   moves the platform outside a plugin's `platform` range, the plugin becomes `incompatible`:
   it is inert, its overrides stop qualifying, and the Plugins page explains why. It becomes
   `ready` again when the base moves back into range or an admin installs a compatible release.
+  A base **downgrade** to an image that predates the plugin tables deletes them with their rows
+  (§11.5).
 - **A lost volume** heals from the catalog, because the checksum pins the exact archive. If the
   release is gone or the host is offline, the plugin becomes `failed` with the reason.
 - **Offline installs.** An admin can upload an archive by hand, together with a catalog and
@@ -1180,8 +1519,24 @@ flowchart TB
 | A plugin that modifies its own code or another plugin's | the volume is read-only to workers; only the Manager writes it |
 | A plugin that crashes, hangs or floods | per-worker kill on timeout, memory, CPU and process limits, concurrency caps, data quotas, a separate LLM budget |
 | An update that quietly asks for more access | new permissions require the admin to approve again |
-| A malicious catalog | only the official `redamon-plugins` catalog by default; a custom catalog is an explicit admin opt-in with a warning |
+| A malicious catalog | only the official `redamon-plugins` catalog by default; a custom catalog is an explicit admin opt-in (`PLUGINS_EXTRA_TRUSTED_KEYS`, §6.4) with a warning |
 | Actions that leave no trace | every lifecycle operation and override decision is written to the audit log |
+
+**What a plugin can and cannot change.** A plugin reaches the base only through four
+channels, and all of them are data:
+
+| Channel | What it changes | Bound |
+|---|---|---|
+| `sdk.data.*` | its own rows in `PluginData` | its namespace and quotas |
+| `sdk.override.propose` | the text of a skill part, as a proposal | nothing applies until a person approves; it cannot switch a part on; reset at any time |
+| UI contributions | entries and screens at the declared points | drawn by core code, with a plugin badge |
+| `sdk.llm.invoke` | LLM calls the agent makes for it | the user's chosen model and a separate budget |
+
+It can never change RedAmon's code or images, the database schema or any other table (users,
+projects, findings, settings, the audit log), the Neo4j graph (the SDK has no graph call),
+project settings, scope or Rules of Engagement, `.env` or the compose files, its own granted
+permissions, or another plugin's code or data. When a plugin needs more, the platform grows
+generically in a RedAmon release (§11.4).
 
 **Why approval matters so much.** RedAmon's scope guardrail is itself part of the agent's
 instructions
@@ -1244,6 +1599,19 @@ extension point, the platform grows **generically** first and ships it in a mino
 the plugin is released against that minor. The base repo gains capability; it never absorbs a
 plugin's feature code.
 
+### 11.5 The database schema
+
+The schema changes only with a RedAmon release. At every start, the webapp's entrypoint applies
+the `prisma/schema.prisma` baked into its image with `prisma db push`, then the platform's
+constraint script ([Dockerfile:123](../../webapp/Dockerfile#L123)). The four plugin tables were
+added this way, once. A plugin archive has no route to the schema: its files land on the
+plugins volume, the webapp only reads JSON from them, and its migrations work on its own rows
+through the Gateway (§9.5).
+
+The push runs with `--accept-data-loss`, so the base can delete plugin data: starting an older
+RedAmon image whose schema predates the plugin tables drops those tables with their rows.
+Export plugin data before such a downgrade.
+
 ---
 
 ## 12. What ships where
@@ -1255,7 +1623,7 @@ plugin's feature code.
 | Storage | `PluginInstall`, `PluginData`, `PluginOverride` tables | rows in its own namespace |
 | UI | UI host, primitives, extension slots, override review screens | screen descriptions (JSON) |
 | Behaviour | generic seams at behaviour points, inert when empty | `sdk.override.propose` calls |
-| Distribution | catalog fetch, keyring, signature and checksum checks | catalog generation, signed releases |
+| Distribution | catalog fetch, keyring (public keys), signature and checksum checks | catalog generation, signed releases; the signing key as an environment secret (§6.4) |
 | Feature logic | **none** | all of it (`engine/`) |
 | Feature documentation | **none** | the plugin's own `README.md` |
 
@@ -1273,8 +1641,9 @@ written alongside the first platform release:
 - The full `ctx` object, the screen-description schema, and the binding rules for every UI
   primitive.
 - How the SDK is distributed (a wheel attached to each platform release, or a package index).
-- Local development: a dev mode that loads a plugin folder directly, an SDK fake for tests, and
-  a CLI that validates a manifest and its screens before release.
+- Local development: an offline install of a locally packed archive, with a catalog signed by
+  a dev key trusted through `PLUGINS_EXTRA_TRUSTED_KEYS` (§6.4), an SDK fake for tests, and a
+  CLI that validates a manifest and its screens before release.
 - The implementation of the Gateway's separate port inside the webapp container.
 - Where plugin logs are written and how admins read them.
 
@@ -1321,3 +1690,12 @@ written alongside the first platform release:
 - **Behaviour path**: the agent's use of approved override data at each turn. It never blocks
   and always falls back to factory text.
 - **Factory behaviour**: how RedAmon behaves with no plugin enabled, the guaranteed fallback.
+- **Detached signature**: `catalog.json.sig`, a signature kept in its own file over the exact
+  bytes of `catalog.json`.
+- **Keyring**: the public keys the platform trusts to sign the catalog, compiled into the
+  webapp image; each has a key id.
+- **Lease**: the claim a lifecycle operation holds on a `PluginInstall` row until it ends or
+  the lease expires; it replaces a database lock.
+- **Scope**: who an override applies to: a user (every project that user owns) or one project.
+- **Change set / version**: the override rows proposed together for one skill; an approved
+  change set is a version with a revision number.
