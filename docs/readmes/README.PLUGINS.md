@@ -318,6 +318,9 @@ plugin in the repo.
 - **Freshness.** The platform remembers the highest `serial` it has accepted and refuses an
   older catalog, and refuses any catalog past `expires`. This stops an attacker serving an
   old catalog that still lists a since-revoked version.
+- **One mark per trust scope.** The highest serial is kept once for all the official keys, so
+  a rotated-out key cannot replay below a newer key's serial, and once per extra trusted key,
+  so a custom or development catalog never holds the official one back.
 - **Revocation.** An installed version that appears in `revoked` is disabled automatically
   and the Plugins page shows the reason.
 - **Release choice.** The platform installs the newest release whose `platform` range
@@ -401,7 +404,8 @@ and a page under `webapp/src/app/plugins/`.
   production key is published) plus the admin's `PLUGINS_EXTRA_TRUSTED_KEYS`; the signature,
   the schema, the expiry (a warning under 14 days) and the highest serial, kept with the bytes
   of that catalog. A lower serial is a replay (a CDN can lag a push): the stored catalog is
-  used and the replay logged.
+  used and the replay logged. One mark for the official keys (`catalog.serial`) and one per
+  extra key (`catalog.serial:extra:<keyId>`).
 - [`archive.ts`](../../webapp/src/lib/plugins/archive.ts),
   [`staging.ts`](../../webapp/src/lib/plugins/staging.ts) and
   [`installChecks.ts`](../../webapp/src/lib/plugins/installChecks.ts): a strict ustar reader
@@ -999,6 +1003,9 @@ sequenceDiagram
   project, so the dialog says so and offers a JSON export first.
 - **Keeping data** leaves the `PluginInstall` row in `available`, with its `PluginData` and
   `PluginOverride` rows dormant. Nothing reads data from a plugin that is not installed.
+  **Delete kept data**, on the card of such a plugin, removes them later behind the same
+  export and typed confirmation as a purge, in one transaction that rolls back if an install
+  starts meanwhile.
 - **Reinstall** goes through the normal install (§9.3). It finds the existing row and data and
   runs data migrations if the stored `dataVersion` is older. It then **asks the admin** whether
   to restore the plugin's previous overrides. Restored overrides whose factory part has changed
