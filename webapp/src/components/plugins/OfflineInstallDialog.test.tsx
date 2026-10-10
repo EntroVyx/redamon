@@ -17,9 +17,9 @@ afterEach(() => {
 
 const ARCHIVE = Buffer.from('pretend this is a gzip archive')
 const SHA = createHash('sha256').update(ARCHIVE).digest('hex')
-const catalog = (sha: string) =>
+const catalog = (sha: string, release: Record<string, unknown> = {}) =>
   JSON.stringify({
-    plugins: [{ id: 'echo', displayName: 'Echo', releases: [{ version: '1.0.0', sha256: sha, permissions: ['session:read'] }] }],
+    plugins: [{ id: 'echo', displayName: 'Echo', releases: [{ version: '1.0.0', sha256: sha, permissions: ['session:read'], dataVersion: 1, ...release }] }],
   })
 
 function pick(index: number, name: string, content: string | Buffer) {
@@ -54,6 +54,42 @@ describe('OfflineInstallDialog', () => {
     pick(1, 'catalog.json', catalog('0'.repeat(64)))
     expect(await screen.findByText(/does not list this archive/)).toBeTruthy()
     expect((screen.getByRole('button', { name: /^Install$/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  test('an installed plugin: the upload is an update, with the permissions it adds and the data warning', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <OfflineInstallDialog
+        isOpen
+        installed={{ echo: { version: '1.0.0', dataVersion: 1, grantedPermissions: ['session:read'] } }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    )
+    pick(0, 'echo-1.1.0.tar.gz', ARCHIVE)
+    pick(1, 'catalog.json', catalog(SHA, { version: '1.1.0', permissions: ['session:read', 'llm:invoke'], dataVersion: 2 }))
+    pick(2, 'catalog.json.sig', '{"keyId":"k","sig":"x"}')
+    expect(await screen.findByText(/updates Echo from 1\.0\.0 to 1\.1\.0/)).toBeTruthy()
+    const llm = screen.getByText('Use a language model').closest('li')!
+    expect(llm.textContent).toMatch(/New/)
+    expect(screen.getByText('Read chat sessions').closest('li')!.textContent).not.toMatch(/New/)
+    expect(screen.getByText(/moves the plugin's data to a new format/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /^Update Echo 1\.1\.0/ }))
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  test('the restore question the server asked: answered in the form', async () => {
+    const onSubmit = vi.fn()
+    render(<OfflineInstallDialog isOpen restoreCount={2} onSubmit={onSubmit} onCancel={vi.fn()} />)
+    pick(0, 'echo-1.0.0.tar.gz', ARCHIVE)
+    pick(1, 'catalog.json', catalog(SHA))
+    pick(2, 'catalog.json.sig', '{"keyId":"k","sig":"x"}')
+    expect(await screen.findByText(/left 2 approved skill versions/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /factory text/i }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /^Install Echo 1\.0\.0/ }))
+    expect((onSubmit.mock.calls[0][0] as FormData).get('restoreOverrides')).toBe('false')
   })
 
   test('a file that is not a catalog', async () => {

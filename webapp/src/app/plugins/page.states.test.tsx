@@ -9,6 +9,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createHash, webcrypto } from 'node:crypto'
 
 const alertSpies = vi.hoisted(() => ({
   alert: vi.fn(async () => {}),
@@ -387,5 +388,42 @@ describe('actions', () => {
   test('Install from file is offered to the admin', async () => {
     show()
     expect(await screen.findByRole('button', { name: /install from file/i })).toBeTruthy()
+  })
+
+  test('Install from file: a reinstall that needs the restore answer asks it in the same dialog', async () => {
+    // jsdom's crypto has no subtle; every browser that runs the page has it.
+    vi.stubGlobal('crypto', webcrypto)
+    const archive = Buffer.from('pretend this is a gzip archive')
+    const sha = createHash('sha256').update(archive).digest('hex')
+    const catalogText = JSON.stringify({ plugins: [{ id: 'echo', displayName: 'Echo', releases: [{ version: '1.0.0', sha256: sha, permissions: ['session:read'] }] }] })
+    const base = fetchMock.getMockImplementation()!
+    const forms: FormData[] = []
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/plugins/offline-install') {
+        forms.push(init!.body as FormData)
+        if (forms.length === 1) {
+          return new Response(JSON.stringify({ error: 'This plugin left 2 approved skill version(s): say whether to restore them.', code: 'restore_choice_required', details: ['2'] }), { status: 400 })
+        }
+        return new Response(JSON.stringify({ plugin: { pluginId: 'echo', status: 'ready' } }))
+      }
+      return base(url, init)
+    })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /install from file/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    const inputs = document.querySelectorAll('input[type="file"]')
+    const pick = (i: number, name: string, content: string | Buffer) =>
+      fireEvent.change(inputs[i], { target: { files: [new File([new Uint8Array(Buffer.from(content))], name)] } })
+    pick(0, 'echo-1.0.0.tar.gz', archive)
+    pick(1, 'catalog.json', catalogText)
+    pick(2, 'catalog.json.sig', '{"keyId":"k","sig":"x"}')
+    fireEvent.click(await dialog.findByRole('checkbox'))
+    fireEvent.click(dialog.getByRole('button', { name: /^Install Echo 1\.0\.0/ }))
+    expect(await dialog.findByText(/left 2 approved skill versions/)).toBeTruthy()
+    expect(alertSpies.alertError).not.toHaveBeenCalled()
+    fireEvent.click(dialog.getByRole('radio', { name: /factory text/i }))
+    fireEvent.click(dialog.getByRole('button', { name: /^Install Echo 1\.0\.0/ }))
+    await waitFor(() => expect(forms).toHaveLength(2))
+    expect(forms[1].get('restoreOverrides')).toBe('false')
   })
 })

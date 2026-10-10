@@ -19,7 +19,7 @@ type Dialog =
   | { kind: 'install'; entry: PluginEntry; restoreCount: number }
   | { kind: 'update'; entry: PluginEntry }
   | { kind: 'uninstall'; entry: PluginEntry; keptOnly?: boolean }
-  | { kind: 'offline' }
+  | { kind: 'offline'; restoreCount?: number }
   | null
 
 export function PluginsPageClient() {
@@ -35,7 +35,7 @@ export function PluginsPageClient() {
     } catch (e) {
       const err = e as PluginApiError
       // A reinstall that finds approved versions: ask, then try again with the answer.
-      if (err.code === 'restore_choice_required' && dialog?.kind === 'install') {
+      if (err.code === 'restore_choice_required' && (dialog?.kind === 'install' || dialog?.kind === 'offline')) {
         setDialog({ ...dialog, restoreCount: Number(err.details?.[0] ?? 1) })
         return null
       }
@@ -188,6 +188,14 @@ export function PluginsPageClient() {
         <OfflineInstallDialog
           isOpen
           busy={busy}
+          installed={Object.fromEntries(
+            data.plugins.flatMap((p) =>
+              p.installed?.version
+                ? [[p.id, { version: p.installed.version, dataVersion: p.installed.dataVersion, grantedPermissions: p.installed.grantedPermissions }]]
+                : [],
+            ),
+          )}
+          restoreCount={dialog.restoreCount ?? 0}
           onCancel={close}
           onSubmit={async (form) => {
             const out = await run('/api/plugins/offline-install', undefined, form)
