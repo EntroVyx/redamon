@@ -1,7 +1,7 @@
 /**
  * One reconcile at a time (RV-16, X4): a client timeout does not cancel a Next.js handler,
  * so the orchestrator's tick, the runner's start and any key holder could otherwise run
- * reconciles that overlap. A platform-wide lease (compare-and-set, 120 s) lets one run and
+ * reconciles that overlap. A platform-wide lease (compare-and-set, renewed between operations) lets one run and
  * answers the others `skipped: 'busy'`; an expired lease is taken over; a reconcile never
  * removes the files of an install in progress.
  *
@@ -19,7 +19,7 @@ import { setNowForTests } from './clock'
 import fs from 'node:fs/promises'
 import { install, uninstall } from './lifecycle'
 import { RECONCILE_LEASE_KEY, RECONCILE_LEASE_MS, reconcile } from './reconcile'
-import { stagingPath, versionPath } from './staging'
+import { removeVersion, stagingPath, versionPath } from './staging'
 
 let db: FakePrisma
 let w: LifecycleWorld
@@ -119,4 +119,25 @@ test('an install migrating kept data keeps its new version folder through a reco
   expect(await exists(versionPath('echo', '1.1.0'))).toBe(true)
   release()
   expect((await installing).plugin).toMatchObject({ status: 'ready', activeVersion: '1.1.0', dataVersion: 2 })
+})
+
+test('a run longer than one lease keeps it: renewed before each operation', async () => {
+  await install('echo', { version: '1.0.0', acceptedPermissions: PERMS }, ADMIN, w.deps)
+  await removeVersion('echo', '1.0.0')
+  let until: string | null = null
+  const slow = {
+    ...w.deps,
+    // The catalog takes longer than a whole lease; then step 3 heals with a download.
+    loadCatalog: async () => {
+      clock = new Date(clock.getTime() + RECONCILE_LEASE_MS + 60_000)
+      return w.deps.loadCatalog!()
+    },
+    fetchArchive: async (u: string) => {
+      until = (lease()?.value as { until: string } | undefined)?.until ?? null
+      return w.deps.fetchArchive!(u)
+    },
+  }
+  await reconcile(slow)
+  expect(until).not.toBeNull()
+  expect(new Date(until!).getTime()).toBeGreaterThan(clock.getTime())
 })

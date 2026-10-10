@@ -60,7 +60,9 @@ import {
  *   guessed when the agent cannot be asked (TD-16).
  */
 export const RECONCILE_LEASE_KEY = 'reconcile.lease'
-export const RECONCILE_LEASE_MS = 120_000
+// Longer than any one operation of a run (a purge's transaction may take 120 s), and renewed
+// before each: a run never outlives its lease, so two never overlap.
+export const RECONCILE_LEASE_MS = 300_000
 export const RECONCILE_BUDGET_MS = 20_000
 export const FOLDER_GRACE_MS = 15 * 60_000
 const EXPIRED_BATCH = 1000
@@ -134,6 +136,14 @@ async function takeLease(holder: string): Promise<boolean> {
     data: { value },
   })
   return count === 1
+}
+
+async function renewLease(holder: string) {
+  const value = { holder, until: new Date(now().getTime() + RECONCILE_LEASE_MS).toISOString() }
+  await prisma.pluginPlatformState.updateMany({
+    where: { key: RECONCILE_LEASE_KEY, value: { path: ['holder'], equals: holder } },
+    data: { value },
+  })
 }
 
 async function releaseLease(holder: string) {
@@ -444,6 +454,7 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
     // 1. Operations whose lease expired.
     for (const row of await prisma.pluginInstall.findMany({ orderBy: { pluginId: 'asc' } })) {
       if (!['installing', 'updating', 'uninstalling'].includes(row.status) || liveLease(row)) continue
+      await renewLease(holder)
       try {
         const outcome = await recoverOperation(row, d)
         report.recovered.push({ pluginId: row.pluginId, from: row.status, outcome })
@@ -466,6 +477,7 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
     let healsLeft = 1
     for (const row of await prisma.pluginInstall.findMany({ orderBy: { pluginId: 'asc' } })) {
       if (!isInstalled(row.status) || liveLease(row) || !row.activeVersion) continue
+      await renewLease(holder)
       try {
         let revokedReason = row.revokedReason
         if (loaded) {
@@ -536,6 +548,7 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
         report.budgetExhausted = true
         break
       }
+      await renewLease(holder)
       try {
         await step()
       } catch (e) {
@@ -545,6 +558,7 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
 
     // 5. The runner converges on the run list; a retried plugin is settled by its worker.
     if (runListChanged) {
+      await renewLease(holder)
       report.runnerReloaded = true
       let workers: { id: string; state?: string }[] | null = null
       let why = 'runner_unavailable'
