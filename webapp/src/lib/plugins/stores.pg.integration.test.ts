@@ -14,6 +14,7 @@
  * @vitest-environment node
  */
 import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest'
+import { createHash } from 'crypto'
 import { Prisma, PrismaClient } from '@prisma/client'
 import { setNowForTests } from './clock'
 import * as registry from './registry'
@@ -284,6 +285,17 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
         } while (cursor)
         expect(walked.sort()).toEqual(['k0', 'k10', 'k2', 'k4', 'k6', 'k8'])
         expect(await store.count(S, me, 'rows', { where: { even: true } }, db)).toBe(6)
+      })
+
+      // The cursor's hash is no secret: a plugin can re-hash a cursor naming any position.
+      test('a forged cursor naming a date Postgres cannot hold is invalid_cursor, not a database error', async () => {
+        for (let i = 0; i < 3; i++) await put(`f${i}`, i)
+        const { next } = await store.query(S, me, 'rows', { order: '-updated', limit: 1 }, db)
+        const body = { ...JSON.parse(Buffer.from(next!, 'base64url').toString('utf8')), v: '-271821-04-20T00:00:00.000Z' }
+        const query = ['skiller', 'live', 'user', 'alice', 'rows', null, null, '-updated']
+        body.h = createHash('sha256').update(JSON.stringify([...query, body.o, body.v, body.i])).digest('base64url').slice(0, 32)
+        const forged = Buffer.from(JSON.stringify(body), 'utf8').toString('base64url')
+        await expect(store.query(S, me, 'rows', { order: '-updated', limit: 1, cursor: forged }, db)).rejects.toMatchObject({ code: 'invalid_cursor' })
       })
     })
   })

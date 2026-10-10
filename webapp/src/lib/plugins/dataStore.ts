@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma'
 import { now } from './clock'
 import { isValidPluginId } from './ids'
 import { dataLimits } from './settings'
+import { isStorableText } from './storableText'
 
 /**
  * The generic data store (README.PLUGINS.md §7.4): everything a plugin keeps, as JSON,
@@ -18,9 +19,14 @@ import { dataLimits } from './settings'
  * - Quotas are checked by counting before writing; two concurrent writes can overshoot
  *   by one row each, which is accepted for a quota.
  * - `query` pages with a keyset cursor (TD-28): the cursor holds the last row's sort
- *   value and id, so writes between pages never skip or repeat a row, plus a hash of the
- *   whole query, so a cursor never moves to another query. `where` compares top-level JSON
- *   fields by jsonb equality through Prisma's JSON path filter, never raw SQL.
+ *   value and id, so inserts and deletes between pages never skip or repeat a row, plus a
+ *   hash of the whole query, so a cursor never moves to another query. A write moves a row
+ *   in the `updated` orders: in `-updated` it moves behind the cursor and is not returned
+ *   again; a walk in `updated` order is bounded by its newest row when it began, so one
+ *   that writes rows back as it reads them ends, and a row written during it is not
+ *   returned. The hash is no secret, so the position a cursor names is checked like any
+ *   input. `where` compares top-level JSON fields by jsonb equality through Prisma's JSON
+ *   path filter, never raw SQL.
  * - A row past its `expiresAt` is invisible to every read. It still holds quota until it
  *   is deleted (otherwise short-lived rows could grow storage without bound before
  *   reconciliation deletes them), but a write that would exceed a quota first deletes
@@ -376,6 +382,18 @@ interface CursorBody {
   v: string
   i: string
   h: string
+  /** `updated` order only: the newest row's updatedAt when the walk began. */
+  s?: string
+}
+
+const ROW_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const ISO_MS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** A date as the store writes it, in years 1 to 9999: Postgres holds no year 0 and no sign. */
+function isCursorDate(v: string): boolean {
+  if (!ISO_MS_RE.test(v) || v.startsWith('0000')) return false
+  const at = new Date(v)
+  return !Number.isNaN(at.getTime()) && at.toISOString() === v
 }
 
 function queryHash(base: ReturnType<typeof prepareCollection>, prefix: string | null, where: unknown, order: QueryOrder) {
@@ -384,13 +402,16 @@ function queryHash(base: ReturnType<typeof prepareCollection>, prefix: string | 
 
 // Not a secret: it only stops a cursor from being used with another query, or after an
 // edit; whatever a cursor says, a query never leaves its plugin, owner and collection.
-function cursorHash(query: unknown[], o: string, v: string, i: string): string {
-  return createHash('sha256').update(JSON.stringify([...query, o, v, i])).digest('base64url').slice(0, 32)
+function cursorHash(query: unknown[], o: string, v: string, i: string, s?: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify([...query, o, v, i, ...(s === undefined ? [] : [s])]))
+    .digest('base64url')
+    .slice(0, 32)
 }
 
-function encodeCursor(query: unknown[], order: QueryOrder, row: PluginData): string {
+function encodeCursor(query: unknown[], order: QueryOrder, row: PluginData, s?: string): string {
   const v = order.endsWith('updated') ? row.updatedAt.toISOString() : row.key
-  const body: CursorBody = { o: order, v, i: row.id, h: cursorHash(query, order, v, row.id) }
+  const body: CursorBody = { o: order, v, i: row.id, h: cursorHash(query, order, v, row.id, s), ...(s === undefined ? {} : { s }) }
   return Buffer.from(JSON.stringify(body), 'utf8').toString('base64url')
 }
 
@@ -407,14 +428,17 @@ function decodeCursor(cursor: string, query: unknown[], order: QueryOrder): Curs
     typeof body.o !== 'string' ||
     typeof body.v !== 'string' ||
     typeof body.i !== 'string' ||
-    typeof body.h !== 'string'
+    typeof body.h !== 'string' ||
+    (body.s !== undefined && typeof body.s !== 'string')
   ) {
     throw new PluginDataError('invalid_cursor', 'This cursor is not valid.')
   }
-  if (body.o !== order || body.h !== cursorHash(query, body.o, body.v, body.i)) {
+  if (body.o !== order || body.h !== cursorHash(query, body.o, body.v, body.i, body.s)) {
     throw new PluginDataError('invalid_cursor', 'This cursor belongs to another query.')
   }
-  if (order.endsWith('updated') && Number.isNaN(Date.parse(body.v))) {
+  // Positions Postgres could not compare would fail the query as a 500.
+  const position = order.endsWith('updated') ? isCursorDate(body.v) : isStorableText(body.v)
+  if (!position || !ROW_ID_RE.test(body.i) || (body.s !== undefined && !isCursorDate(body.s))) {
     throw new PluginDataError('invalid_cursor', 'This cursor is not valid.')
   }
   return body as CursorBody
@@ -457,15 +481,24 @@ export async function query(
   }
   const identity = queryHash(base, prefix, where, order)
   const cursor = typeof opts.cursor === 'string' ? decodeCursor(opts.cursor, identity, order) : null
+  const matching = [base, ...filters(prefix, where), liveRows()]
+
+  let startBound: string | undefined
+  if (order === 'updated') {
+    startBound = cursor
+      ? cursor.s
+      : (await db.pluginData.findFirst({ where: { AND: matching }, orderBy: [{ updatedAt: 'desc' }] }))?.updatedAt.toISOString()
+  }
+  const bounded = startBound === undefined ? [] : [{ updatedAt: { lte: new Date(startBound) } }]
 
   // One row more than asked: whether it exists decides `next`, so the last page says so.
   const rows = await db.pluginData.findMany({
-    where: { AND: [base, ...filters(prefix, where), liveRows(), ...(cursor ? [after(order, cursor)] : [])] },
+    where: { AND: [...matching, ...bounded, ...(cursor ? [after(order, cursor)] : [])] },
     orderBy: ORDER_BY[order],
     take: limit + 1,
   })
   const page = rows.slice(0, limit)
-  const next = rows.length > limit ? encodeCursor(identity, order, page[page.length - 1]) : null
+  const next = rows.length > limit ? encodeCursor(identity, order, page[page.length - 1], startBound) : null
   return { items: page.map(toRecord), next }
 }
 
