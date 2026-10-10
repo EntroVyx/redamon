@@ -96,7 +96,7 @@ describe('offline install', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).plugin).toMatchObject({ pluginId: 'echo', status: 'ready', activeVersion: '1.0.0' })
     expect(row()).toMatchObject({ status: 'ready', installedBy: ADMIN })
-    expect(db.rows('pluginPlatformState').find((s) => s.key === 'catalog.serial')?.value).toMatchObject({ serial: 5, keyId: 'dev-offline' })
+    expect(db.rows('pluginPlatformState').find((s) => s.key === 'catalog.serial:extra:dev-offline')?.value).toMatchObject({ serial: 5, keyId: 'dev-offline' })
     expect(w.downloads).toEqual([])
   })
 

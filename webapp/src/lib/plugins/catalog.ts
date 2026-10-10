@@ -17,6 +17,9 @@ import { parseCatalog, type CatalogRelease, type PluginCatalog } from './schemas
  *   an older copy for minutes after a push (E5), so the stored last-good catalog is used
  *   and the replay logged (RV-45). It is verified again on every use, so a key removed
  *   from the keyring or an expiry still applies to it.
+ * - One mark for all the official keys, so a catalog signed by a rotated-out key cannot be
+ *   replayed under the newer key's serial; one mark per extra key, so a custom or
+ *   development catalog (whose serial may be a Unix time) never holds the official one back.
  * - An expired catalog blocks install and update. It never touches an installed plugin:
  *   nothing here writes anything but the serial record.
  */
@@ -142,16 +145,22 @@ function result(v: Verified, replayed: boolean): LoadedCatalog {
   return { catalog: v.catalog, keyId: v.keyId, official: v.official, serial: v.catalog.serial, expiresAt, warnings }
 }
 
-function readStored(value: unknown): StoredCatalog | null {
+const markKey = (v: Verified) => (v.official ? CATALOG_STATE_KEY : `${CATALOG_STATE_KEY}:extra:${v.keyId}`)
+
+function readStored(value: unknown, v: Verified, officialKeys: readonly TrustedKey[]): StoredCatalog | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const v = value as Record<string, unknown>
-  if (!Number.isSafeInteger(v.serial) || typeof v.bytes !== 'string' || typeof v.sig !== 'string') return null
-  return v as unknown as StoredCatalog
+  const s = value as Record<string, unknown>
+  if (!Number.isSafeInteger(s.serial) || typeof s.bytes !== 'string' || typeof s.sig !== 'string') return null
+  // The official mark counts only while the key that set it is official: earlier code kept
+  // every key's mark under this name, and a key taken out of the keyring (rotated keys stay
+  // listed with notAfter) must not hold the catalog back.
+  if (v.official && !officialKeys.some((k) => k.keyId === s.keyId)) return null
+  return s as unknown as StoredCatalog
 }
 
 /**
- * Keeps the highest serial. Under an advisory lock, so two loads at once compare against
- * the same stored value and the serial is never lowered.
+ * Keeps the highest serial of the catalog's mark. Under an advisory lock, so two loads at
+ * once compare against the same stored value and the serial is never lowered.
  */
 async function settleSerial(
   v: Verified,
@@ -160,14 +169,15 @@ async function settleSerial(
   officialKeys: readonly TrustedKey[],
   db: Db,
 ): Promise<LoadedCatalog> {
+  const key = markKey(v)
   return db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'plugins:' + CATALOG_STATE_KEY}))`
-    const row = await tx.pluginPlatformState.findUnique({ where: { key: CATALOG_STATE_KEY } })
-    const stored = readStored(row?.value)
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'plugins:' + key}))`
+    const row = await tx.pluginPlatformState.findUnique({ where: { key } })
+    const stored = readStored(row?.value, v, officialKeys)
     if (stored && v.catalog.serial < stored.serial) {
       console.warn(
         `[plugins] catalog replay: fetched serial ${v.catalog.serial} is older than the accepted ` +
-          `${stored.serial}; using the stored catalog`,
+          `${stored.serial} (${key}); using the stored catalog`,
       )
       const again = verifyCatalog(Buffer.from(stored.bytes, 'base64'), Buffer.from(stored.sig, 'base64'), officialKeys)
       return result(again, true)
@@ -181,8 +191,8 @@ async function settleSerial(
         acceptedAt: now().toISOString(),
       }
       await tx.pluginPlatformState.upsert({
-        where: { key: CATALOG_STATE_KEY },
-        create: { key: CATALOG_STATE_KEY, value: value as never },
+        where: { key },
+        create: { key, value: value as never },
         update: { value: value as never },
       })
     }

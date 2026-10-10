@@ -90,8 +90,8 @@ async function refused(p: Promise<unknown>): Promise<CatalogError> {
   return e as CatalogError
 }
 
-function stored(): { serial: number; keyId: string; bytes: string; sig: string } | undefined {
-  return db.rows('pluginPlatformState').find((r) => r.key === CATALOG_STATE_KEY)?.value as never
+function stored(key = CATALOG_STATE_KEY): { serial: number; keyId: string; bytes: string; sig: string } | undefined {
+  return db.rows('pluginPlatformState').find((r) => r.key === key)?.value as never
 }
 
 describe('signature', () => {
@@ -238,6 +238,50 @@ describe('serial', () => {
     expect(e.code).toBe('expired')
   })
 
+  test('a custom or development catalog never holds the official one back', async () => {
+    // The fixture script uses a Unix time as the serial; the official catalog counts from 1.
+    const devCatalog = catalogOf(1_791_620_618, { key: dev })
+    await loadCatalog({ source: 'upload', bytes: devCatalog.bytes, sigBytes: devCatalog.sigBytes }, { officialKeys: officialKeys() })
+    const out = await loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(3)), officialKeys: officialKeys() })
+    expect(out).toMatchObject({ serial: 3, official: true })
+    expect(out.warnings).not.toContain('replayed')
+    expect(stored()).toMatchObject({ serial: 3, keyId: 'redamon-2026' })
+    expect(stored(`${CATALOG_STATE_KEY}:extra:dev-1`)).toMatchObject({ serial: 1_791_620_618, keyId: 'dev-1' })
+  })
+
+  test('the official keys share one mark: a rotated-in key cannot be replayed under by the older one', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const next = makeKeyPair('redamon-2027')
+    const keys = [asTrusted(official), asTrusted(next)]
+    await loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(10, { key: next })), officialKeys: keys })
+    clearCatalogCache()
+    const out = await loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(9)), officialKeys: keys })
+    expect(out).toMatchObject({ serial: 10, keyId: 'redamon-2027' })
+    expect(out.warnings).toContain('replayed')
+  })
+
+  test('each extra key keeps its own mark, so a replay under it is still caught', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const twelve = catalogOf(12, { key: dev })
+    const eleven = catalogOf(11, { key: dev })
+    await loadCatalog({ source: 'upload', bytes: twelve.bytes, sigBytes: twelve.sigBytes }, { officialKeys: officialKeys() })
+    const out = await loadCatalog({ source: 'upload', bytes: eleven.bytes, sigBytes: eleven.sigBytes }, { officialKeys: officialKeys() })
+    expect(out).toMatchObject({ serial: 12, keyId: 'dev-1' })
+    expect(out.warnings).toContain('replayed')
+    expect(stored()).toBeUndefined()
+  })
+
+  test('an extra key mark stored under the official name by earlier code is not the official mark', async () => {
+    const legacy = catalogOf(1_791_620_618, { key: dev })
+    db.seed('pluginPlatformState', [{
+      key: CATALOG_STATE_KEY,
+      value: { serial: 1_791_620_618, keyId: 'dev-1', bytes: legacy.bytes.toString('base64'), sig: legacy.sigBytes.toString('base64'), acceptedAt: NOW.toISOString() },
+    }])
+    const out = await loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(3)), officialKeys: officialKeys() })
+    expect(out).toMatchObject({ serial: 3, official: true })
+    expect(stored()).toMatchObject({ serial: 3, keyId: 'redamon-2026' })
+  })
+
   test('two loads at once never lower the stored serial', async () => {
     await Promise.all([
       loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(7)), officialKeys: officialKeys(), noCache: true }),
@@ -253,7 +297,7 @@ describe('sources and caching', () => {
     const out = await loadCatalog({ source: 'upload', bytes: c.bytes, sigBytes: c.sigBytes }, { officialKeys: officialKeys() })
     expect(out.serial).toBe(12)
     expect(out.official).toBe(false)
-    expect(stored()?.serial).toBe(12)
+    expect(stored(`${CATALOG_STATE_KEY}:extra:dev-1`)?.serial).toBe(12)
     const bad = Buffer.from(c.bytes)
     bad[10] ^= 1
     expect((await refused(loadCatalog({ source: 'upload', bytes: bad, sigBytes: c.sigBytes }))).code).toBe('signature_invalid')
