@@ -436,6 +436,13 @@ EXPECT_CAUSE="32" check_degraded "a token secret of 31 characters" \
     "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SHORT"
 EXPECT_CAUSE="AUTH_SECRET" check_degraded "a token secret equal to AUTH_SECRET" \
     "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SAME" "AUTH_SECRET=$SAME"
+# The runner holds its key: a runner escape must not yield the key that signs call tokens.
+EXPECT_CAUSE="equals PLUGIN_RUNNER_KEY" check_degraded "a token secret equal to the runner key" \
+    "$STRONG" "PLUGINS_ENABLED=true" "PLUGIN_RUNNER_KEY=$SAME" "PLUGIN_CALL_TOKEN_SECRET=$SAME"
+EXPECT_CAUSE="equals INTERNAL_API_KEY" check_degraded "a token secret equal to INTERNAL_API_KEY" \
+    "INTERNAL_API_KEY=$SAME" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SAME"
+EXPECT_CAUSE="equals AGENT_WS_TICKET_SECRET" check_degraded "a token secret equal to AGENT_WS_TICKET_SECRET" \
+    "$STRONG" "PLUGINS_ENABLED=true" "${KEYS[0]}" "PLUGIN_CALL_TOKEN_SECRET=$SAME" "AGENT_WS_TICKET_SECRET=$SAME"
 
 # =============================================================================
 section "(xii) Docker refusing the plugin networks or volume: plugins off, the core starts (R-78)"

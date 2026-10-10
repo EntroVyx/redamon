@@ -199,6 +199,17 @@ describe('the secret', () => {
     expect(err.mock.calls.flat().join(' ')).toMatch(/\[plugins\].*PLUGIN_CALL_TOKEN_SECRET/)
     err.mockRestore()
   })
+
+  // Phase 04 review: the runner holds PLUGIN_RUNNER_KEY, and a compromised runner must not
+  // be able to mint call tokens; the other platform keys must not double as it either.
+  test.each(['PLUGIN_RUNNER_KEY', 'INTERNAL_API_KEY', 'AGENT_WS_TICKET_SECRET'])('a secret equal to %s is refused', async (name) => {
+    vi.stubEnv(name, SECRET)
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const minted = await mintCallToken(base).catch((e: unknown) => e)
+    expect(minted).toBeInstanceOf(CallTokenConfigError)
+    expect(String((minted as Error).message)).toContain(name)
+    err.mockRestore()
+  })
 })
 
 describe('time to live (RV-20)', () => {

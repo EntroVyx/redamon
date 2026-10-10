@@ -68,7 +68,11 @@ export interface MintCallTokenInput {
   timeoutSeconds: number
 }
 
-let reportedSameAsAuth = false
+// Keys the call-token secret must differ from. A leaked call token must never sign a
+// login (AUTH_SECRET); the runner holds PLUGIN_RUNNER_KEY, and a runner escape must not
+// yield the key that signs call tokens; the agent's keys must not double as it either.
+const DISTINCT_FROM = ['AUTH_SECRET', 'PLUGIN_RUNNER_KEY', 'INTERNAL_API_KEY', 'AGENT_WS_TICKET_SECRET'] as const
+const reportedSameAs = new Set<string>()
 
 function secret(): Uint8Array {
   const value = (process.env.PLUGIN_CALL_TOKEN_SECRET || '').trim()
@@ -77,12 +81,13 @@ function secret(): Uint8Array {
       `PLUGIN_CALL_TOKEN_SECRET is not configured (at least ${SECRET_MIN_CHARS} characters; ./redamon.sh up generates it)`,
     )
   }
-  if (value === (process.env.AUTH_SECRET || '').trim()) {
-    if (!reportedSameAsAuth) {
-      reportedSameAsAuth = true
-      console.error('[plugins] PLUGIN_CALL_TOKEN_SECRET equals AUTH_SECRET; every plugin call is refused until it differs')
+  const same = DISTINCT_FROM.find((name) => value === (process.env[name] || '').trim())
+  if (same) {
+    if (!reportedSameAs.has(same)) {
+      reportedSameAs.add(same)
+      console.error(`[plugins] PLUGIN_CALL_TOKEN_SECRET equals ${same}; every plugin call is refused until it differs`)
     }
-    throw new CallTokenConfigError('PLUGIN_CALL_TOKEN_SECRET must differ from AUTH_SECRET')
+    throw new CallTokenConfigError(`PLUGIN_CALL_TOKEN_SECRET must differ from ${same}`)
   }
   return new TextEncoder().encode(value)
 }

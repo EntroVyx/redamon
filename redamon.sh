@@ -2144,10 +2144,13 @@ plugins_preflight() {
         PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET has fewer than 32 characters (delete the line; the next ./redamon.sh up generates it)"
         return 1
     fi
-    if [[ "$secret" == "$(_env_compose_value AUTH_SECRET "$env_file" | tr -d '[:space:]')" ]]; then
-        PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET equals AUTH_SECRET (delete its line; the next ./redamon.sh up generates another)"
-        return 1
-    fi
+    # The runner holds PLUGIN_RUNNER_KEY: a runner escape must not yield the token key.
+    for k in AUTH_SECRET PLUGIN_RUNNER_KEY INTERNAL_API_KEY AGENT_WS_TICKET_SECRET; do
+        if [[ "$secret" == "$(_env_compose_value "$k" "$env_file" | tr -d '[:space:]')" ]]; then
+            PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET equals $k (delete its line; the next ./redamon.sh up generates another)"
+            return 1
+        fi
+    done
     if ! _docker_engine_at_least "$PLUGINS_MIN_ENGINE"; then
         local have
         have="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || have=""
