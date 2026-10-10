@@ -475,6 +475,18 @@ same-origin request, checked against `PLUGINS_ALLOWED_ORIGIN` when it is set):
 | `POST /api/plugins/jobs/[jobId]/cancel` | Cancels the owner's job |
 | `GET /api/plugins` | The Plugins page model: the catalog's state, one entry per catalog plugin merged with the installed rows, each with its card state, the newest release this platform can run (with consent text) and any update; admins also see errors |
 | `GET /api/plugins/[pluginId]` | One plugin; admins also get the last error, versions on disk, data usage, approved versions and whether a rollback is possible |
+| `GET /api/plugins/contributions` | The UI every enabled plugin contributes (`nav`, `chatSessionActions`, `projectSkillsRow`), read from the stored manifests; an `updating` plugin is flagged |
+| `GET /api/plugins/overrides/change-sets/[id]` | The review model of a proposed skill version (before/after per part, warnings, risk flags), built against the agent's live registry; scope owner only |
+| `POST /api/plugins/overrides/change-sets/[id]/approve`, `.../reject` | Decide a proposal. A user-scope decision carries `{scopeOwnerId}`, which must be the effective user (`403 wrong_owner`). Approve re-checks the factory text and size with the agent: `409 stale_proposal` / `already_decided`, `422 over_limit`, `503 agent_outdated` |
+| `DELETE /api/plugins/overrides/change-sets/[id]` | Deletes a version that is not active (`409 active_not_deletable`) |
+| `GET /api/plugins/overrides/versions?point=skill.text&group=<skill>&projectId=<id>` | The versions of a built-in skill for the user's own scope, plus a project they own |
+| `POST /api/plugins/overrides/reset` | `{point, group, scopeType, scopeOwnerId?, projectId?}`: the scope's active version is cleared; works whatever the plugin's state |
+| `GET /api/plugins/overrides/summary?projectId=<id>` | Per built-in skill of a project the user owns: the version that governs it, whether it applies (and why not), pending proposals |
+
+Plugin pages: `/plugins/<pluginId>[/<screen>]` draws a plugin's `nav` screen (404 unless the plugin
+is enabled and the screen is listed in its manifest) and `/plugins/external-link?url=` is where
+every link in plugin text lands. The middleware sets a strict Content-Security-Policy on
+`/plugins` and `/plugins/*` only.
 
 **For admins** (the role is read from the database on every request, so a demoted admin's token is
 refused; same-origin and JSON bodies; `409 plugin_busy` when another operation holds the plugin):
@@ -588,7 +600,7 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 |-----------|-------------|
 | `AIAssistantDrawer` | Thin orchestrator — wires hooks together, renders sub-components |
 | `DrawerHeader` | Header bar — connection status, history toggle, new chat, download, close |
-| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown |
+| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown (Agent Behaviour, Tool Matrix, Agent Skills, then one group per plugin with chat-session actions when the plugin platform is on) |
 | `ChatArea` | Scrollable message list — renders grouped items, loading eye, empty state |
 | `InputArea` | Textarea, send/stop/resume buttons, Chat Skill picker (lightning bolt), `/skill` autocomplete, active skill badge |
 | `ApprovalDialog` | Phase-transition approval overlay |
@@ -602,6 +614,18 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 | `PlanWaveCard` | Parallel wave card — groups tools in a plan wave, **Allow/Deny** for dangerous waves |
 | `TodoListWidget` | Agent's live task list |
 | `FileDownloadCard` | Download card for agent-generated files (reports, exports) |
+
+#### Plugin actions in the gear menu (plugin platform on)
+
+After "Agent Skills" the settings dropdown shows a divider and one group per enabled plugin that
+contributes `chat.session.actions`, labelled with the plugin's name and the plugin badge (never
+"Plugins": the Tool Matrix already speaks of "MCP Tool Plugins"). The items stay disabled until the
+first message creates the conversation. The click flow lives in
+`components/plugins/usePluginChatActions.tsx` and `runPluginAction.ts`: an action that calls a model
+asks for one first, an async action opens `JobProgressModal`, and a result that proposes a skill
+version opens the core `OverrideReviewModal`; the "skill versions" item opens `SkillVersionsModal`
+on the session's skill. These modals are core UI (`components/plugins/review/`), also reachable from
+a project's Agent Skills settings.
 
 #### Custom Hooks (`hooks/`)
 

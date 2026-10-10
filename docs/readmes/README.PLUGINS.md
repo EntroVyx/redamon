@@ -662,6 +662,50 @@ stateDiagram-v2
 New points are added deliberately, by the platform, when a real plugin needs one. The base
 repo still grows, but only in **generic capability**, never in plugin logic.
 
+**As built (platform 1.0.0, UI host and the core review screens).** Where a person meets
+plugin UI, and where the skill-version decisions live:
+
+- **Contributions** come from `GET /api/plugins/contributions` (signed-in, 404 while the switch
+  is off), built from the manifest copy of every plugin that shows contributions (enabled,
+  `ready` or `updating`, not revoked). An `updating` plugin keeps its entries, marked
+  "updating". Icons are an allowlist; any other name draws the plugin mark.
+- **Plugin pages** (`/plugins/<id>[/<screen>]`) draw the `nav` screen, or another screen the
+  manifest lists, from the active version on the plugins volume; a URL segment uses the
+  screen-path alphabet, so it cannot leave `ui/`. The middleware sets the strict
+  Content-Security-Policy on `/plugins` and `/plugins/*` only (`'unsafe-eval'` outside
+  production for Next.js dev). Inputs one screen passes to the next travel through
+  `sessionStorage` under a key in the URL, so a crafted link carries none. Every `nav` entry is
+  listed with an **Open** link above the cards on the Plugins page.
+- **The screen host** re-validates a screen before drawing it and shows an error naming the
+  plugin instead of crashing. Plugin text is a React text child or goes through `SafeMarkdown`
+  (raw HTML skipped, no images, every link through `/plugins/external-link`, which opens only
+  http(s) URLs without credentials). `textDiff` is Myers' line diff, capped at 20,000 lines
+  per side and 2,000 edits; past either, both texts are shown without highlights.
+- **The chat gear menu** gains one group per plugin after "Agent Skills": the plugin's name
+  with the plugin badge, then its `chat.session.actions`, disabled until the first message
+  creates the conversation. An `llm` action asks for a model first; an async one opens the
+  job modal (progress, Cancel, Retry after a model failure).
+- **Review** (`OverrideReviewModal`, routes under `/api/plugins/overrides/change-sets/[id]`)
+  is core UI. The review model is built on the server from the store and the agent registry
+  read without its cache, with each part's before/after, parts that revert to factory, the
+  warnings (session older than the active version, outdated base, replacement, factory
+  changed, not applied now) and risk flags on added lines that move data out, name a URL or
+  host, or drop a scope, RoE or confirmation guard. Approve re-checks the factory hashes and
+  texts and the whole-skill size with the agent, then stores the next number.
+- **Versions** (`SkillVersionsModal`, `GET /api/plugins/overrides/versions`, `POST
+  /api/plugins/overrides/reset`) list the factory row and every version of a skill for the
+  viewer's user scope and a project they own. A version number is never reused, so the list
+  can skip numbers after a deletion. Reset works whatever state the plugin is in. A project
+  reset makes the project follow the owner's user-scope version, or the factory text.
+- **Project settings** show, per built-in skill of a saved project, a chip naming the version
+  that governs it, Versions, Reset and "N pending" (`GET /api/plugins/overrides/summary`), plus
+  `project.skills.row` contributions. Reset is its own API call, never part of the project
+  save.
+- Who decides: the scope owner, or an admin acting as them (the audit names the admin). A
+  user-scope decision carries the owner id, which must equal the effective user.
+- Project export and import leave plugin rows out: the export manifest says
+  `excluded: ["plugin_overrides", "plugin_data"]`, and the import never reads a plugin file.
+
 ### 7.7 The action contract
 
 An action is an `async` Python function:
