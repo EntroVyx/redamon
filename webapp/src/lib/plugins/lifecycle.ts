@@ -21,7 +21,7 @@ import {
   type InstallView,
 } from './lifecycleCommon'
 import { MigrationFailure, migrationSteps, runMigrations, type MigrationStats } from './migrations'
-import { markStale, type StaleReason } from './overrides'
+import { markStaleIn, type StaleReason } from './overrides'
 import { isPluginPermission } from './permissions'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
 import {
@@ -105,6 +105,26 @@ const snapshot = (r: PluginInstall | null) =>
         lastError: r.lastError,
       }
     : null
+
+/** The versions an operation is planned with: its start is a compare-and-set on them. */
+const plannedWith = (r: PluginInstall) => ({ activeVersion: r.activeVersion, previousVersion: r.previousVersion, dataVersion: r.dataVersion })
+const samePlan = (a: PluginInstall, b: PluginInstall) => JSON.stringify(plannedWith(a)) === JSON.stringify(plannedWith(b))
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+function changed(pluginId: string, row: PluginInstall): LifecycleError {
+  return new LifecycleError(
+    409,
+    'plugin_changed',
+    `Plugin ${pluginId} changed while this request was being prepared (now ${row.activeVersion ?? 'not installed'}); reload and try again.`,
+  )
+}
+
+/** Why a start lost its compare-and-set: an operation that finished meanwhile, or one still running. */
+async function lostStart(pluginId: string, before: PluginInstall): Promise<LifecycleError> {
+  const row = await findInstall(pluginId)
+  if (row && !liveLease(row) && row.status !== 'uninstalling' && !samePlan(row, before)) return changed(pluginId, row)
+  return busyOrNotInstalled(row, pluginId)
+}
 
 function busyOrNotInstalled(row: PluginInstall | null, pluginId: string): LifecycleError {
   if (row && !isInstalled(row.status) && row.status !== 'available' && liveLease(row)) {
@@ -279,35 +299,24 @@ async function catalogOrFail(d: Required<LifecycleDeps>): Promise<LoadedCatalog>
   }
 }
 
-/** Restores (or not) the active versions a kept plugin left behind; before the commit, so none applies early. */
-async function settleOverrides(
-  pluginId: string,
-  restore: boolean | undefined,
-  actorId: string,
-  d: Required<LifecycleDeps>,
-): Promise<{ restored: number; stale: number; cleared: number }> {
+interface OverridePlan {
+  clear: { changeSetId: string; revision: number | null }[]
+  stale: { changeSetId: string; reason: StaleReason }[]
+  restored: number
+}
+
+/**
+ * What a reinstall does to the active versions a kept plugin left behind, decided before
+ * anything is written: the writes go into the install's commit (applyOverrides), so none
+ * applies early and a refused install changes none.
+ */
+async function planOverrides(pluginId: string, restore: boolean | undefined, d: Required<LifecycleDeps>): Promise<OverridePlan> {
   const sets = await activeSetsOf(pluginId)
-  const out = { restored: 0, stale: 0, cleared: 0 }
-  if (!sets.size) return out
+  const plan: OverridePlan = { clear: [], stale: [], restored: 0 }
+  if (!sets.size) return plan
   if (restore === false) {
-    for (const [changeSetId, rows] of sets) {
-      const { count } = await prisma.pluginOverride.updateMany({
-        where: { changeSetId, status: 'active' },
-        data: { status: 'cleared', decidedBy: actorId, decidedAt: now() },
-      })
-      if (!count) continue
-      out.cleared++
-      await auditPlugin('plugin.override.reset', {
-        actorId,
-        pluginId,
-        targetType: 'plugin_change_set',
-        targetId: changeSetId,
-        before: { status: 'active', revision: rows[0].revision },
-        after: { status: 'cleared', reason: 'not restored at reinstall' },
-        source: 'admin',
-      })
-    }
-    return out
+    for (const [changeSetId, rows] of sets) plan.clear.push({ changeSetId, revision: rows[0].revision })
+    return plan
   }
   for (const [changeSetId, rows] of sets) {
     let reason: StaleReason | null = null
@@ -325,27 +334,52 @@ async function settleOverrides(
     } catch (e) {
       console.warn(`[plugins] reinstall ${pluginId}: the agent's skill registry could not be read (${(e as Error).message}); ` +
         'restored versions are checked at the next reconciliation')
-      out.restored = sets.size
-      return out
+      return { clear: [], stale: [], restored: sets.size }
     }
-    if (!reason) {
-      out.restored++
-      continue
-    }
-    if ((await markStale(changeSetId, reason)).length) {
-      out.stale++
-      await auditPlugin('plugin.override.stale', {
-        actorId,
-        pluginId,
-        targetType: 'plugin_change_set',
-        targetId: changeSetId,
-        before: { status: 'active' },
-        after: { status: 'stale', staleReason: reason },
-        source: 'admin',
-      })
-    }
+    if (reason) plan.stale.push({ changeSetId, reason })
+    else plan.restored++
   }
-  return out
+  return plan
+}
+
+/** The plan's writes, inside the install's commit; what really changed, for the audits. */
+async function applyOverrides(tx: Prisma.TransactionClient, plan: OverridePlan, actorId: string) {
+  const cleared: OverridePlan['clear'] = []
+  for (const c of plan.clear) {
+    const { count } = await tx.pluginOverride.updateMany({
+      where: { changeSetId: c.changeSetId, status: 'active' },
+      data: { status: 'cleared', decidedBy: actorId, decidedAt: now() },
+    })
+    if (count) cleared.push(c)
+  }
+  const stale: OverridePlan['stale'] = []
+  for (const st of plan.stale) if (await markStaleIn(tx, st.changeSetId, st.reason)) stale.push(st)
+  return { cleared, stale }
+}
+
+async function auditOverrides(pluginId: string, applied: Awaited<ReturnType<typeof applyOverrides>>, actorId: string) {
+  for (const c of applied.cleared) {
+    await auditPlugin('plugin.override.reset', {
+      actorId,
+      pluginId,
+      targetType: 'plugin_change_set',
+      targetId: c.changeSetId,
+      before: { status: 'active', revision: c.revision },
+      after: { status: 'cleared', reason: 'not restored at reinstall' },
+      source: 'admin',
+    })
+  }
+  for (const st of applied.stale) {
+    await auditPlugin('plugin.override.stale', {
+      actorId,
+      pluginId,
+      targetType: 'plugin_change_set',
+      targetId: st.changeSetId,
+      before: { status: 'active' },
+      after: { status: 'stale', staleReason: st.reason },
+      source: 'admin',
+    })
+  }
 }
 
 export async function install(
@@ -411,10 +445,14 @@ export async function install(
   let op: Operation
   try {
     op = existing
-      ? await beginOperation(pluginId, ['available'], 'installing', 'install', args)
+      ? await beginOperation(pluginId, ['available'], 'installing', 'install', args, prisma, plannedWith(existing))
       : await createForInstall(pluginId, args)
   } catch (e) {
     if (e instanceof PluginConflictError) {
+      if (existing) {
+        const lost = await lostStart(pluginId, existing)
+        if (lost.code === 'plugin_changed') throw lost
+      }
       throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: another operation is in progress.`)
     }
     throw e
@@ -443,22 +481,23 @@ export async function install(
     const why = e instanceof FetchRemoteError ? `${e.code}: ${e.message}` : (e as Error).message
     throw await refuse('download_failed', `The archive could not be downloaded (${why}).`, 502)
   }
-  const checked = await checkAndStage(op.operationId, {
-    pluginId,
-    archiveBytes: bytes,
-    release,
-    platformVersion: d.platformVersion,
-  })
+  let checked: Awaited<ReturnType<typeof checkAndStage>>
+  try {
+    checked = await checkAndStage(op.operationId, { pluginId, archiveBytes: bytes, release, platformVersion: d.platformVersion })
+  } catch (e) {
+    throw await refuse('staging_failed', `The archive could not be written to the plugins volume: ${errorText(e)}`, 500)
+  }
   if (!checked.ok) throw await refuse(checked.code, checked.message, 422, checked.details)
 
+  let committed = false
   try {
     await heartbeat(op)
     // A folder of this version no row references (an earlier crash) gives way to this one.
     if (await versionExists(pluginId, release.version)) await removeVersion(pluginId, release.version)
     await commitVersion(op.operationId, pluginId, release.version)
     committedFolder = true
-    const overrides = await settleOverrides(pluginId, input.restoreOverrides, actorId, d)
-    const commit = commitIn(op, 'installing', {
+    const plan = await planOverrides(pluginId, input.restoreOverrides, d)
+    const commitRow = commitIn(op, 'installing', {
       enabled: true,
       activeVersion: release.version,
       previousVersion: null,
@@ -473,6 +512,11 @@ export async function install(
       lastError: null,
       revokedReason: null,
     })
+    let applied: Awaited<ReturnType<typeof applyOverrides>> = { cleared: [], stale: [] }
+    const commit = async (tx: Prisma.TransactionClient) => {
+      await commitRow(tx)
+      applied = await applyOverrides(tx, plan, actorId)
+    }
     let migration: MigrationStats | null = null
     if (existing && keptData && existing.dataVersion < release.dataVersion) {
       // Data kept from an earlier install, older than this release: migrated as an update would.
@@ -489,6 +533,9 @@ export async function install(
     } else {
       await prisma.$transaction(commit)
     }
+    committed = true
+    await auditOverrides(pluginId, applied, actorId)
+    const overrides = { restored: plan.restored, stale: applied.stale.length, cleared: applied.cleared.length }
     await auditPlugin('plugin.permissions_granted', {
       actorId,
       pluginId,
@@ -510,6 +557,8 @@ export async function install(
     if (e instanceof PluginConflictError) {
       throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the install lost its lease to another operation.`)
     }
+    // Before the commit nothing is installed yet: undone now, not ten minutes later.
+    if (!committed) throw await refuse('install_failed', `The install failed before it was committed: ${errorText(e)}`, 500)
     throw e
   }
 }
@@ -627,17 +676,25 @@ export async function update(
 
   let op: Operation
   try {
-    op = await beginOperation(pluginId, [...INSTALLED_STATUSES], 'updating', 'update', {
-      version: release.version,
-      from: active,
-      fromDataVersion: before.dataVersion,
-      by: actorId,
-      // What reconciliation needs to finish the update if this request dies after the rename.
-      release: entryOf(release),
-    })
+    op = await beginOperation(
+      pluginId,
+      [...INSTALLED_STATUSES],
+      'updating',
+      'update',
+      {
+        version: release.version,
+        from: active,
+        fromDataVersion: before.dataVersion,
+        by: actorId,
+        // What reconciliation needs to finish the update if this request dies after the rename.
+        release: entryOf(release),
+      },
+      prisma,
+      plannedWith(before),
+    )
     await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: release.version } })
   } catch (e) {
-    if (e instanceof PluginConflictError) throw busyOrNotInstalled(await findInstall(pluginId), pluginId)
+    if (e instanceof PluginConflictError) throw await lostStart(pluginId, before)
     throw e
   }
 
@@ -664,9 +721,15 @@ export async function update(
     const why = e instanceof FetchRemoteError ? `${e.code}: ${e.message}` : (e as Error).message
     throw await fail('download_failed', `The archive could not be downloaded (${why}).`, 502)
   }
-  const checked = await checkAndStage(op.operationId, { pluginId, archiveBytes: bytes, release, platformVersion: d.platformVersion })
+  let checked: Awaited<ReturnType<typeof checkAndStage>>
+  try {
+    checked = await checkAndStage(op.operationId, { pluginId, archiveBytes: bytes, release, platformVersion: d.platformVersion })
+  } catch (e) {
+    throw await fail('staging_failed', `The archive could not be written to the plugins volume: ${errorText(e)}`, 500)
+  }
   if (!checked.ok) throw await fail(checked.code, checked.message, 422, checked.details)
 
+  let committed = false
   try {
     await heartbeat(op)
     if (await versionExists(pluginId, release.version)) await removeVersion(pluginId, release.version)
@@ -695,6 +758,7 @@ export async function update(
     } else {
       await prisma.$transaction(commit)
     }
+    committed = true
     for (const v of await listVersions(pluginId)) {
       if (v !== release.version && v !== active) await removeVersion(pluginId, v).catch(() => {})
     }
@@ -728,6 +792,7 @@ export async function update(
     if (e instanceof PluginConflictError) {
       throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the update lost its lease to another operation.`)
     }
+    if (!committed) throw await fail('update_failed', `The update failed before it was committed: ${errorText(e)}`, 500)
     throw e
   }
 }
@@ -795,14 +860,18 @@ export async function rollback(pluginId: string, actorId: string, deps?: Lifecyc
 
   let op: Operation
   try {
-    op = await beginOperation(pluginId, [...INSTALLED_STATUSES], 'updating', 'rollback', {
-      to: prev,
-      from: before.activeVersion,
-      by: actorId,
-    })
+    op = await beginOperation(
+      pluginId,
+      [...INSTALLED_STATUSES],
+      'updating',
+      'rollback',
+      { to: prev, from: before.activeVersion, by: actorId },
+      prisma,
+      plannedWith(before),
+    )
     await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: prev } })
   } catch (e) {
-    if (e instanceof PluginConflictError) throw busyOrNotInstalled(await findInstall(pluginId), pluginId)
+    if (e instanceof PluginConflictError) throw await lostStart(pluginId, before)
     throw e
   }
   const previousEntry = (withoutPrevious(before.catalogEntry)?.version === before.activeVersion
@@ -850,7 +919,17 @@ export async function rollback(pluginId: string, actorId: string, deps?: Lifecyc
     if (e instanceof PluginConflictError) {
       throw new LifecycleError(409, 'plugin_busy', `Plugin ${pluginId}: the rollback lost its lease to another operation.`)
     }
-    throw e
+    // Nothing was committed: back now, not when reconciliation finds the lease.
+    const message = `The rollback failed before it was committed: ${errorText(e)}`
+    await restoreStatus(op, before.status, `rollback_failed: ${message}`)
+    await auditPlugin('plugin.rollback', {
+      actorId,
+      pluginId,
+      before: snapshot(before),
+      after: { outcome: 'failed', to: prev, code: 'rollback_failed', message },
+      source: 'admin',
+    })
+    throw new LifecycleError(500, 'rollback_failed', message)
   }
   let row: PluginInstall
   if (before.enabled) row = await settleWorker(pluginId, prev)

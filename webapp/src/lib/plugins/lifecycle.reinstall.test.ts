@@ -179,6 +179,23 @@ describe('migrations', () => {
     expect(w.runner.migrateCalls.at(-1)!.body).toMatchObject({ version: '1.1.0', step: 2, direction: 'up' })
   })
 
+  test.each([
+    [false, { restoreOverrides: false }, 'plugin.override.reset'],
+    [true, { restoreOverrides: true }, 'plugin.override.stale'],
+  ])('a refused reinstall leaves the kept skill versions as they were (restore %s)', async (_restore, over, action) => {
+    await go('1.0.0')
+    const id = await activeSet('sqli', 'workflow')
+    db.seed('pluginData', [{ pluginId: 'echo', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: 'items', key: 'a', value: { raise: true }, sizeBytes: 14 }])
+    await uninstall('echo', { mode: 'keep', confirm: 'echo' }, ADMIN)
+    h.audit = []
+    // The factory text changed: a restore would mark the set stale, a "no" would clear it.
+    const deps = { ...w.deps, registrySkill: registryOf({ sqli: { workflow: NEW } }) }
+    const e = await refusal(install('echo', { version: '1.1.0', acceptedPermissions: PERMS, ...over }, ADMIN, deps))
+    expect(e.code).toBe('migration_failed')
+    expect(setStatus(id).status).toBe('active')
+    expect(h.audit.some((a) => a.action === action)).toBe(false)
+  })
+
   test('a failing migration at reinstall leaves the row available with the old data and no folder', async () => {
     await go('1.0.0')
     db.seed('pluginData', [{ pluginId: 'echo', ownerType: 'user', ownerId: 'user-alice', userId: 'user-alice', collection: 'items', key: 'a', value: { raise: true }, sizeBytes: 14 }])

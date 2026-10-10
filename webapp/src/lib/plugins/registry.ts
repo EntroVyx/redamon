@@ -101,11 +101,19 @@ export interface TransitionArgs {
   patch?: Prisma.PluginInstallUpdateManyMutationInput
   /** The caller's own operation; without it only a free or expired lease matches. */
   operationId?: string
+  /**
+   * Further values the row must still hold (what the caller planned with). Explicit values
+   * only, null for none: Prisma drops an undefined key, which would match any value.
+   */
+  expect?: Prisma.PluginInstallWhereInput
 }
 
 export async function transition(pluginId: string, args: TransitionArgs, db: Db = prisma): Promise<void> {
   checkPluginId(pluginId)
   for (const f of args.from) if (!canTransition(f, args.to)) throw new PluginTransitionError(f, args.to)
+  for (const [k, v] of Object.entries(args.expect ?? {})) {
+    if (v === undefined) throw new Error(`transition of ${pluginId}: expect.${k} is undefined`)
+  }
   // Built conditionally on purpose: Prisma drops a key whose value is undefined, so an
   // unconditional `{operationId: args.operationId}` would match EVERY row and let any
   // caller walk through a live lease.
@@ -115,7 +123,7 @@ export async function transition(pluginId: string, args: TransitionArgs, db: Db 
   ]
   if (args.operationId) leaseOpen.push({ operationId: args.operationId })
   const { count } = await db.pluginInstall.updateMany({
-    where: { pluginId, status: { in: [...args.from] }, OR: leaseOpen },
+    where: { ...args.expect, pluginId, status: { in: [...args.from] }, OR: leaseOpen },
     data: { ...args.patch, status: args.to },
   })
   if (count !== 1) {
@@ -130,6 +138,7 @@ export async function beginOperation(
   kind: OperationKind,
   args?: Prisma.InputJsonValue,
   db: Db = prisma,
+  expect?: Prisma.PluginInstallWhereInput,
 ): Promise<Operation> {
   const operationId = randomUUID()
   await transition(
@@ -137,6 +146,7 @@ export async function beginOperation(
     {
       from,
       to,
+      expect,
       patch: {
         operationId,
         operationKind: kind,

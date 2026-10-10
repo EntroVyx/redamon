@@ -536,25 +536,28 @@ export async function markStale(
   if (!(STALE_REASONS as readonly string[]).includes(reason)) throw new Error(`Unknown stale reason ${reason}`)
   const marked: string[] = []
   for (const id of (Array.isArray(changeSetIds) ? changeSetIds : [changeSetIds]).filter(isChangeSetId)) {
-    const done = await db.$transaction(async (tx) => {
-      let rows: PluginOverride[]
-      try {
-        rows = await lockedSet(tx, id)
-      } catch (e) {
-        if (e instanceof PluginOverrideError && e.code === 'not_found') return false
-        throw e
-      }
-      if (setStatus(rows) !== 'active') return false
-      const meta = { ...((rows[0].meta as Record<string, unknown> | null) ?? {}), staleReason: reason }
-      await tx.pluginOverride.updateMany({
-        where: { changeSetId: id, status: 'active' },
-        data: { status: 'stale', meta: meta as Prisma.InputJsonValue },
-      })
-      return true
-    })
-    if (done) marked.push(id)
+    if (await db.$transaction((tx) => markStaleIn(tx, id, reason))) marked.push(id)
   }
   return marked
+}
+
+/** markStale of one active change set inside the caller's transaction; false if it is not active. */
+export async function markStaleIn(tx: Tx, changeSetId: string, reason: StaleReason): Promise<boolean> {
+  if (!(STALE_REASONS as readonly string[]).includes(reason)) throw new Error(`Unknown stale reason ${reason}`)
+  let rows: PluginOverride[]
+  try {
+    rows = await lockedSet(tx, changeSetId)
+  } catch (e) {
+    if (e instanceof PluginOverrideError && e.code === 'not_found') return false
+    throw e
+  }
+  if (setStatus(rows) !== 'active') return false
+  const meta = { ...((rows[0].meta as Record<string, unknown> | null) ?? {}), staleReason: reason }
+  await tx.pluginOverride.updateMany({
+    where: { changeSetId, status: 'active' },
+    data: { status: 'stale', meta: meta as Prisma.InputJsonValue },
+  })
+  return true
 }
 
 // ---------------------------------------------------------------------------

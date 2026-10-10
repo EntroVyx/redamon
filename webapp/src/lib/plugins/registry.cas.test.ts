@@ -88,6 +88,16 @@ describe('leases', () => {
     expect(db.rows('pluginInstall').find((r) => r.pluginId === 'busy')!.lastError).toBe('worker_failed')
   })
 
+  test('expect: the start matches only the planned values; an undefined one is a programming error', async () => {
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'ready', activeVersion: '1.0.1', previousVersion: '1.0.0', dataVersion: 1 }])
+    const planned = { activeVersion: '1.0.0', previousVersion: null, dataVersion: 1 }
+    await expect(beginOperation('demo', ['ready'], 'updating', 'update', undefined, undefined, planned)).rejects.toBeInstanceOf(PluginConflictError)
+    expect(row()).toMatchObject({ status: 'ready', operationId: null })
+    await expect(beginOperation('demo', ['ready'], 'updating', 'update', undefined, undefined, { activeVersion: undefined })).rejects.toThrow(/undefined/)
+    const op = await beginOperation('demo', ['ready'], 'updating', 'update', undefined, undefined, { activeVersion: '1.0.1', previousVersion: '1.0.0', dataVersion: 1 })
+    expect(row()).toMatchObject({ status: 'updating', operationId: op.operationId })
+  })
+
   test('a live lease blocks another operation even when the status matches', async () => {
     db.seed('pluginInstall', [
       { pluginId: 'demo', status: 'ready', operationId: 'held', leaseExpiresAt: new Date(t + 60_000) },
