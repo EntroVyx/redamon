@@ -181,6 +181,23 @@ describe('delete kept data (purge of a plugin uninstalled with "keep")', () => {
     expect(db.rows('pluginOverride')).toHaveLength(1)
   })
 
+  test('an install that takes the row after the checks, inside the purge: everything rolls back, 409', async () => {
+    await exportPluginData('echo', ADMIN)
+    const realTx = db.$transaction
+    db.$transaction = ((fn: unknown) => {
+      // An install's beginOperation lands between the purge's checks and its transaction.
+      db.tables.pluginInstall.set('echo', { ...row()!, status: 'installing', operationId: 'op-1', leaseExpiresAt: new Date(NOW.getTime() + 60_000) })
+      return realTx(fn as never)
+    }) as typeof realTx
+    const e = await refusal(go('purge'))
+    db.$transaction = realTx
+    expect([e.status, e.code]).toEqual([409, 'plugin_busy'])
+    expect(db.rows('pluginData')).toHaveLength(2)
+    expect(db.rows('pluginOverride')).toHaveLength(1)
+    expect(db.rows('userSettings').find((s) => s.userId === 'user-alice')!.featureModels).toMatchObject({ 'plugin:echo': 'openai/gpt-x' })
+    expect(row()).toMatchObject({ status: 'installing', operationId: 'op-1' })
+  })
+
   test('"keep" again is still not_installed; a plugin never seen is not_installed too', async () => {
     expect((await refusal(go('keep'))).code).toBe('not_installed')
     expect((await refusal(uninstall('other', { mode: 'purge', confirm: 'other' }, ADMIN))).code).toBe('not_installed')
