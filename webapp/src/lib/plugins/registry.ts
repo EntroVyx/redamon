@@ -142,6 +142,8 @@ export async function beginOperation(
         operationKind: kind,
         operationArgs: args ?? Prisma.DbNull,
         leaseExpiresAt: leaseEnd(),
+        // The previous attempt's error; this operation writes its own if it fails.
+        lastError: null,
       },
     },
     db,

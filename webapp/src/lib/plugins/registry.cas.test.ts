@@ -79,6 +79,15 @@ describe('leases', () => {
     expect((row().leaseExpiresAt as Date).getTime()).toBe(t + LEASE_MS)
   })
 
+  test("a new operation clears the last attempt's error; a refused one leaves it", async () => {
+    db.seed('pluginInstall', [{ pluginId: 'demo', status: 'available', lastError: 'interrupted: the install did not finish; install it again' }])
+    await beginOperation('demo', ['available'], 'installing', 'install')
+    expect(row().lastError).toBeNull()
+    db.seed('pluginInstall', [{ pluginId: 'busy', status: 'ready', lastError: 'worker_failed', operationId: 'x', leaseExpiresAt: new Date(t + LEASE_MS) }])
+    await expect(beginOperation('busy', ['ready'], 'updating', 'update')).rejects.toBeInstanceOf(PluginConflictError)
+    expect(db.rows('pluginInstall').find((r) => r.pluginId === 'busy')!.lastError).toBe('worker_failed')
+  })
+
   test('a live lease blocks another operation even when the status matches', async () => {
     db.seed('pluginInstall', [
       { pluginId: 'demo', status: 'ready', operationId: 'held', leaseExpiresAt: new Date(t + 60_000) },
