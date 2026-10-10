@@ -76,8 +76,8 @@ const echoState = (page: Page) => echoCard(page).getByTestId('plugin-state')
 test('install from files, disable, enable, uninstall keep, reinstall, uninstall purge', async ({ page }) => {
   test.setTimeout(240_000)
   await page.goto('/graph')
-  // Leave only once /graph has drawn, as a user does: it then leaves its drawer offsets on
-  // <html> (0 px tall after it unmounts), which the details drawer below must not inherit.
+  // Leave only once /graph has drawn, as a user does: it publishes drawer offsets on <html>
+  // while it is shown, and they must go with it or the details drawer below is 0 px tall.
   await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--drawer-bottom') !== '')
   await page.getByRole('link', { name: /^Plugins$/ }).click()
   await expect(page).toHaveURL(/\/plugins$/)

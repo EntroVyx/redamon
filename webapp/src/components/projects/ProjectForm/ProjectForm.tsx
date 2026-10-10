@@ -18,6 +18,7 @@ import { ScanActions } from '@/components/scans/ScanActions'
 import { OtherScansModal } from '@/app/graph/components/OtherScansModal/OtherScansModal'
 import { useMultiPartialReconStatus } from '@/hooks/useMultiPartialReconStatus'
 import { useScanStartFailure } from '@/hooks/useScanStartFailure'
+import { useDrawerOffsets } from '@/hooks/useDrawerOffsets'
 import { useMultiPartialReconSSE } from '@/hooks/useMultiPartialReconSSE'
 import { useDirtyState } from '@/hooks/useDirtyState'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
@@ -528,26 +529,8 @@ export function ProjectForm({
       .catch(() => { setProviderChecked(true) /* network error: don't hard-block, model gate still applies */ })
   }, [mode, userId])
 
-  // Track body wrapper position so fixed-position log drawers pin to the main content area
-  useEffect(() => {
-    const body = bodyRef.current
-    if (!body) return
-    const update = () => {
-      const rect = body.getBoundingClientRect()
-      document.documentElement.style.setProperty('--drawer-top', `${rect.top}px`)
-      document.documentElement.style.setProperty('--drawer-bottom', `${window.innerHeight - rect.bottom}px`)
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(body)
-    window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-    }
-  }, [])
+  // Log drawers pin to the body wrapper, which moves as the form scrolls.
+  useDrawerOffsets(bodyRef, { trackScroll: true })
 
   const updateField = <K extends keyof ProjectFormData>(
     field: K,

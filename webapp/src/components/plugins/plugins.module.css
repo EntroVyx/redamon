@@ -149,11 +149,3 @@
   margin-bottom: var(--space-3);
   font-size: var(--text-sm);
 }
-
-/* /graph and the project form set --drawer-top/--drawer-bottom on <html> for their own
-   drawers and leave them there, at 0 px of height once they unmount: this one always
-   spans the window. */
-.detailsDrawer {
-  --drawer-top: 0px;
-  --drawer-bottom: 0px;
-}
