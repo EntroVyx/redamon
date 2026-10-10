@@ -85,6 +85,15 @@ describe('an interrupted install', () => {
     expect(h.audit.find((e) => e.action === 'plugin.install_failed')).toMatchObject({ actorId: null, source: 'system' })
   })
 
+  test('that was migrating kept data: the copy is deleted, the kept rows stay', async () => {
+    set({ status: 'installing', operationId: OP, operationKind: 'install', leaseExpiresAt: expired(), activeVersion: null })
+    const data = (namespace: string) => ({ pluginId: 'echo', namespace, ownerType: 'user', ownerId: 'user-a', userId: 'user-a', collection: 'items', key: 'a', value: 1, sizeBytes: 1 })
+    db.seed('pluginData', [data('live'), data(`migrating:${OP}`)])
+    await go()
+    expect(row()).toMatchObject({ status: 'available', operationId: null })
+    expect(db.rows('pluginData').map((r) => r.namespace)).toEqual(['live'])
+  })
+
   test('a live lease is left alone', async () => {
     set({ status: 'installing', operationId: OP, operationKind: 'install', leaseExpiresAt: new Date(clock.getTime() + LEASE_MS) })
     await stageArchive(OP, readArchive(w.archives.get('1.0.1')!.bytes, { pluginId: 'echo', maxBytes: 5_000_000 }))

@@ -210,7 +210,11 @@ async function recoverOperation(row: PluginInstall, d: Deps): Promise<'rolled_ba
   const args = (row.operationArgs ?? undefined) as Prisma.InputJsonValue | undefined
   if (row.status === 'installing') {
     const op = await takeOverOperation(pluginId, 'installing', 'install', args)
-    if (interrupted) await discardStaging(interrupted).catch(() => {})
+    if (interrupted) {
+      await discardStaging(interrupted).catch(() => {})
+      // An install over kept data migrates a copy of it first.
+      await prisma.pluginData.deleteMany({ where: { pluginId, namespace: `migrating:${interrupted}` } })
+    }
     await endOperation(op, 'available', { pendingVersion: null, lastError: 'interrupted: the install did not finish; install it again' })
     await auditPlugin('plugin.install_failed', { ...SYSTEM, pluginId, after: { code: 'interrupted', recovered: true } })
     return 'rolled_back'
