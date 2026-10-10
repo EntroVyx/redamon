@@ -38,7 +38,8 @@ import { PhaseIndicatorBar } from './PhaseIndicatorBar'
 import { SettingsModal } from './SettingsModal'
 import { usePluginChatActions } from '@/components/plugins/usePluginChatActions'
 import { OverrideReviewModal } from '@/components/plugins/review/OverrideReviewModal'
-import { useToast } from '@/components/ui'
+import { SkillVersionsModal } from '@/components/plugins/review/SkillVersionsModal'
+import { isBuiltinSkill } from '@/lib/plugins/builtinSkills'
 import { ModelPickerModal } from './ModelPickerModal'
 import { ChatArea } from './ChatArea'
 import { ApprovalDialog } from './ApprovalDialog'
@@ -149,13 +150,18 @@ export function AIAssistantDrawer({
     settingsDropdownRef,
   } = useSettingsModal(projectId)
 
-  // Plugin chat-session actions from the gear menu (design §6.7). The review modal is wired
-  // here (step 6.5); the versions core screen is wired in step 6.6.
-  const pluginToast = useToast()
+  // Plugin chat-session actions from the gear menu (design §6.7): the review modal (step 6.5)
+  // and the core versions modal (step 6.6). The versions modal opens on the session's skill
+  // when it is a built-in one (attackPathType), so the person lands on the right skill.
   const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
+  const [versionsFor, setVersionsFor] = useState<{ projectId: string | null; initialSkill?: string } | null>(null)
   const { run: runPluginChatAction, modals: pluginChatModals } = usePluginChatActions({
     onReviewProposal: (changeSetId) => setReviewChangeSetId(changeSetId),
-    onCoreScreen: () => pluginToast.info('Skill versions open in a later step.'),
+    onCoreScreen: (screen, context) => {
+      if (screen === 'skill.text.versions') {
+        setVersionsFor({ projectId: context.projectId ?? null, initialSkill: isBuiltinSkill(attackPathType) ? attackPathType : undefined })
+      }
+    },
   })
 
   // ─── Conversation persistence ─────────────────────────────────────────────
@@ -479,6 +485,17 @@ export function AIAssistantDrawer({
           scopeOwnerId={userId}
           onClose={() => setReviewChangeSetId(null)}
           onDecided={() => setReviewChangeSetId(null)}
+        />
+      )}
+
+      {versionsFor && (
+        <SkillVersionsModal
+          projectId={versionsFor.projectId}
+          initialSkill={versionsFor.initialSkill}
+          scopeOwnerId={userId}
+          onClose={() => setVersionsFor(null)}
+          onOpenReview={(changeSetId) => { setVersionsFor(null); setReviewChangeSetId(changeSetId) }}
+          onReviewAgain={(changeSetId) => { setVersionsFor(null); setReviewChangeSetId(changeSetId) }}
         />
       )}
 
