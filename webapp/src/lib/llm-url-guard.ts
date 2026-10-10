@@ -49,8 +49,9 @@ function isBlockedIp(ip: string): boolean {
 }
 
 /** True only for globally-routable (public) addresses. Conservative: anything
- * private/loopback/reserved/unique-local returns false. */
-function isPublicIp(ipRaw: string): boolean {
+ * private/loopback/reserved/unique-local returns false. The plugin manager's
+ * download guard (plugins/fetchRemote.ts) builds its stricter rule on it. */
+export function isPublicIp(ipRaw: string): boolean {
   const ip = unmapV4(ipRaw)
   if (net.isIPv4(ip)) {
     const o = ip.split('.').map(Number)
