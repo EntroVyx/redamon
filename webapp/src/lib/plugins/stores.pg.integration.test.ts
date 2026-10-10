@@ -340,6 +340,16 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
       expect(results.map((r) => r.count).sort((a, b) => a! - b!)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
     })
 
+    // Phase 04 review: a provider reporting absurd usage stored a number beyond bigint, and
+    // every later `::bigint` cast of that day failed after the call was paid for.
+    test('absurd token counts are capped per call, so the day’s row stays addable', async () => {
+      const c = await llm.chargeLlmCall('skiller', 'alice', db)
+      await llm.recordLlmUsage('skiller', 'alice', c.key, { inputTokens: 1e30, outputTokens: 1e25, model: 'custom/x' }, db)
+      await llm.recordLlmUsage('skiller', 'alice', c.key, { inputTokens: 1, outputTokens: 1, model: 'custom/x' }, db)
+      const row = await db.pluginData.findFirst({ where: { pluginId: 'skiller', collection: '__usage' } })
+      expect(row!.value).toMatchObject({ inputTokens: 10_000_001, outputTokens: 10_000_001 })
+    })
+
     test('usage accumulates on the same reserved row, which plugins cannot read', async () => {
       const c = await llm.chargeLlmCall('skiller', 'alice', db)
       await llm.recordLlmUsage('skiller', 'alice', c.key, { inputTokens: 100, outputTokens: 20, model: 'openai/a' }, db)

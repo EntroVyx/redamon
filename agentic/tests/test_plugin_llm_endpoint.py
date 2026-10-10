@@ -124,6 +124,9 @@ def test_a_weak_master_key_is_refused(api, llm, monkeypatch, weak):
     res = _call(api, _body(), key=weak)
     assert res.status_code == 503
     assert "INTERNAL_API_KEY" in res.json()["error"]
+    # Coded, with the model echoed: without them the webapp reads "the agent is outdated".
+    assert res.json()["code"] == "agent_not_configured"
+    assert res.json()["model_used"] == _body()["model"]
     assert llm.seen == []
 
 

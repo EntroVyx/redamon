@@ -130,3 +130,17 @@ test('the budget is per plugin and per effective user', async () => {
   // An admin acting as Alice spends Alice's budget, not the admin's.
   expect((await invoke({ act: 'user-admin' })).status).toBe(429)
 })
+
+// Phase 04 review: the call was made and charged; failing to record its tokens must not
+// lose the answer the plugin paid for.
+test('the usage cannot be recorded: the answer still reaches the plugin', async () => {
+  const { recordLlmUsage } = await import('./llmBudget')
+  vi.mocked(recordLlmUsage).mockRejectedValueOnce(new Error('bigint out of range'))
+  expect(await invoke()).toMatchObject({ status: 200, body: { content: 'ok', model_used: MODEL } })
+})
+
+test('the agent refusing for a weak master key: its own code, not agent_outdated', async () => {
+  h.agent = async () =>
+    Response.json({ error: 'INTERNAL_API_KEY is not configured', code: 'agent_not_configured', model_used: MODEL }, { status: 503 })
+  expect(await invoke()).toMatchObject({ status: 503, body: { code: 'agent_not_configured' } })
+})

@@ -35,10 +35,13 @@ def _weak_key_refusal() -> JSONResponse:
                  "are disabled. Generate the secret via redamon.sh."})
 
 
-def _weak_key_refusal_llm() -> JSONResponse:
+def _weak_key_refusal_llm(model: str) -> JSONResponse:
+    # Coded and with the model echoed, as every answer of this endpoint: without them the
+    # webapp reads the refusal as an agent older than itself.
     return JSONResponse(status_code=503, content={
         "error": "INTERNAL_API_KEY is not configured; the plugin platform's model endpoint "
-                 "is disabled. Generate the secret via redamon.sh."})
+                 "is disabled. Generate the secret via redamon.sh.",
+        "code": "agent_not_configured", "model_used": model})
 
 
 def _unknown_skill(skill_id: str) -> JSONResponse:
@@ -203,7 +206,7 @@ async def plugin_llm_invoke(body: PluginLlmRequest):
 
     model = (body.model or "").strip()
     if master_key_is_weak():
-        return _weak_key_refusal_llm()
+        return _weak_key_refusal_llm(model)
     missing = agent_api._feature_request_error(model, body.user_id)
     if missing:
         return missing

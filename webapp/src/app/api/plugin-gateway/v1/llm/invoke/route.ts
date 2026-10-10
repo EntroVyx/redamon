@@ -99,7 +99,10 @@ async function invoke(ctx: GatewayContext) {
   const usage = (result.body.usage ?? {}) as Record<string, unknown>
   const inputTokens = Number(usage.input_tokens) || 0
   const outputTokens = Number(usage.output_tokens) || 0
-  await recordLlmUsage(ctx.pluginId, ctx.userId, charge.key, { inputTokens, outputTokens, model })
+  // The call was made and charged: a failure to add its tokens must not lose the answer.
+  await recordLlmUsage(ctx.pluginId, ctx.userId, charge.key, { inputTokens, outputTokens, model }).catch((e) =>
+    console.error(`[plugins] llm plugin=${ctx.pluginId} user=${ctx.userId} usage not recorded:`, e instanceof Error ? e.message : e),
+  )
   console.log(
     `[plugins] llm plugin=${ctx.pluginId} user=${ctx.userId} model=${model} in=${inputTokens} out=${outputTokens} ms=${Date.now() - started}`,
   )

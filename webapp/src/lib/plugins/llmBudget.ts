@@ -67,7 +67,10 @@ export interface LlmUsage {
   model: string
 }
 
-const tokens = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0)
+// No call uses more tokens. A provider reporting more (a custom one can report anything)
+// would otherwise push the day's totals past bigint, and every later addition would fail.
+const TOKENS_MAX_PER_CALL = 10_000_000
+const tokens = (n: number) => (Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), TOKENS_MAX_PER_CALL) : 0)
 
 /** Adds a finished call's tokens and model to the row `chargeLlmCall` charged. */
 export async function recordLlmUsage(
