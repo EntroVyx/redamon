@@ -36,21 +36,21 @@ describe('re-approval re-base', () => {
     const cs = await proposeParts(alice, 'ssrf', { workflow: 'better' }, { meta: { fromRevision: 1 } })
     // propose() set baseFactoryText from the agent; simulate it.
     await setBaseFactoryText(cs, { workflow: 'ORIGINAL FACTORY' })
-    await ov.approve(cs, 'alice', H(1), db, { 'ssrf/workflow': 'IGNORED ON FIRST APPROVAL' })
+    await ov.approve(cs, 'alice', H(1), db as never, { 'ssrf/workflow': 'IGNORED ON FIRST APPROVAL' })
     expect((meta(db, cs).baseFactoryText as Record<string, string>).workflow).toBe('ORIGINAL FACTORY')
   })
 
   test('a factory change makes it stale; re-approve as is re-bases baseFactoryText to the new factory', async () => {
     const cs = await proposeParts(alice, 'ssrf', { workflow: 'better' })
     await setBaseFactoryText(cs, { workflow: 'OLD FACTORY' })
-    await ov.approve(cs, 'alice', H(1), db)
+    await ov.approve(cs, 'alice', H(1), db as never)
 
     // RedAmon's factory text for ssrf/workflow changed (hash sha(2)); reconcile marks it stale.
-    await ov.markStale(cs, 'factory_changed', db)
+    await ov.markStale(cs, 'factory_changed', db as never)
     expect(db.rows('pluginOverride').find((r) => r.changeSetId === cs)!.status).toBe('stale')
 
     // Approve as is on the new factory, re-basing hash AND text.
-    await ov.approve(cs, 'alice', H(2), db, { 'ssrf/workflow': 'NEW FACTORY' })
+    await ov.approve(cs, 'alice', H(2), db as never, { 'ssrf/workflow': 'NEW FACTORY' })
     const m = meta(db, cs)
     expect((m.baseFactoryText as Record<string, string>).workflow).toBe('NEW FACTORY')
     expect(m.staleReason).toBeUndefined()
@@ -62,9 +62,9 @@ describe('re-approval re-base', () => {
   test('without currentTexts the re-approval leaves baseFactoryText as it was', async () => {
     const cs = await proposeParts(alice, 'ssrf', { workflow: 'better' })
     await setBaseFactoryText(cs, { workflow: 'OLD FACTORY' })
-    await ov.approve(cs, 'alice', H(1), db)
-    await ov.markStale(cs, 'factory_changed', db)
-    await ov.approve(cs, 'alice', H(2), db)
+    await ov.approve(cs, 'alice', H(1), db as never)
+    await ov.markStale(cs, 'factory_changed', db as never)
+    await ov.approve(cs, 'alice', H(2), db as never)
     expect((meta(db, cs).baseFactoryText as Record<string, string>).workflow).toBe('OLD FACTORY')
   })
 })
