@@ -6,7 +6,7 @@ import Image from 'next/image'
 // navigating, so header links prompt when a dirty form would lose edits.
 import { GuardedLink as Link } from '@/components/GuardedLink'
 import { usePathname } from 'next/navigation'
-import { Crosshair, FolderOpen, Shield, BookOpen, TrendingUp, FileText, Settings, Users, GitBranch, Network } from 'lucide-react'
+import { Crosshair, FolderOpen, Shield, BookOpen, TrendingUp, FileText, Settings, Users, GitBranch, Network, Puzzle } from 'lucide-react'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { ProjectSelector } from './ProjectSelector'
 import { UserSelector } from './UserSelector'
@@ -14,7 +14,12 @@ import { useAuth } from '@/providers/AuthProvider'
 import { useProject } from '@/providers/ProjectProvider'
 import styles from './GlobalHeader.module.css'
 
-export function GlobalHeader() {
+interface GlobalHeaderProps {
+  /** The plugin platform's switch, read by the root layout on the server (no request here). */
+  pluginsEnabled?: boolean
+}
+
+export function GlobalHeader({ pluginsEnabled = false }: GlobalHeaderProps) {
   const pathname = usePathname()
   const { isAdmin } = useAuth()
   const { projectId } = useProject()
@@ -69,6 +74,16 @@ export function GlobalHeader() {
           <FolderOpen size={14} />
           <span>Projects</span>
         </Link>
+
+        {pluginsEnabled && (
+          <Link
+            href="/plugins"
+            className={`${styles.navItem} ${pathname === '/plugins' || pathname.startsWith('/plugins/') ? styles.navItemActive : ''}`}
+          >
+            <Puzzle size={14} />
+            <span>Plugins</span>
+          </Link>
+        )}
 
         {isAdmin && (
           <Link

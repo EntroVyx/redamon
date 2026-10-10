@@ -33,3 +33,10 @@ describe('root layout -- request-time rendering (issue #175)', () => {
     expect(SRC).toContain('window.__REDAMON_WS__=')
   })
 })
+
+describe('root layout -- the plugin platform switch (RV-27)', () => {
+  test('is read on the server and handed to the header, so no page fetches it', () => {
+    expect(SRC).toContain("import { pluginsEnabled } from '@/lib/plugins/switch'")
+    expect(SRC).toContain('<AppLayout pluginsEnabled={pluginsEnabled()}>')
+  })
+})

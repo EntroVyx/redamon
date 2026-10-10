@@ -8,12 +8,13 @@ import styles from './AppLayout.module.css'
 
 interface AppLayoutProps {
   children: React.ReactNode
+  pluginsEnabled?: boolean
 }
 
-export function AppLayout({ children }: AppLayoutProps) {
+export function AppLayout({ children, pluginsEnabled = false }: AppLayoutProps) {
   return (
     <div className={styles.layout}>
-      <GlobalHeader />
+      <GlobalHeader pluginsEnabled={pluginsEnabled} />
       <main className={styles.main}>
         <DisclaimerGate>{children}</DisclaimerGate>
       </main>

@@ -13,6 +13,7 @@ import React from 'react'
 /* ------------------------------------------------------------------ */
 
 let mockPathname = '/graph'
+let mockIsAdmin = true
 
 vi.mock('next/navigation', () => ({
   usePathname: () => mockPathname,
@@ -47,9 +48,9 @@ vi.mock('./UserSelector', () => ({
 
 vi.mock('@/providers/AuthProvider', () => ({
   useAuth: () => ({
-    user: { id: 'test-user', name: 'Test Admin', email: 'admin@test.com', role: 'admin' },
+    user: { id: 'test-user', name: 'Test Admin', email: 'admin@test.com', role: mockIsAdmin ? 'admin' : 'standard' },
     isLoading: false,
-    isAdmin: true,
+    isAdmin: mockIsAdmin,
     login: vi.fn(),
     logout: vi.fn(),
   }),
@@ -86,6 +87,7 @@ function getLogoLink() {
 
 beforeEach(() => {
   mockPathname = '/graph'
+  mockIsAdmin = true
 })
 
 afterEach(() => {
@@ -173,5 +175,59 @@ describe('GlobalHeader – structure', () => {
       const link = screen.getByRole('link', { name: new RegExp(label, 'i') })
       expect(link).toBeDefined()
     }
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  The Plugins button (README.PLUGINS.md §7.1, F-06, F-07, R-02)      */
+/* ------------------------------------------------------------------ */
+
+describe('GlobalHeader – Plugins button', () => {
+  const pluginsLink = () => screen.queryByRole('link', { name: /^plugins$/i })
+
+  test('absent while the plugin platform is off (the default)', () => {
+    render(<GlobalHeader />)
+    expect(pluginsLink()).toBeNull()
+    cleanup()
+    render(<GlobalHeader pluginsEnabled={false} />)
+    expect(pluginsLink()).toBeNull()
+  })
+
+  test('with the platform on: "Plugins" with the Puzzle icon, linking to /plugins', () => {
+    render(<GlobalHeader pluginsEnabled />)
+    const link = pluginsLink()!
+    expect(link.getAttribute('href')).toBe('/plugins')
+    expect(link.querySelector('svg.lucide-puzzle')).not.toBeNull()
+    expect(link.className).toContain('navItem')
+  })
+
+  test('on the right, directly after Projects', () => {
+    render(<GlobalHeader pluginsEnabled />)
+    const projects = screen.getByRole('link', { name: /^projects$/i })
+    expect(projects.nextElementSibling).toBe(pluginsLink())
+    expect(projects.closest('div')).toBe(pluginsLink()!.closest('div'))
+  })
+
+  test('shown to every signed-in user, not only admins', () => {
+    mockIsAdmin = false
+    render(<GlobalHeader pluginsEnabled />)
+    expect(pluginsLink()).not.toBeNull()
+    expect(screen.queryByRole('link', { name: /^users$/i })).toBeNull()
+  })
+
+  test.each(['/plugins', '/plugins/echo'])('active on %s', (route) => {
+    mockPathname = route
+    render(<GlobalHeader pluginsEnabled />)
+    expect(pluginsLink()!.className).toContain('navItemActive')
+  })
+
+  test('not active elsewhere, and Projects is not active on /plugins', () => {
+    mockPathname = '/projects'
+    render(<GlobalHeader pluginsEnabled />)
+    expect(pluginsLink()!.className).not.toContain('navItemActive')
+    cleanup()
+    mockPathname = '/plugins'
+    render(<GlobalHeader pluginsEnabled />)
+    expect(screen.getByRole('link', { name: /^projects$/i }).className).not.toContain('navItemActive')
   })
 })

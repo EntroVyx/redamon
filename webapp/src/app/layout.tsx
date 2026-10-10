@@ -10,6 +10,7 @@ import { FeatureModelGateProvider } from '@/components/shared/FeatureModelGate'
 import { AppLayout } from '@/components/layout'
 import { ThemeDbBridge } from '@/components/ThemeDbBridge'
 import { resolveWsHint } from '@/hooks/agentWsUrl'
+import { pluginsEnabled } from '@/lib/plugins/switch'
 
 // Render every route per REQUEST, not at build time. The head below injects
 // window.__REDAMON_WS__ from process.env, and every page under this layout is a
@@ -89,7 +90,7 @@ export default function RootLayout({
                   <AlertProvider>
                     <FeatureModelGateProvider>
                       <NavigationGuardProvider>
-                        <AppLayout>{children}</AppLayout>
+                        <AppLayout pluginsEnabled={pluginsEnabled()}>{children}</AppLayout>
                       </NavigationGuardProvider>
                     </FeatureModelGateProvider>
                   </AlertProvider>
