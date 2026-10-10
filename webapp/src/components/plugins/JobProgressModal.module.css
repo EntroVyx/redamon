@@ -1,0 +1,70 @@
+.jobBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.jobStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.jobFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.jobField {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.jobField dt {
+  min-width: 120px;
+  color: var(--text-tertiary);
+}
+
+.jobField dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.jobElapsed {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.jobLabel {
+  font-weight: var(--font-semibold);
+}
+
+.jobDone {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.jobError {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--status-error, #ef4444);
+  background: color-mix(in srgb, var(--status-error, #ef4444) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-error, #ef4444) 30%, transparent);
+  border-radius: var(--radius-default);
+  overflow-wrap: anywhere;
+}
+
+.jobButtons {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}

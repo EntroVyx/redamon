@@ -346,6 +346,37 @@
   border-top: 1px solid var(--border-default);
 }
 
+.settingsDropdownItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Plugin groups in the gear menu (design §6.7): a divider, a plugin label, then its items.
+   Labelled by the plugin's name with the plugin badge, never the bare word "Plugins" (the
+   same menu already names "MCP Tool Plugins"). */
+.pluginGroup {
+  border-top: 1px solid var(--border-strong, var(--border-default));
+}
+
+.pluginGroupLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 2px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pluginUpdating {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.pluginItemIcon {
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--text-tertiary);
+}
+
 /* Settings Modal */
 .settingsModalOverlay {
   position: absolute;

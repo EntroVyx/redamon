@@ -36,6 +36,8 @@ import { useChatPersistence } from '@/hooks/useChatPersistence'
 import { DrawerHeader } from './DrawerHeader'
 import { PhaseIndicatorBar } from './PhaseIndicatorBar'
 import { SettingsModal } from './SettingsModal'
+import { usePluginChatActions } from '@/components/plugins/usePluginChatActions'
+import { useToast } from '@/components/ui'
 import { ModelPickerModal } from './ModelPickerModal'
 import { ChatArea } from './ChatArea'
 import { ApprovalDialog } from './ApprovalDialog'
@@ -145,6 +147,14 @@ export function AIAssistantDrawer({
     projectFormData, updateProjectField,
     settingsDropdownRef,
   } = useSettingsModal(projectId)
+
+  // Plugin chat-session actions from the gear menu (design §6.7). Steps 6.5 and 6.6 replace
+  // these placeholder handlers with the real review and versions modals.
+  const pluginToast = useToast()
+  const { run: runPluginChatAction, modals: pluginChatModals } = usePluginChatActions({
+    onReviewProposal: () => pluginToast.info('Review opens in a later step.'),
+    onCoreScreen: () => pluginToast.info('Skill versions open in a later step.'),
+  })
 
   // ─── Conversation persistence ─────────────────────────────────────────────
   const {
@@ -453,7 +463,13 @@ export function AIAssistantDrawer({
         setSettingsModal={setSettingsModal}
         modelName={modelName}
         setShowModelModal={setShowModelModal}
+        projectId={projectId}
+        sessionId={sessionId}
+        conversationId={conversationId}
+        onRunPluginAction={runPluginChatAction}
       />
+
+      {pluginChatModals}
 
       <SettingsModal
         settingsModal={settingsModal}
