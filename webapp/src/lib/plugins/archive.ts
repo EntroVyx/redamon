@@ -171,6 +171,8 @@ export function readArchive(gz: Buffer, opts: { pluginId: string; maxBytes: numb
     if (seen && seen !== (isDir ? 'dir' : 'file')) refuse(`"${rel}" is both a file and a directory`)
     if (seen === 'file') refuse(`"${rel}" appears twice`)
     kinds.set(rel, isDir ? 'dir' : 'file')
+    // Staging creates every implied folder too: a few deep files must not make thousands.
+    if (kinds.size > ARCHIVE_MAX_ENTRIES) refuse(`the archive has more than ${ARCHIVE_MAX_ENTRIES} files and folders`)
     if (!isDir) {
       totalBytes += size
       files.push({ path: rel, mode, bytes })

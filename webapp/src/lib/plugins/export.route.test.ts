@@ -96,6 +96,21 @@ describe('export', () => {
     expect(await lastExportAt('other')).toBeNull()
   })
 
+  test('a cross-site request is refused before anything is exported: a link elsewhere cannot open the purge gate', async () => {
+    const res = await exportRoute(
+      new NextRequest('http://localhost:3000/api/plugins/echo/export', { headers: { 'sec-fetch-site': 'cross-site' } }),
+      { params: Promise.resolve({ pluginId: 'echo' }) },
+    )
+    expect(res.status).toBe(403)
+    expect(db.rows('pluginPlatformState').some((s) => String(s.key).startsWith('export:echo'))).toBe(false)
+    // The page's own download link is same-origin.
+    const ok = await exportRoute(
+      new NextRequest('http://localhost:3000/api/plugins/echo/export', { headers: { 'sec-fetch-site': 'same-origin' } }),
+      { params: Promise.resolve({ pluginId: 'echo' }) },
+    )
+    expect(ok.status).toBe(200)
+  })
+
   test('an unknown plugin is 404 and writes nothing', async () => {
     const res = await call('nobody')
     expect(res.status).toBe(404)

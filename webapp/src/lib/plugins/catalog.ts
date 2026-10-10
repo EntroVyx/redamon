@@ -220,10 +220,10 @@ export async function loadCatalog(source: CatalogSource, deps: CatalogDeps = {})
 
   const url = catalogUrl()
   const t = now().getTime()
-  if (!deps.noCache && cache && cache.url === url && t - cache.at < CATALOG_CACHE_MS) {
-    if (cache.result instanceof CatalogError) throw cache.result
-    return cache.result
-  }
+  const cached = !deps.noCache && cache && cache.url === url && t - cache.at < CATALOG_CACHE_MS ? cache.result : null
+  // An expired catalog blocks install and update: one that expired since it was cached too.
+  if (cached instanceof CatalogError) throw cached
+  if (cached && cached.expiresAt.getTime() > t) return cached
   let out: LoadedCatalog | CatalogError
   try {
     const fetcher = deps.fetch ?? fetchRemote

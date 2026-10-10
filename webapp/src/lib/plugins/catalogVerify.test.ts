@@ -303,6 +303,14 @@ describe('sources and caching', () => {
     expect((await refused(loadCatalog({ source: 'upload', bytes: bad, sigBytes: c.sigBytes }))).code).toBe('signature_invalid')
   })
 
+  test('a cached catalog is not used past its expiry, within the 60 s', async () => {
+    const c = catalogOf(7, { expires: new Date(NOW.getTime() + 30_000) })
+    const fetch = serving(c)
+    await loadCatalog({ source: 'official' }, { fetch, officialKeys: officialKeys() })
+    clock = new Date(NOW.getTime() + 40_000)
+    expect((await refused(loadCatalog({ source: 'official' }, { fetch, officialKeys: officialKeys() }))).code).toBe('expired')
+  })
+
   test('the official catalog is cached for 60 s, failures too', async () => {
     const f = serving(catalogOf(3))
     await loadCatalog({ source: 'official' }, { fetch: f, officialKeys: officialKeys() })

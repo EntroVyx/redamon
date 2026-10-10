@@ -106,6 +106,15 @@ describe('refusals', () => {
     expect(e.message).toMatch(/entries/)
   })
 
+  test('implied folders count too: a few deep files cannot make thousands of directories', () => {
+    const files: Record<string, string> = { 'echo/plugin.json': '{}' }
+    const deep = Array(110).fill('x').join('/')
+    // 25 headers, no directory entries, ~2,800 folders that staging would create.
+    for (let i = 0; i < 25; i++) files[`echo/a${i}/${deep}/f`] = ''
+    const e = refused(() => read(writeTarGz(files, { dirs: [] })))
+    expect(e.message).toMatch(/files and folders/)
+  })
+
   test('exactly the limit of entries is accepted', () => {
     const files: Record<string, string> = { 'echo/plugin.json': '{}' }
     for (let i = 0; i < ARCHIVE_MAX_ENTRIES - 3; i++) files[`echo/f/${i}.txt`] = ''
