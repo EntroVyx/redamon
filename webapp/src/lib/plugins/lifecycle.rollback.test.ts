@@ -16,7 +16,9 @@ import { createFakePrisma, type FakePrisma } from './__testing__/fakePrisma'
 import { ADMIN, NOW, startLifecycleWorld, type LifecycleWorld } from './__testing__/lifecycleHarness'
 import { setNowForTests } from './clock'
 import { LifecycleError, install, rollback, rollbackCheck, update } from './lifecycle'
-import { removeVersion } from './staging'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { removeVersion, versionPath } from './staging'
 
 let db: FakePrisma
 let w: LifecycleWorld
@@ -90,6 +92,23 @@ describe('rollback', () => {
     const out = await rollback('echo', ADMIN, w.deps)
     expect(out.plugin).toMatchObject({ status: 'ready', activeVersion: '1.0.0', revokedReason: null })
     expect(w.runner.options.workers?.map((x) => x.version)).toEqual(['1.0.0'])
+  })
+
+  test('a previous version that needs another platform is not offered, and refused', async () => {
+    await up('1.0.1')
+    const manifestFile = path.join(versionPath('echo', '1.0.0'), 'plugin.json')
+    const m = JSON.parse(await fs.readFile(manifestFile, 'utf8'))
+    await fs.writeFile(manifestFile, JSON.stringify({ ...m, platform: '>=2.0.0 <3.0.0' }))
+    expect(await rollbackCheck('echo')).toEqual({ possible: false, reason: 'platform_incompatible', platform: '>=2.0.0 <3.0.0' })
+    expect((await refusal(rollback('echo', ADMIN, w.deps))).code).toBe('platform_incompatible')
+  })
+
+  test('the version the admin confirmed: another previous version → 409 plugin_changed, nothing changes', async () => {
+    await up('1.0.1')
+    const e = await refusal(rollback('echo', ADMIN, w.deps, '0.9.0'))
+    expect([e.status, e.code]).toEqual([409, 'plugin_changed'])
+    expect(row()).toMatchObject({ activeVersion: '1.0.1', previousVersion: '1.0.0', operationId: null })
+    expect((await rollback('echo', ADMIN, w.deps, '1.0.0')).plugin).toMatchObject({ activeVersion: '1.0.0' })
   })
 
   test('data migrated forward is taken back by the down migration first', async () => {

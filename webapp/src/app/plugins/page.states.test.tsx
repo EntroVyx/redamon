@@ -374,7 +374,8 @@ describe('actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: /roll back to 1\.0\.0/i }))
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(alertSpies.confirm).toHaveBeenCalled()
-    expect(posts[0]).toEqual({ url: '/api/plugins/echo/rollback', body: {} })
+    // The version the admin confirmed: the server refuses if the previous one changed meanwhile.
+    expect(posts[0]).toEqual({ url: '/api/plugins/echo/rollback', body: { toVersion: '1.0.0' } })
   })
 
   test('Details is for installed plugins only', async () => {

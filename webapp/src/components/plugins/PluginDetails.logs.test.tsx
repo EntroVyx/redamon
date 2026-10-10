@@ -99,6 +99,16 @@ describe('PluginDetailsDrawer', () => {
     expect((screen.getByRole('link', { name: /export data/i }) as HTMLAnchorElement).getAttribute('href')).toBe('/api/plugins/echo/export')
   })
 
+  test('while an operation runs the rollback button waits', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <PluginDetailsDrawer pluginId="echo" isOpen busy onClose={vi.fn()} onRollback={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    expect(((await screen.findByRole('button', { name: /roll back to 1\.0\.0/i })) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   test('rollback offered when possible, with a warning when it moves data', async () => {
     const onRollback = show()
     const button = await screen.findByRole('button', { name: /roll back to 1\.0\.0/i })
@@ -110,6 +120,7 @@ describe('PluginDetailsDrawer', () => {
   test.each([
     [{ possible: false, reason: 'no_down_migration', missing: ['migrations/0003_down.py'] }, /ships no way back.*0003_down/],
     [{ possible: false, reason: 'no_previous_version' }, /no previous version/i],
+    [{ possible: false, reason: 'platform_incompatible' }, /needs a different RedAmon/i],
   ])('rollback not possible (%j): the reason, no button', async (rollback, why) => {
     detail = detailOf({ rollback })
     show()

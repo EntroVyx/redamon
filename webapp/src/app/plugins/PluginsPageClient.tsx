@@ -68,7 +68,7 @@ export function PluginsPageClient() {
       `Roll back to ${toVersion}?`,
       { confirmLabel: 'Roll back' },
     )
-    if (ok) await run(`/api/plugins/${pluginId}/rollback`, {})
+    if (ok) await run(`/api/plugins/${pluginId}/rollback`, { toVersion })
   }
 
   if (isLoading) {
@@ -182,7 +182,7 @@ export function PluginsPageClient() {
         />
       )}
       {details && (
-        <PluginDetailsDrawer pluginId={details} isOpen onClose={() => setDetails(null)} onRollback={onRollback} />
+        <PluginDetailsDrawer pluginId={details} isOpen busy={busy} onClose={() => setDetails(null)} onRollback={onRollback} />
       )}
       {dialog?.kind === 'offline' && (
         <OfflineInstallDialog

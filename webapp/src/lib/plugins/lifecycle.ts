@@ -804,15 +804,24 @@ export async function update(
 
 export type RollbackCheck =
   | { possible: true; migrates: boolean }
-  | { possible: false; reason: 'not_installed' | 'no_previous_version' | 'no_down_migration'; missing?: string[] }
+  | {
+      possible: false
+      reason: 'not_installed' | 'no_previous_version' | 'no_down_migration' | 'platform_incompatible'
+      missing?: string[]
+      /** For platform_incompatible: the range the previous version needs. */
+      platform?: string
+    }
 
 /** Whether a rollback is possible now, and why not: the Plugins page shows it before an update. */
-export async function rollbackCheck(pluginId: string): Promise<RollbackCheck> {
+export async function rollbackCheck(pluginId: string, platformVersion = PLUGIN_PLATFORM_VERSION): Promise<RollbackCheck> {
   const row = await findInstall(pluginId)
   if (!row || !isInstalled(row.status) || !row.activeVersion) return { possible: false, reason: 'not_installed' }
   const prev = row.previousVersion
   const prevManifest = prev && (await versionExists(pluginId, prev)) ? await manifestOnDisk(pluginId, prev) : null
   if (!prev || !prevManifest) return { possible: false, reason: 'no_previous_version' }
+  if (!satisfies(platformVersion, prevManifest.platform)) {
+    return { possible: false, reason: 'platform_incompatible', platform: prevManifest.platform }
+  }
   if (prevManifest.dataVersion === row.dataVersion || !(await hasKeptData(pluginId))) return { possible: true, migrates: false }
   if (prevManifest.dataVersion > row.dataVersion) return { possible: false, reason: 'no_down_migration', missing: [] }
   const missing: string[] = []
@@ -829,15 +838,28 @@ export async function rollbackCheck(pluginId: string): Promise<RollbackCheck> {
  * the newer version's down migrations (copy and swap); without them the rollback is
  * refused, because old code never runs on newer data.
  */
-export async function rollback(pluginId: string, actorId: string, deps?: LifecycleDeps): Promise<{ plugin: InstallView }> {
+/** `toVersion`: the version the admin confirmed; refused if the previous version changed since. */
+export async function rollback(
+  pluginId: string,
+  actorId: string,
+  deps?: LifecycleDeps,
+  toVersion?: unknown,
+): Promise<{ plugin: InstallView }> {
   const d = withDefaults(deps)
   checkPluginId(pluginId)
+  if (toVersion !== undefined && typeof toVersion !== 'string') {
+    throw new LifecycleError(400, 'invalid_request', 'toVersion must be the version to roll back to.')
+  }
   const before = await findInstall(pluginId)
   if (!before || !isInstalled(before.status) || liveLease(before) || !before.activeVersion) {
     throw busyOrNotInstalled(before, pluginId)
   }
-  const check = await rollbackCheck(pluginId)
+  if (toVersion !== undefined && toVersion !== before.previousVersion) throw changed(pluginId, before)
+  const check = await rollbackCheck(pluginId, d.platformVersion)
   if (!check.possible) {
+    if (check.reason === 'platform_incompatible') {
+      throw new LifecycleError(409, 'platform_incompatible', `Version ${before.previousVersion} needs platform ${check.platform}; this RedAmon runs ${d.platformVersion}.`)
+    }
     if (check.reason === 'no_down_migration') {
       throw new LifecycleError(
         409,
@@ -850,9 +872,6 @@ export async function rollback(pluginId: string, actorId: string, deps?: Lifecyc
   }
   const prev = before.previousVersion as string
   const prevManifest = (await manifestOnDisk(pluginId, prev))!
-  if (!satisfies(d.platformVersion, prevManifest.platform)) {
-    throw new LifecycleError(409, 'platform_incompatible', `Version ${prev} needs platform ${prevManifest.platform}.`)
-  }
   try {
     const loaded = await d.loadCatalog()
     const revoked = isRevoked(loaded.catalog, pluginId, prev)

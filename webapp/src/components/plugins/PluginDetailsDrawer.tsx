@@ -13,6 +13,7 @@ interface PluginDetailsDrawerProps {
   isOpen: boolean
   onClose: () => void
   onRollback: (pluginId: string, toVersion: string) => void
+  busy?: boolean
 }
 
 const n = (x: number) => x.toLocaleString('en-US')
@@ -23,7 +24,7 @@ const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
  * what it was granted, how much it stores, whether a rollback is possible, an export, and the
  * last lines of its log from the runner's ring buffer.
  */
-export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback }: PluginDetailsDrawerProps) {
+export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback, busy = false }: PluginDetailsDrawerProps) {
   const detail = useQuery<PluginDetail>({
     queryKey: ['plugins', 'detail', pluginId],
     queryFn: async () => {
@@ -112,7 +113,12 @@ export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback }: P
                 {rollback.migrates && (
                   <p className={styles.notice}>The newer version&apos;s down migration takes the data back first.</p>
                 )}
-                <button type="button" className="secondaryButton" onClick={() => onRollback(pluginId, installed.previousVersion!)}>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  disabled={busy}
+                  onClick={() => onRollback(pluginId, installed.previousVersion!)}
+                >
                   Roll back to {installed.previousVersion}
                 </button>
               </>
@@ -120,7 +126,9 @@ export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback }: P
               <p className={styles.notice}>
                 {rollback.reason === 'no_down_migration'
                   ? `Version ${installed?.version} moved the data and ships no way back${rollback.missing?.length ? ` (${rollback.missing.join(', ')})` : ''}.`
-                  : 'No previous version on disk to roll back to.'}
+                  : rollback.reason === 'platform_incompatible'
+                    ? `Version ${installed?.previousVersion} needs a different RedAmon (platform ${rollback.platform ?? 'range'}).`
+                    : 'No previous version on disk to roll back to.'}
               </p>
             ) : null}
           </section>
