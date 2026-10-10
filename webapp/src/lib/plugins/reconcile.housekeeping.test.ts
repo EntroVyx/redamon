@@ -132,6 +132,13 @@ describe('data rows and jobs', () => {
     expect(report.expiredRows).toBe(1500)
   }, 60_000)
 
+  test("expired rows of a migration's copy are left to the migration", async () => {
+    const past = new Date(clock.getTime() - 1000)
+    db.seed('pluginData', [dataRow('live-old', { expiresAt: past }), dataRow('copy-old', { namespace: 'migrating:op-1', expiresAt: past })])
+    await reconcileNow(w.deps)
+    expect(db.rows('pluginData').map((r) => [r.namespace, r.key])).toEqual([['migrating:op-1', 'copy-old']])
+  })
+
   test('a running job past its deadline is failed with timeout; others are left alone', async () => {
     const job = (key: string, status: string, deadline: Date): Row => dataRow(key, {
       collection: '__jobs',

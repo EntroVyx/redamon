@@ -107,7 +107,7 @@ test.each(['agent_unreachable', 'agent_outdated'] as const)('the agent %s: nothi
 
 test('dormant versions (plugin uninstalled) are checked too: staleness is about the factory text', async () => {
   const id = await active('xss', ['workflow'])
-  db.tables.pluginInstall.set('echo', { ...db.tables.pluginInstall.get('echo')!, enabled: false })
+  db.tables.pluginInstall.set('echo', { ...db.tables.pluginInstall.get('echo')!, status: 'available', enabled: false, activeVersion: null })
   w.deps.registrySkill = registryOf({ xss: { workflow: NEW } })
   await reconcileNow(w.deps)
   expect(stateOf(id).statuses).toEqual(['stale'])

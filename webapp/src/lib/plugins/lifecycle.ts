@@ -447,6 +447,9 @@ export async function install(
     op = existing
       ? await beginOperation(pluginId, ['available'], 'installing', 'install', args, prisma, plannedWith(existing))
       : await createForInstall(pluginId, args)
+    // Clean-up keeps a version folder a row references: this one is not referenced otherwise
+    // until the commit, which a long migration of kept data puts past the folder grace.
+    await prisma.pluginInstall.updateMany({ where: { pluginId, operationId: op.operationId }, data: { pendingVersion: release.version } })
   } catch (e) {
     if (e instanceof PluginConflictError) {
       if (existing) {
@@ -462,7 +465,7 @@ export async function install(
   const refuse = async (code: string, message: string, status: number, details?: string[]) => {
     await discardStaging(op.operationId).catch(() => {})
     if (committedFolder) await removeVersion(pluginId, release.version).catch(() => {})
-    await endOperation(op, 'available', { lastError: `${code}: ${message}`.slice(0, 2000) }).catch(() => {})
+    await endOperation(op, 'available', { pendingVersion: null, lastError: `${code}: ${message}`.slice(0, 2000) }).catch(() => {})
     await auditPlugin('plugin.install_failed', {
       actorId,
       pluginId,

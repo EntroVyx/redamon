@@ -577,6 +577,8 @@ async function copyPage(tx: Prisma.TransactionClient, pluginId: string, to: stri
       value: r.value === null ? Prisma.JsonNull : (r.value as Prisma.InputJsonValue),
       sizeBytes: r.sizeBytes,
       expiresAt: r.expiresAt,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
     })),
   })
   return count
@@ -598,10 +600,9 @@ export async function swapNamespace(
   checkPair(pluginId, from, to)
   await db.$transaction(async (tx) => {
     await tx.pluginData.deleteMany({ where: { AND: [{ pluginId, namespace: to }, notReserved] } })
-    await tx.pluginData.updateMany({
-      where: { AND: [{ pluginId, namespace: from }, notReserved] },
-      data: { namespace: to },
-    })
+    // Raw, so the move keeps each row's updated_at: Prisma's @updatedAt would set them all
+    // to now, and a plugin's "updated" order would then mean the migration's order.
+    await tx.$executeRaw`UPDATE "plugin_data" SET "namespace" = ${to} WHERE "plugin_id" = ${pluginId} AND "namespace" = ${from} AND "collection" NOT LIKE ${`${likePrefix(RESERVED_PREFIX)}%`}`
     await tx.pluginData.deleteMany({ where: { pluginId, namespace: from } })
     if (inTx) await inTx(tx)
   }, MIGRATION_TRANSACTION)
@@ -618,6 +619,8 @@ export async function applyMigrationAnswer(
   rowId: string,
   answer: { value: unknown } | { delete: true },
   db: Db = prisma,
+  /** The row's own time: a migration changes the format, not when the plugin last wrote it. */
+  updatedAt?: Date,
 ): Promise<{ sizeBytes: number }> {
   checkPluginId(pluginId)
   checkNamespace(namespace)
@@ -640,7 +643,7 @@ export async function applyMigrationAnswer(
   const parsed = JSON.parse(text) as Prisma.InputJsonValue | null
   const { count } = await db.pluginData.updateMany({
     where,
-    data: { value: parsed === null ? Prisma.JsonNull : parsed, sizeBytes },
+    data: { value: parsed === null ? Prisma.JsonNull : parsed, sizeBytes, ...(updatedAt ? { updatedAt } : {}) },
   })
   if (count !== 1) throw new PluginDataError('invalid_value', `row ${rowId} is not in the migration's copy`)
   return { sizeBytes }

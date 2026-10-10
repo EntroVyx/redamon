@@ -197,12 +197,14 @@ describe('a migration that fails leaves the old version and the old data intact'
 
   test('the swap and the new version are one transaction: a lost lease swaps nothing', async () => {
     seedData(1)
-    const real = w.runner.options.migrations!['echo/0002_up']
-    w.runner.options.migrations!['echo/0002_up'] = (r) => {
-      // Reconciliation takes the plugin over while the batch runs.
-      db.tables.pluginInstall.set('echo', { ...row(), operationId: '00000000-0000-4000-8000-000000000000' })
-      return real(r)
-    }
+    // Reconciliation takes the plugin over after the last batch: the version switch inside
+    // the swap's transaction (the second one; the copy is the first) finds another operation.
+    const realTx = db.$transaction
+    let txs = 0
+    db.$transaction = ((fn: unknown) => {
+      if (++txs === 2) db.tables.pluginInstall.set('echo', { ...row(), operationId: '00000000-0000-4000-8000-000000000000' })
+      return realTx(fn as never)
+    }) as typeof realTx
     const before = JSON.stringify(live().map((r) => [r.id, r.value]).sort())
     const e = await refusal(go())
     expect(e.code).toBe('plugin_busy')
@@ -210,5 +212,33 @@ describe('a migration that fails leaves the old version and the old data intact'
     expect(copies()).toEqual([])
     expect(row().activeVersion).toBe('1.0.0')
     expect(row().dataVersion).toBe(1)
+    expect(txs).toBeGreaterThanOrEqual(2)
+  })
+
+  test('a long page keeps the lease: the heartbeat follows every batch, not every page', async () => {
+    seedData(200)
+    let t = NOW.getTime()
+    setNowForTests(() => new Date(t))
+    // One page of 1,000 rows is five batches; each "takes" four minutes, 20 in all, over the 10-minute lease.
+    w.runner.options.migrateHook = () => {
+      t += 4 * 60_000
+      return undefined
+    }
+    const out = await go()
+    expect(out.plugin).toMatchObject({ activeVersion: '1.1.0', dataVersion: 2 })
+    expect(w.runner.migrateCalls.length).toBeGreaterThanOrEqual(5)
+  }, 60_000)
+
+  test("a migration keeps each row's createdAt and updatedAt", async () => {
+    seedData(2)
+    const created = new Date('2026-01-02T03:04:05.000Z')
+    const updated = new Date('2026-02-03T04:05:06.000Z')
+    for (const r of db.rows('pluginData')) db.tables.pluginData.set(String(r.id), { ...r, createdAt: created, updatedAt: updated })
+    await go()
+    expect(live().length).toBe(10)
+    for (const r of live()) {
+      expect(new Date(r.createdAt as Date).toISOString()).toBe(created.toISOString())
+      expect(new Date(r.updatedAt as Date).toISOString()).toBe(updated.toISOString())
+    }
   })
 })

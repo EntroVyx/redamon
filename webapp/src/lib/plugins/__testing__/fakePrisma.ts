@@ -493,6 +493,20 @@ export function createFakePrisma(): FakePrisma {
         }
         return count
       }
+      // A migration's data swap (dataStore.swapNamespace): a move that keeps updated_at.
+      if (sql === 'UPDATE "plugin_data" SET "namespace" = ? WHERE "plugin_id" = ? AND "namespace" = ? AND "collection" NOT LIKE ?') {
+        const [to, pluginId, from, pattern] = values.map(String)
+        if (pattern !== '\\_\\_%') throw new Error(`fakePrisma: unexpected reserved pattern ${pattern}`)
+        let count = 0
+        for (const row of [...tables.pluginData.values()]) {
+          if (row.pluginId !== pluginId || row.namespace !== from || String(row.collection).startsWith('__')) continue
+          const next = { ...clone(row), namespace: to }
+          checkUnique('pluginData', next, row.id)
+          write(ctx, 'pluginData', row.id, next)
+          count++
+        }
+        return count
+      }
       throw new Error(`fakePrisma: raw SQL not supported: ${sql}`)
     }
     c.$transaction = async (arg: unknown) => {

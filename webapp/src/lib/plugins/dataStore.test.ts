@@ -336,13 +336,13 @@ describe('namespaces for migrations', () => {
   test('a failed swap leaves both namespaces as they were', async () => {
     await store.put(S, alice, 'c', 'a', 'old')
     await store.put({ ...S, namespace: 'migrating:op1' }, alice, 'c', 'a', 'new')
-    // Fail the second statement of the swap, after the first already deleted live rows.
+    // Fail the second statement of the swap (the move), after the first already deleted live rows.
     const realTransaction = db.$transaction.bind(db)
     db.$transaction = ((fn: (tx: FakePrisma) => Promise<unknown>) =>
       realTransaction(async (tx) => {
-        tx.pluginData.updateMany = async () => {
+        tx.$executeRaw = (async () => {
           throw new Error('connection lost')
-        }
+        }) as FakePrisma['$executeRaw']
         return fn(tx)
       })) as FakePrisma['$transaction']
     await expect(store.swapNamespace('skiller', 'migrating:op1', 'live')).rejects.toThrow('connection lost')

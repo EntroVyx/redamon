@@ -147,6 +147,7 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
       await store.put(S, me, 'c', 'a', 'old', {}, db)
       await store.put(S, { type: 'project', id: 'p1' }, 'c', 'b', 'proj', {}, db)
       await store.put({ ...S, platform: true }, me, '__jobs', 'j', 'job', {}, db)
+      const b = (await db.pluginData.findFirst({ where: { key: 'b' } }))!
       expect(await store.copyNamespace('skiller', 'live', 'migrating:op-1', db)).toBe(2)
       await store.put({ ...S, namespace: 'migrating:op-1' }, me, 'c', 'a', 'new', {}, db)
       await store.swapNamespace('skiller', 'migrating:op-1', 'live', db)
@@ -156,6 +157,9 @@ describe.skipIf(!URL)('plugin stores on a real Postgres (PLUGINS_PG_TEST_URL)', 
         ['live', 'c', 'a', 'new', 'alice', null],
         ['live', 'c', 'b', 'proj', null, 'p1'],
       ])
+      // Copied and moved, never written by the plugin: its own times stay.
+      const moved = rows.find((r) => r.key === 'b')!
+      expect([moved.createdAt.getTime(), moved.updatedAt.getTime()]).toEqual([b.createdAt.getTime(), b.updatedAt.getTime()])
     })
 
     test('expired rows are cleaned up when they would block a write (SQL comparison on the clock)', async () => {

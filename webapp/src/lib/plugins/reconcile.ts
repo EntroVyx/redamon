@@ -329,7 +329,12 @@ async function failOverdueJobs(): Promise<number> {
 async function deleteExpiredRows(timeLeft: () => boolean): Promise<number> {
   let total = 0
   for (let i = 0; i < EXPIRED_BATCHES_MAX && timeLeft(); i++) {
-    const ids = await prisma.pluginData.findMany({ where: { expiresAt: { lte: now() } }, select: { id: true }, take: EXPIRED_BATCH })
+    // A migration's copy keeps its rows until the swap; expired ones go from live at the next tick.
+    const ids = await prisma.pluginData.findMany({
+      where: { namespace: 'live', expiresAt: { lte: now() } },
+      select: { id: true },
+      take: EXPIRED_BATCH,
+    })
     if (!ids.length) break
     const { count } = await prisma.pluginData.deleteMany({ where: { id: { in: ids.map((r) => r.id) } } })
     total += count

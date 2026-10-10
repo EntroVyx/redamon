@@ -16,7 +16,8 @@ vi.mock('@/lib/audit', () => ({ writeAudit: vi.fn(async (e: Record<string, unkno
 import { createFakePrisma, type FakePrisma } from './__testing__/fakePrisma'
 import { ADMIN, NOW, exists, startLifecycleWorld, type LifecycleWorld } from './__testing__/lifecycleHarness'
 import { setNowForTests } from './clock'
-import { install } from './lifecycle'
+import fs from 'node:fs/promises'
+import { install, uninstall } from './lifecycle'
 import { RECONCILE_LEASE_KEY, RECONCILE_LEASE_MS, reconcile } from './reconcile'
 import { stagingPath, versionPath } from './staging'
 
@@ -33,7 +34,7 @@ beforeEach(async () => {
   setNowForTests(() => clock)
   for (const m of ['warn', 'error', 'log'] as const) vi.spyOn(console, m).mockImplementation(() => {})
   db.seed('user', [{ id: ADMIN, email: 'admin@example.com', role: 'admin' }])
-  w = await startLifecycleWorld(() => db, [{}, { manifest: { version: '1.0.1' } }])
+  w = await startLifecycleWorld(() => db, [{}, { manifest: { version: '1.0.1' } }, { manifest: { version: '1.1.0', dataVersion: 2 } }])
 })
 
 afterEach(async () => {
@@ -61,9 +62,13 @@ test('two reconciles at once: one runs, the other answers busy', async () => {
 test('the lease is released at the end, also after a failure', async () => {
   await reconcile(w.deps)
   expect(lease()).toBeUndefined()
-  db.rows('pluginInstall')
-  const broken = { ...w.deps, loadCatalog: async () => { throw new Error('boom') } }
-  await reconcile(broken).catch(() => {})
+  // A failure the run does not absorb (it does absorb a catalog failure): the database read fails.
+  const find = db.pluginInstall.findMany
+  db.pluginInstall.findMany = (async () => {
+    throw new Error('boom')
+  }) as unknown as typeof find
+  await expect(reconcile(w.deps)).rejects.toThrow('boom')
+  db.pluginInstall.findMany = find
   expect(lease()).toBeUndefined()
 })
 
@@ -75,7 +80,7 @@ test('an expired lease (a crashed reconcile) is taken over; a live one is respec
   expect('skipped' in out).toBe(false)
 })
 
-test('an install in progress keeps its files through a reconcile', async () => {
+test('an install still downloading keeps its row and lease through a reconcile', async () => {
   let release!: () => void
   const gate = new Promise<void>((r) => (release = r))
   const realFetch = w.deps.fetchArchive!
@@ -90,4 +95,28 @@ test('an install in progress keeps its files through a reconcile', async () => {
   expect(out.plugin.status).toBe('ready')
   expect(await exists(versionPath('echo', '1.0.0'))).toBe(true)
   expect(await exists(stagingPath(op))).toBe(false)
+})
+
+test('an install migrating kept data keeps its new version folder through a reconcile, past the grace', async () => {
+  // Data kept at version 1: installing 1.1.0 migrates it before committing, its folder already in versions/.
+  await install('echo', { version: '1.0.0', acceptedPermissions: PERMS }, ADMIN, w.deps)
+  db.seed('pluginData', [{ pluginId: 'echo', ownerType: 'user', ownerId: ADMIN, userId: ADMIN, collection: 'items', key: 'a', value: 1, sizeBytes: 1 }])
+  await uninstall('echo', { mode: 'keep', confirm: 'echo' }, ADMIN)
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let paused!: () => void
+  const atMigration = new Promise<void>((r) => (paused = r))
+  w.runner.options.migrateHook = async () => {
+    paused()
+    await gate
+    return undefined
+  }
+  const installing = install('echo', { version: '1.1.0', acceptedPermissions: PERMS }, ADMIN, w.deps)
+  await atMigration
+  const hourAgo = new Date(Date.now() - 60 * 60_000)
+  await fs.utimes(versionPath('echo', '1.1.0'), hourAgo, hourAgo)
+  await reconcile(w.deps)
+  expect(await exists(versionPath('echo', '1.1.0'))).toBe(true)
+  release()
+  expect((await installing).plugin).toMatchObject({ status: 'ready', activeVersion: '1.1.0', dataVersion: 2 })
 })

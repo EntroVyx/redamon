@@ -144,7 +144,8 @@ export async function runMigrations(
         if (!page.length) break
         for (const batch of batches(page)) {
           const answers = await send(step, direction, batch)
-          const ids = new Set(batch.map((r) => r.id))
+          const byId = new Map(batch.map((r) => [r.id, r]))
+          const ids = new Set(byId.keys())
           if (answers.length !== batch.length || new Set(answers.map((a) => a?.id)).size !== batch.length ||
               !answers.every((a) => a && ids.has(a.id))) {
             throw new MigrationFailure('invalid_result', `The migration answered a batch of ${batch.length} rows with ${answers.length} answers that do not match its rows.`)
@@ -154,16 +155,17 @@ export async function runMigrations(
               await applyMigrationAnswer(pluginId, ns, a.id, { delete: true }, db)
               stats.deleted++
             } else if ('value' in a) {
-              await applyMigrationAnswer(pluginId, ns, a.id, { value: a.value }, db)
+              await applyMigrationAnswer(pluginId, ns, a.id, { value: a.value }, db, byId.get(a.id)!.updatedAt)
             } else {
               throw new MigrationFailure('invalid_result', `The migration's answer for row ${a.id} has neither a value nor delete.`)
             }
           }
           stats.rows += batch.length
+          // A batch may take its full runner timeout, and a page holds several: a long
+          // migration keeps its lease per batch; one that lost it stops (reconciliation took over).
+          await heartbeat(plan.operation, db)
         }
         after = page[page.length - 1].id
-        // A long migration keeps its lease; one that lost it stops (reconciliation took over).
-        await heartbeat(plan.operation, db)
       }
       await checkNamespaceQuotas(pluginId, ns, db)
       stats.steps++
