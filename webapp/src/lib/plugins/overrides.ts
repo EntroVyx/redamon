@@ -350,12 +350,18 @@ export interface ApproveResult {
  * each part's target key to the SHA-256 of its factory text now (from the agent's
  * registry). A proposal built on another factory text is refused; a set made stale by a
  * factory change can be re-approved, keeping its number and re-basing on the new hashes.
+ *
+ * `currentTexts` (same keys) re-bases `meta.baseFactoryText` on a re-approval too: without
+ * it, a later "Review again" would show the factory change the person already reviewed when
+ * they approved as is (phase-04 review, RV-54). It is ignored on a first approval, whose
+ * baseFactoryText the proposal already carries.
  */
 export async function approve(
   changeSetId: string,
   decidedBy: string,
   currentHashes: Record<string, string>,
   db: Db = prisma,
+  currentTexts?: Record<string, string>,
 ): Promise<ApproveResult> {
   checkChangeSetId(changeSetId)
   checkActor(decidedBy)
@@ -395,6 +401,16 @@ export async function approve(
       revision = first.revision ?? FACTORY_REVISION + 1
       const meta = { ...((first.meta as Record<string, unknown> | null) ?? {}) }
       delete meta.staleReason
+      if (currentTexts && typeof currentTexts === 'object') {
+        const base = meta.baseFactoryText && typeof meta.baseFactoryText === 'object' && !Array.isArray(meta.baseFactoryText)
+          ? { ...(meta.baseFactoryText as Record<string, string>) }
+          : {}
+        for (const r of rows) {
+          const partId = r.targetKey.slice(first.targetGroup.length + 1)
+          if (typeof currentTexts[r.targetKey] === 'string') base[partId] = currentTexts[r.targetKey]
+        }
+        meta.baseFactoryText = base
+      }
       for (const r of rows) {
         await tx.pluginOverride.update({
           where: { id: r.id },
