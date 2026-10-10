@@ -90,7 +90,7 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
           <span>
             {entry.installed?.version ? `Installed ${entry.installed.version}` : 'Not installed'}
             {entry.update ? ` · ${entry.update.version} available` : !entry.installed && entry.available ? ` · ${entry.available.version} available` : ''}
-            {!entry.inCatalog && ' · no longer in the catalog'}
+            {entry.inCatalog === false && ' · no longer in the catalog'}
           </span>
           {permissions.length > 0 && (
             <span className={styles.permissions}>

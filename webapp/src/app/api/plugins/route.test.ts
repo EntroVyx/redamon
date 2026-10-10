@@ -190,6 +190,8 @@ describe('GET /api/plugins', () => {
     expect(body.catalog.message).toMatch(message)
     expect(body.plugins.map((p: { id: string; state: string }) => [p.id, p.state])).toEqual([['echo', 'ready']])
     expect(body.plugins[0].update).toBeNull()
+    // Unknown, not "no longer listed": the catalog was not read.
+    expect(body.plugins[0].inCatalog).toBeNull()
   })
 
   test('an extra-key catalog is flagged, and so is an expiry under 14 days', async () => {

@@ -65,7 +65,8 @@ export interface PluginEntry {
   id: string
   displayName: string
   description: string
-  inCatalog: boolean
+  /** null while the catalog cannot be read: whether it still lists the plugin is unknown. */
+  inCatalog: boolean | null
   state: CardState
   installed: InstalledView | null
   /** The newest release this platform can run, for Install. */
@@ -194,7 +195,7 @@ function entryOf(
     id,
     displayName: meta?.displayName ?? manifest?.displayName ?? id,
     description: meta?.description ?? manifest?.description ?? '',
-    inCatalog: !!releases,
+    inCatalog: loaded ? !!releases : null,
     state,
     installed: row && installedState ? installedView(row, isAdmin) : null,
     available: best
