@@ -1,6 +1,7 @@
+import { createElement } from 'react'
 import {
   Puzzle, Sparkles, History, List, FileText, Settings, Play, Search, Shield,
-  BookOpen, Bot, Bug, Clock, Database, Star, Target, Zap, type LucideIcon,
+  BookOpen, Bot, Bug, Clock, Database, Star, Target, Zap, type LucideIcon, type LucideProps,
 } from 'lucide-react'
 import type { PluginIconName } from '@/lib/plugins/extensionPoints'
 
@@ -31,4 +32,9 @@ const ICONS: Record<PluginIconName, LucideIcon> = {
 
 export function pluginIcon(name: string | null | undefined): LucideIcon {
   return (name && (ICONS as Record<string, LucideIcon>)[name]) || Puzzle
+}
+
+/** The icon a contribution names, as an element; the components above are module-level, so stable. */
+export function PluginIcon({ name, ...props }: { name: string | null | undefined } & LucideProps) {
+  return createElement(pluginIcon(name), props)
 }

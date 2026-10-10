@@ -117,3 +117,32 @@ test('install from files, disable, enable, uninstall keep, reinstall, uninstall 
   await expect(dialog).toBeHidden()
   await expect(echoCard(page)).toHaveCount(0)
 })
+
+test('the echo nav page draws its screen under a strict CSP, with no violation', async ({ page }) => {
+  test.setTimeout(180_000)
+  const violations: string[] = []
+  page.on('console', (m) => {
+    if (/Content Security Policy|Content-Security-Policy/i.test(m.text())) violations.push(m.text())
+  })
+  await page.goto('/plugins')
+  await installFromFiles(page)
+  await expect(echoState(page)).toHaveText('Ready', { timeout: 60_000 })
+
+  // The nav entry is listed on the Plugins page, not in the global header.
+  await page.getByRole('link', { name: 'Open Echo' }).click()
+  await expect(page).toHaveURL(/\/plugins\/echo$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Echo' })).toBeVisible()
+  await expect(page.getByText('The Echo fixture plugin exists to test the plugin platform.')).toBeVisible()
+  // list_items runs in the plugin runner and pages with {items, next} (TD-28).
+  await expect(page.getByText('first', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+  const res = await page.request.get('/plugins/echo')
+  const csp = res.headers()['content-security-policy'] ?? ''
+  expect(csp).toContain("frame-ancestors 'none'")
+  expect(csp).toContain("connect-src 'self'")
+  expect((await page.request.get('/graph')).headers()['content-security-policy']).toBeUndefined()
+
+  // A screen the manifest does not list is a 404, whatever exists on disk.
+  expect((await page.request.get('/plugins/echo/not-listed')).status()).toBe(404)
+  expect(violations).toEqual([])
+})

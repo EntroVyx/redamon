@@ -1,3 +1,4 @@
+import type { PluginInstall } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { contributionsUpdating, showsContributions } from './registry'
 import { pluginsEnabled } from './switch'
@@ -108,31 +109,35 @@ function skillRowsOf(contributes: Record<string, unknown>): ProjectSkillsRowCont
   return out
 }
 
+type Row = Parameters<typeof showsContributions>[0] & Pick<PluginInstall, 'pluginId' | 'manifest'>
+
+/**
+ * One plugin's contributions, or null when it shows none: not `showsContributions`, no
+ * manifest, or no UI point at all (a plugin with only skill.text would otherwise render an
+ * empty gear-menu group).
+ */
+export function rowContributions(row: Row): PluginContributions | null {
+  if (!showsContributions(row)) return null
+  const manifest = row.manifest
+  if (!isObj(manifest)) return null
+  const contributes = isObj(manifest.contributes) ? manifest.contributes : {}
+  const nav = navOf(contributes)
+  const chatSessionActions = chatActionsOf(contributes, actionFlags(manifest))
+  const projectSkillsRow = skillRowsOf(contributes)
+  if (!nav && chatSessionActions.length === 0 && projectSkillsRow.length === 0) return null
+  return {
+    pluginId: row.pluginId,
+    displayName: str(manifest.displayName) ?? row.pluginId,
+    updating: contributionsUpdating(row),
+    ...(nav ? { nav } : {}),
+    chatSessionActions,
+    projectSkillsRow,
+  }
+}
+
 /** Every enabled plugin's contributions, by plugin id; empty while the switch is off. */
 export async function listContributions(db: Db = prisma): Promise<PluginContributions[]> {
   if (!pluginsEnabled()) return []
   const rows = await db.pluginInstall.findMany({ orderBy: { pluginId: 'asc' } })
-  const out: PluginContributions[] = []
-  for (const row of rows) {
-    if (!showsContributions(row)) continue
-    const manifest = row.manifest
-    if (!isObj(manifest)) continue
-    const contributes = isObj(manifest.contributes) ? manifest.contributes : {}
-    const flags = actionFlags(manifest)
-    const nav = navOf(contributes)
-    const chatSessionActions = chatActionsOf(contributes, flags)
-    const projectSkillsRow = skillRowsOf(contributes)
-    // A plugin that qualifies but contributes no UI (only skill.text, say) would render an
-    // empty gear-menu group and no Plugins-page entry: leave it out.
-    if (!nav && chatSessionActions.length === 0 && projectSkillsRow.length === 0) continue
-    out.push({
-      pluginId: row.pluginId,
-      displayName: str(manifest.displayName) ?? row.pluginId,
-      updating: contributionsUpdating(row),
-      ...(nav ? { nav } : {}),
-      chatSessionActions,
-      projectSkillsRow,
-    })
-  }
-  return out
+  return rows.map(rowContributions).filter((c): c is PluginContributions => c !== null)
 }

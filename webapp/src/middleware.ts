@@ -111,6 +111,29 @@ export function scannerKeyRouteAllowed(method: string, pathname: string): boolea
   )
 }
 
+const isPluginPage = (pathname: string) => pathname === '/plugins' || pathname.startsWith('/plugins/')
+
+/**
+ * The Content-Security-Policy of plugin pages (/plugins and /plugins/*), where plugin
+ * screens are drawn. Strict, but with 'unsafe-inline' because Next.js inlines its
+ * bootstrap scripts and styles; dev mode also needs 'unsafe-eval'. Plugin text shown
+ * elsewhere (the chat drawer, project settings) gets no CSP here, since a strict one would
+ * break those pages: SafeMarkdown and React escaping are the controls there.
+ */
+export function pluginPagesCsp(): string {
+  const script = process.env.NODE_ENV === 'production' ? "'self' 'unsafe-inline'" : "'self' 'unsafe-inline' 'unsafe-eval'"
+  return [
+    "default-src 'self'",
+    `script-src ${script}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ')
+}
+
 function getSecret() {
   const secret = process.env.AUTH_SECRET
   if (!secret || secret === 'changeme') return null
@@ -215,7 +238,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.rewrite(new URL('/_not-found', request.url))
   }
 
-  return NextResponse.next({ request: { headers: requestHeaders } })
+  const response = NextResponse.next({ request: { headers: requestHeaders } })
+  if (isPluginPage(pathname)) response.headers.set('Content-Security-Policy', pluginPagesCsp())
+  return response
 }
 
 export const config = {

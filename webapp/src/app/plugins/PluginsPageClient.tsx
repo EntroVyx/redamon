@@ -8,6 +8,7 @@ import { ConsentDialog } from '@/components/plugins/ConsentDialog'
 import { OfflineInstallDialog } from '@/components/plugins/OfflineInstallDialog'
 import { PluginDetailsDrawer } from '@/components/plugins/PluginDetailsDrawer'
 import { PluginCard, type CardAction } from '@/components/plugins/PluginCard'
+import { PluginNavLinks } from '@/components/plugins/PluginNavLinks'
 import { RunnerStatusBanner } from '@/components/plugins/RunnerStatusBanner'
 import { UninstallDialog } from '@/components/plugins/UninstallDialog'
 import { PluginApiError, usePluginAction, usePluginsPage } from '@/hooks/usePlugins'
@@ -120,6 +121,7 @@ export function PluginsPageClient() {
         <RunnerStatusBanner />
         <CatalogStatus catalog={data.catalog} />
       </div>
+      <PluginNavLinks />
       {data.plugins.length === 0 && data.catalog.state !== 'ok' ? (
         <div className="emptyState">
           <div className="emptyStateTitle">No plugins installed</div>
