@@ -1,6 +1,6 @@
 import type { ChatMessage, Prisma } from '@prisma/client'
 import prisma from '@/lib/prisma'
-import { redactSecretShapes } from './redact'
+import { redactKeyedValue, redactSecretShapes } from './redact'
 import { transcriptMaxBytes } from './settings'
 
 /**
@@ -13,15 +13,18 @@ import { transcriptMaxBytes } from './settings'
  * - rows are read 500 at a time in the compound order (sequenceNum, createdAt, id), with
  *   a keyset cursor on all three, because sequenceNum has duplicates (RV-13);
  * - each event is masked, then its long strings are cut to head and tail (masking first,
- *   so a cut never splits a secret into a half that no longer looks like one);
+ *   so a cut never splits a secret into a half that no longer looks like one); a value is
+ *   masked together with its key, as Python would see it in JSON text, and a key that is
+ *   itself secret-shaped is masked too;
  * - only the latest `todo_update` and `lats_tree_update` are kept, and a `phase_update`
- *   equal to the previous one is dropped;
+ *   is dropped when only its iteration count differs from the previous one (the agent
+ *   sends one per iteration), so the first row of each phase is what remains;
  * - the event loop is given back every 50 rows;
- * - priority events (what the operator and the agent said, errors, confirmations, phase
- *   changes) and the other events are each held as a head plus a sliding tail of half the
- *   cap, so the middle of a long session is what gets dropped. At the end the priority
- *   events and the snapshots are chosen first, then the first and the last of the rest
- *   fill what is left.
+ * - three tiers, each held as a head plus a sliding tail, so the middle of a long session
+ *   is what gets dropped: what people wrote (the operator's messages, guidance, answers to
+ *   the agent's requests), then the agent's own priority events (errors, requests, deep
+ *   thinking, phase changes) with the snapshots, then the rest. Each tier is chosen in
+ *   that order, the first and the last of it filling what the tiers before it left.
  */
 export const TRANSCRIPT_PAGE_ROWS = 500
 const STRING_MAX_CHARS = 4_000
@@ -36,19 +39,21 @@ const YIELD_EVERY_ROWS = 50
 // The JSON around meta and events: keys, brackets and two counts.
 const WRAPPER_BYTES = 128
 
-const PRIORITY_TYPES = new Set([
+const PEOPLE_TYPES = new Set([
   'user_message',
   'guidance',
+  'tool_confirmation_response',
+  'approval_response',
+  'answer_response',
+])
+const PRIORITY_TYPES = new Set([
   'deep_think',
   'error',
   'assistant_message',
   'task_complete',
   'tool_confirmation_request',
-  'tool_confirmation_response',
   'approval_request',
-  'approval_response',
   'question_request',
-  'answer_response',
   'phase_update',
 ])
 const SNAPSHOT_TYPES = new Set(['todo_update', 'lats_tree_update'])
@@ -115,8 +120,16 @@ function maskAndCut(value: unknown, depth = 0): unknown {
   if (depth >= MAX_DEPTH) return '[nested too deep]'
   if (Array.isArray(value)) return value.map((v) => maskAndCut(v, depth + 1))
   const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = maskAndCut(v, depth + 1)
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[redactSecretShapes(k)] = typeof v === 'string' ? cutString(redactKeyedValue(k, v)) : maskAndCut(v, depth + 1)
+  }
   return out
+}
+
+/** A phase row as compared with the previous one: everything but the iteration count. */
+function phaseKey(data: unknown): string {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return JSON.stringify(data)
+  return JSON.stringify(Object.entries(data).filter(([k]) => k !== 'iteration_count'))
 }
 
 function toEvent(row: Pick<ChatMessage, 'sequenceNum' | 'type' | 'data' | 'createdAt'>): TranscriptEvent {
@@ -182,6 +195,9 @@ function firstAndLast(items: Held[], budget: number): Held[] {
 const pageWhere = (conversationId: string, last: Pick<ChatMessage, 'sequenceNum' | 'createdAt' | 'id'> | null) => {
   const where: Prisma.ChatMessageWhereInput = { conversationId }
   if (last) {
+    // Redundant with the OR, but it gives the (conversationId, sequenceNum) index a lower
+    // bound: without it each page rescans the session from its first row.
+    where.sequenceNum = { gte: last.sequenceNum }
     where.OR = [
       { sequenceNum: { gt: last.sequenceNum } },
       { sequenceNum: last.sequenceNum, createdAt: { gt: last.createdAt } },
@@ -197,6 +213,7 @@ export async function readTranscript(
 ): Promise<Transcript> {
   const maxBytes = opts.maxBytes ?? transcriptMaxBytes()
   const pageRows = Math.max(1, Math.min(TRANSCRIPT_PAGE_ROWS, Math.floor(opts.pageRows ?? TRANSCRIPT_PAGE_ROWS)))
+  const people = new HeadAndTail(maxBytes)
   const priority = new HeadAndTail(maxBytes / 2)
   const others = new HeadAndTail(maxBytes / 2)
   const snapshots = new Map<string, Held>()
@@ -221,10 +238,12 @@ export async function readTranscript(
       if (SNAPSHOT_TYPES.has(row.type)) {
         snapshots.set(row.type, held)
       } else if (row.type === 'phase_update') {
-        const text = JSON.stringify(event.data)
-        if (text === lastPhase) continue
-        lastPhase = text
+        const key = phaseKey(event.data)
+        if (key === lastPhase) continue
+        lastPhase = key
         priority.push(held)
+      } else if (PEOPLE_TYPES.has(row.type)) {
+        people.push(held)
       } else if (PRIORITY_TYPES.has(row.type)) {
         priority.push(held)
       } else {
@@ -248,13 +267,18 @@ export async function readTranscript(
   }
 
   let budget = maxBytes - jsonBytes(meta) - WRAPPER_BYTES
-  const pinned = firstAndLast(
+  const tiers = [
+    people.items(),
     [...priority.items(), ...snapshots.values()].sort((a, b) => a.order - b.order),
-    Math.max(0, budget),
-  )
-  budget -= pinned.reduce((s, h) => s + h.bytes, 0)
-  const rest = firstAndLast(others.items(), Math.max(0, budget))
-  const kept = [...pinned, ...rest].sort((a, b) => a.order - b.order)
+    others.items(),
+  ]
+  const kept: Held[] = []
+  for (const tier of tiers) {
+    const chosen = firstAndLast(tier, Math.max(0, budget))
+    budget -= chosen.reduce((s, h) => s + h.bytes, 0)
+    kept.push(...chosen)
+  }
+  kept.sort((a, b) => a.order - b.order)
 
   return {
     meta,

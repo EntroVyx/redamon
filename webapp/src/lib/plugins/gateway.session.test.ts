@@ -130,15 +130,16 @@ describe('the transcript', () => {
   })
 
   test('the cap keeps the priority events and records what it dropped', async () => {
-    vi.stubEnv('PLUGIN_TRANSCRIPT_MAX_BYTES', '6000')
+    // The smallest cap the setting allows.
+    vi.stubEnv('PLUGIN_TRANSCRIPT_MAX_BYTES', '65536')
     db.seed(
       'chatMessage',
-      Array.from({ length: 40 }, (_, i) => message(10 + i, 'thinking', { thought: `${i} ` + 'x'.repeat(400) })),
+      Array.from({ length: 40 }, (_, i) => message(10 + i, 'thinking', { thought: `${i} ` + 'x'.repeat(3_000) })),
     )
     db.seed('chatMessage', [message(60, 'error', { message: 'tool failed' }), message(61, 'deep_think', { thought: 'rethink' })])
     const r = await read()
     const body = r.body as unknown as { events: { type: string; seq: number }[]; truncated: { keptEvents: number; droppedEvents: number } }
-    expect(Buffer.byteLength(JSON.stringify(r.body), 'utf8')).toBeLessThanOrEqual(6000)
+    expect(Buffer.byteLength(JSON.stringify(r.body), 'utf8')).toBeLessThanOrEqual(65_536)
     const types = body.events.map((e) => e.type)
     for (const t of ['user_message', 'assistant_message', 'error', 'deep_think']) expect(types).toContain(t)
     expect(body.truncated.droppedEvents).toBeGreaterThan(0)

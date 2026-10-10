@@ -215,6 +215,31 @@
       "name": "a long tool output with several secrets",
       "input": "nuclei found:\n[0] http://example.com/p0 Authorization: Bearer 8yg74IwfjGipritb7JezUwWs api_key=UtkYvSXfcWFrreNB\n[1] http://example.com/p1 Authorization: Bearer 1C9wln4SF03fSoOOuUnGBHHf api_key=29yqd8zR9fkkfjc0\n[2] http://example.com/p2 Authorization: Bearer uusRIQyxuS1vXDxsj1NGh9Ts api_key=LFXVcpNXpwBex9TS\n[3] http://example.com/p3 Authorization: Bearer lO9iD73k5NDwzXjz5EAZ0xhg api_key=8rvQnOPpHwwDjCX8\n[4] http://example.com/p4 Authorization: Bearer pfG5VDaTrF2wCNRui0Hz1kJb api_key=bgEuGD1bMv9lZ4Qm",
       "expected": "nuclei found:\n[0] http://example.com/p0 Authorization: Bearer 8yg7[REDACTED 24 chars] api_key=UtkY[REDACTED 16 chars]\n[1] http://example.com/p1 Authorization: Bearer 1C9w[REDACTED 24 chars] api_key=29yq[REDACTED 16 chars]\n[2] http://example.com/p2 Authorization: Bearer uusR[REDACTED 24 chars] api_key=LFXV[REDACTED 16 chars]\n[3] http://example.com/p3 Authorization: Bearer lO9i[REDACTED 24 chars] api_key=8rvQ[REDACTED 16 chars]\n[4] http://example.com/p4 Authorization: Bearer pfG5[REDACTED 24 chars] api_key=bgEu[REDACTED 16 chars]"
+    },
+    {
+      "name": "U+0345 before an assignment: a combining mark, not a word character in Python",
+      "input": "ͅpassword=hunter2hunter2",
+      "expected": "ͅpassword=hunt[REDACTED 14 chars]"
+    },
+    {
+      "name": "U+0345 before a Bearer token",
+      "input": "xͅBearer abcdefghijklmnop",
+      "expected": "xͅBearer abcd[REDACTED 16 chars]"
+    },
+    {
+      "name": "U+0345 before an api_key assignment",
+      "input": "ͅapi_key=RyDhj2xR1SFuDIXFsaA",
+      "expected": "ͅapi_key=RyDh[REDACTED 19 chars]"
+    },
+    {
+      "name": "U+0345 cannot start a header name",
+      "input": "ͅAuthorization: 7f3a9c0d1e2b4a5f",
+      "expected": "ͅAuthorization: 7f3a9c0d1e2b4a5f"
+    },
+    {
+      "name": "U+0345 ends an assignment name",
+      "input": "passwordͅ=hunter2hunter2",
+      "expected": "passwordͅ=hunter2hunter2"
     }
   ]
 }

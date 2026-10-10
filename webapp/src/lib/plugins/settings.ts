@@ -21,9 +21,13 @@ export function gatewayCallsPerToken(): number {
   return positiveInt('PLUGIN_GATEWAY_CALLS_PER_TOKEN', 600)
 }
 
-/** The most a plugin receives of one session transcript, as JSON bytes (TD-25). */
+/**
+ * The most a plugin receives of one session transcript, as JSON bytes (TD-25). At least
+ * 64 KB: the metadata alone (a cut, masked title) can take ~16 KB, and below it no answer
+ * would fit the cap.
+ */
 export function transcriptMaxBytes(): number {
-  return positiveInt('PLUGIN_TRANSCRIPT_MAX_BYTES', 2_097_152)
+  return Math.max(65_536, positiveInt('PLUGIN_TRANSCRIPT_MAX_BYTES', 2_097_152))
 }
 
 /** Model calls one plugin may make per user and UTC day (TD-09), apart from the agent's own cap. */

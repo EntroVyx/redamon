@@ -47,7 +47,13 @@ function row(i: number) {
     data = { todos: [{ content: `step ${step}`, status: 'in_progress' }] }
   } else if (i % 4 === 2) {
     type = 'phase_update'
-    data = { current_phase: i < N / 2 ? 'informational' : 'exploitation', iteration_count: 0 }
+    // The agent's payload: iteration_count changes on every row (websocket_api.py on_phase_update).
+    data = {
+      current_phase: i < N / 2 ? 'informational' : 'exploitation',
+      iteration_count: step,
+      attack_path_type: i < N / 2 ? '' : 'sql_injection',
+      skill_workflow: i < N / 2 ? null : { skillId: 'sql_injection', revision: 1 },
+    }
   } else {
     type = 'thinking'
     data = { thought: `thinking about step ${step}` }
@@ -82,6 +88,9 @@ async function syntheticFindMany(a: unknown) {
   expect(args.where.conversationId).toBe('conv-1')
   expect(args.orderBy).toEqual([{ sequenceNum: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }])
   const c = cursorOf(args.where)
+  // The OR alone gives the (conversationId, sequenceNum) index no lower bound: each page
+  // would rescan the session from its first row.
+  expect(args.where.sequenceNum).toEqual(c ? { gte: c.sequenceNum } : undefined)
   let start = 0
   if (c) while (start < N && !after(row(start), c)) start++
   const out = []
