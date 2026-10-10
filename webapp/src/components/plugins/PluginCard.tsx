@@ -58,6 +58,7 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
       if (state === 'disabled') buttons.push({ action: 'enable', label: 'Enable' })
       if (state === 'failed') buttons.push({ action: 'enable', label: 'Retry' })
       buttons.push({ action: 'uninstall', label: 'Uninstall', danger: true })
+      buttons.push({ action: 'details', label: 'Details' })
     }
   }
 
@@ -115,7 +116,15 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
               <button
                 key={b.label}
                 type="button"
-                className={b.danger ? `secondaryButton ${styles.danger}` : b.action === 'install' || b.action === 'update' ? 'primaryButton' : 'secondaryButton'}
+                className={
+                  b.danger
+                    ? `secondaryButton ${styles.danger}`
+                    : b.action === 'install' || b.action === 'update'
+                      ? 'primaryButton'
+                      : b.action === 'details'
+                        ? 'textButton'
+                        : 'secondaryButton'
+                }
                 disabled={busy || b.disabled}
                 onClick={act(b.action)}
               >

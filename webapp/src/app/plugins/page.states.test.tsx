@@ -313,6 +313,40 @@ describe('actions', () => {
     expect(posts[0]).toEqual({ url: '/api/plugins/echo/uninstall', body: { mode: 'keep', confirm: 'echo' } })
   })
 
+  test('Details opens the admin drawer; a rollback from it asks first, then posts', async () => {
+    page = model([entry('ready')])
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push({ url, body: JSON.parse(String(init.body)) })
+        return new Response(JSON.stringify({ plugin: { pluginId: 'echo', status: 'ready' } }))
+      }
+      if (url === '/api/plugins/status') return new Response(JSON.stringify(status))
+      if (url === '/api/plugins/echo') {
+        return new Response(JSON.stringify({
+          plugin: { ...entry('ready'), installed: { ...entry('ready').installed!, version: '1.1.0', previousVersion: '1.0.0' } },
+          admin: {
+            lastError: null, versionsOnDisk: ['1.0.0', '1.1.0'], grantedPermissions: [], data: { rows: 0, bytes: 0, maxRows: 1, maxBytes: 1 },
+            activeVersions: 0, dormantVersions: 0, rollback: { possible: true, migrates: false },
+          },
+        }))
+      }
+      if (url.startsWith('/api/plugins/echo/logs')) return new Response(JSON.stringify({ lines: [] }))
+      return new Response(JSON.stringify(page))
+    })
+    show()
+    fireEvent.click((await card()).getByRole('button', { name: 'Details' }))
+    fireEvent.click(await screen.findByRole('button', { name: /roll back to 1\.0\.0/i }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(alertSpies.confirm).toHaveBeenCalled()
+    expect(posts[0]).toEqual({ url: '/api/plugins/echo/rollback', body: {} })
+  })
+
+  test('Details is for installed plugins only', async () => {
+    page = model([entry('not_installed')])
+    show()
+    expect((await card()).queryByRole('button', { name: 'Details' })).toBeNull()
+  })
+
   test('Install from file is offered to the admin', async () => {
     show()
     expect(await screen.findByRole('button', { name: /install from file/i })).toBeTruthy()

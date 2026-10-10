@@ -6,6 +6,7 @@ import { useAlertModal } from '@/components/ui'
 import { CatalogStatus } from '@/components/plugins/CatalogStatus'
 import { ConsentDialog } from '@/components/plugins/ConsentDialog'
 import { OfflineInstallDialog } from '@/components/plugins/OfflineInstallDialog'
+import { PluginDetailsDrawer } from '@/components/plugins/PluginDetailsDrawer'
 import { PluginCard, type CardAction } from '@/components/plugins/PluginCard'
 import { RunnerStatusBanner } from '@/components/plugins/RunnerStatusBanner'
 import { UninstallDialog } from '@/components/plugins/UninstallDialog'
@@ -25,6 +26,7 @@ export function PluginsPageClient() {
   const action = usePluginAction()
   const { confirm, alertError } = useAlertModal()
   const [dialog, setDialog] = useState<Dialog>(null)
+  const [details, setDetails] = useState<string | null>(null)
 
   const run = async (path: string, body?: unknown, form?: FormData): Promise<unknown | null> => {
     try {
@@ -46,6 +48,7 @@ export function PluginsPageClient() {
     if (a === 'install') setDialog({ kind: 'install', entry, restoreCount: 0 })
     else if (a === 'update') setDialog({ kind: 'update', entry })
     else if (a === 'uninstall') setDialog({ kind: 'uninstall', entry })
+    else if (a === 'details') setDetails(entry.id)
     else if (a === 'enable') await run(`${base}/enable`)
     else if (a === 'disable') {
       const ok = await confirm(
@@ -55,6 +58,15 @@ export function PluginsPageClient() {
       )
       if (ok) await run(`${base}/disable`)
     }
+  }
+
+  const onRollback = async (pluginId: string, toVersion: string) => {
+    const ok = await confirm(
+      `Version ${toVersion} becomes active again for every user. If the newer version moved the data, its down migration takes it back first; nothing changes if any of it fails.`,
+      `Roll back to ${toVersion}?`,
+      { confirmLabel: 'Roll back' },
+    )
+    if (ok) await run(`/api/plugins/${pluginId}/rollback`, {})
   }
 
   if (isLoading) {
@@ -157,6 +169,9 @@ export function PluginsPageClient() {
             if (out) close()
           }}
         />
+      )}
+      {details && (
+        <PluginDetailsDrawer pluginId={details} isOpen onClose={() => setDetails(null)} onRollback={onRollback} />
       )}
       {dialog?.kind === 'offline' && (
         <OfflineInstallDialog
