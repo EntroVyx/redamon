@@ -72,3 +72,17 @@ describe('runMigration', () => {
     expect(RUNNER_TIMEOUTS.migrate).toBeGreaterThan(120_000)
   })
 })
+
+test("the client waits for one batch at least as long as the runner may take", async () => {
+  const { readFileSync } = await import('node:fs')
+  const path = await import('node:path')
+  const supervisor = (f: string) => readFileSync(path.resolve(__dirname, '../../../../services/plugin_runner/supervisor', f), 'utf8')
+  const num = (src: string, re: RegExp) => Number(src.match(re)![1])
+  const config = supervisor('config.py')
+  const ready = num(config, /ready_timeout: float = ([\d.]+)/)
+  const migrate = num(config, /migrate_timeout: float = ([\d.]+)/)
+  const scrub = num(supervisor('spawn.py'), /SCRUB_TIMEOUT = ([\d.]+)/)
+  // The worker's start, the batch (sending and reading share one deadline), the 5 + 2 s
+  // clean-up and the UID scrub: shorter, and a slow batch is reported as a runner outage.
+  expect(RUNNER_TIMEOUTS.migrate).toBeGreaterThanOrEqual((ready + migrate + 7 + scrub) * 1000)
+})

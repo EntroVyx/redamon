@@ -17,9 +17,11 @@ import { ACTION_ID_RE } from './schemas/common'
 export const RUNNER_KEY_HEADER = 'X-Plugin-Runner-Key'
 const DEFAULT_RUNNER_URL = 'http://plugin-gateway:7072'
 const JOB_ID_RE = /^[A-Za-z0-9_-]{1,200}$/
-// A reload waits for new workers to say ready (up to 30 s), then stops and scrubs the
+// reload: waits for new workers to say ready (up to 30 s), then stops and scrubs the
 // replaced ones.
-export const RUNNER_TIMEOUTS = { health: 3_000, reload: 90_000, small: 10_000, migrate: 150_000 }
+// migrate: the runner's worst case for one batch (worker start 30 s, the batch 120 s, clean-up
+// and UID scrub 37 s; runnerClient.migrate.test.ts reads them from its config) plus a margin.
+export const RUNNER_TIMEOUTS = { health: 3_000, reload: 90_000, small: 10_000, migrate: 200_000 }
 // The plugin-gateway proxy's own answers (gateway_proxy/proxy.py): the runner behind it was
 // not reached, so they are not the runner's errors.
 const PROXY_UNAVAILABLE: Record<string, UnavailableReason> = {

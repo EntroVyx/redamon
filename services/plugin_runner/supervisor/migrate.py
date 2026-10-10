@@ -104,9 +104,13 @@ async def run_batch(manager, plugin_id: str, version: str, root: str, step: int,
         msg = {"type": "migrate", "id": "m", "step": step, "direction": direction, "rows": rows}
         proc.stdin.write(json.dumps(msg, separators=(",", ":")).encode("utf-8") + b"\n")
         try:
+            # One deadline for sending the batch and reading its answer: the webapp's wait
+            # (runnerClient RUNNER_TIMEOUTS.migrate) covers start + this + clean-up + scrub.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + settings.migrate_timeout
             await asyncio.wait_for(proc.stdin.drain(), settings.migrate_timeout)
             answer = await _read_until(reader, lambda m: m.get("type") == "result" and m.get("id") == "m",
-                                       settings.migrate_timeout)
+                                       max(0.0, deadline - loop.time()))
         except asyncio.TimeoutError:
             logs.event(plugin_id, version, f"migration step {step} {direction} timed out after "
                                            f"{settings.migrate_timeout:g}s; worker killed")
