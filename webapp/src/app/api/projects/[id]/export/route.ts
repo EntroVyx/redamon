@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto'
 import { requireEffectiveUser, requireProjectAccess } from '@/lib/access'
 import { serializeGraphProperties } from '@/lib/graphSerialize'
 import { projectPresetForRead } from '@/lib/reconPresets/server'
+import { PROJECT_EXPORT_EXCLUDED, PROJECT_EXPORT_EXCLUDED_REASON } from '@/lib/projectExport/pluginExclusion'
 
 const RECON_OUTPUT_PATH = process.env.RECON_OUTPUT_PATH || '/data/recon-output'
 const GVM_OUTPUT_PATH = process.env.GVM_OUTPUT_PATH || '/data/gvm-output'
@@ -175,6 +176,9 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       // Carried in the manifest as well as the project JSON, so the import rule
       // can be applied before anything is written.
       engagementKind: project.engagementKind,
+      // Deliberately left out, not forgotten (OQ-18): plugin rows belong to a plugin install.
+      excluded: [...PROJECT_EXPORT_EXCLUDED],
+      excludedReason: PROJECT_EXPORT_EXCLUDED_REASON,
       stats: {
         conversations: conversations.length,
         chatMessages: messages.length,
