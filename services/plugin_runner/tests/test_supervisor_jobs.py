@@ -138,3 +138,40 @@ def test_a_job_id_already_running_is_refused(runner, plugins_dir):
     assert h.act("echo", "sleep", {"seconds": 2}, async_=True, job_id="dup").status_code == 202
     r = h.act("echo", "sleep", {"seconds": 2}, async_=True, job_id="dup")
     assert r.status_code == 409 and r.json()["code"] == "job_running"
+
+
+SURROGATE = (
+    "async def surrogate(ctx, params):\n"
+    "    # Bytes a tool printed, decoded as Python does for undecodable output.\n"
+    "    return {'out': b'ok \\xff'.decode('utf-8', 'surrogateescape')}\n"
+)
+
+
+def test_a_result_that_cannot_be_sent_is_reported_as_failed_not_retried_forever(runner, plugins_dir):
+    # httpx encodes a body as UTF-8, which an unpaired surrogate is not: the report used to
+    # fail as if the network had, be retried, and leave the job running to its deadline.
+    entry = install_plugin(plugins_dir, extra_files={"engine/surrogate.py": SURROGATE})
+    entry["manifest"]["actions"].append({"id": "surrogate", "entry": "engine/surrogate.py:surrogate",
+                                          "timeoutSeconds": 30, "async": True})
+    h = runner([entry])
+    h.act("echo", "surrogate", async_=True, job_id="j12")
+    report = _done(h).json()
+    assert report["status"] == "failed" and report["error"]["code"] == "invalid_result"
+    time.sleep(0.3)
+    assert len(h.completions) == 1
+
+
+def test_every_report_attempt_fits_in_the_job_grace_the_webapp_allows():
+    # The job token and the job's deadline outlive the action by the webapp's grace: a
+    # report still retrying after it is refused (401) and the job reads as a timeout.
+    import re
+    from pathlib import Path
+
+    from supervisor import jobs
+    from supervisor.config import Settings
+
+    actions = Path(__file__).resolve().parents[3] / "webapp/src/lib/plugins/actions.ts"
+    grace = int(re.search(r"JOB_GRACE_SECONDS = (\d+)", actions.read_text()).group(1))
+    delays = Settings.__dataclass_fields__["job_report_delays"].default
+    window = jobs.REPORT_ATTEMPT_TIMEOUT_SECONDS * (len(delays) + 1) + sum(delays)
+    assert window < grace
