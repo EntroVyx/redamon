@@ -23,9 +23,11 @@ test.beforeAll(async ({ playwright, baseURL }) => {
   execFileSync(process.execPath, [join(__dirname, '..', 'scripts', 'make-plugin-fixtures.mjs'), FIXTURES], { stdio: 'ignore' })
   const seed = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { cookie: `redamon-auth=${mintToken(SEED_USER)}` } })
   if (!admin) {
-    // Lifecycle routes read the role from the database: sign in as a user who really is an admin.
+    // Lifecycle routes read the role from the database: sign in as a user who really is an admin,
+    // the seed user when it is one (it has projects, so /graph draws below).
     const users = (await (await seed.get('/api/users')).json()) as { id: string; role: string }[]
-    admin = users.find((u) => u.role === 'admin')?.id ?? ''
+    const admins = users.filter((u) => u.role === 'admin')
+    admin = (admins.find((u) => u.id === SEED_USER) ?? admins[0])?.id ?? ''
   }
   await seed.dispose()
   api = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { cookie: `redamon-auth=${mintToken(admin)}` } })
@@ -76,9 +78,11 @@ const echoState = (page: Page) => echoCard(page).getByTestId('plugin-state')
 test('install from files, disable, enable, uninstall keep, reinstall, uninstall purge', async ({ page }) => {
   test.setTimeout(240_000)
   await page.goto('/graph')
-  // Leave only once /graph has drawn, as a user does: it publishes drawer offsets on <html>
-  // while it is shown, and they must go with it or the details drawer below is 0 px tall.
-  await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--drawer-bottom') !== '')
+  // Leave only once /graph has drawn, as a user does: with a project it publishes drawer offsets
+  // on <html>, and they must go with it or the details drawer below is 0 px tall.
+  await page.waitForFunction(
+    () => document.documentElement.style.getPropertyValue('--drawer-bottom') !== '' || document.body.innerText.includes('No Project Selected'),
+  )
   await page.getByRole('link', { name: /^Plugins$/ }).click()
   await expect(page).toHaveURL(/\/plugins$/)
   await expect(page.getByRole('heading', { name: 'Plugins' })).toBeVisible()
@@ -101,7 +105,9 @@ test('install from files, disable, enable, uninstall keep, reinstall, uninstall 
 
   await echoCard(page).getByRole('button', { name: 'Uninstall' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Uninstall', exact: true }).click()
-  await expect(echoState(page)).toHaveText('Not installed')
+  // Echo stored nothing, and the catalog in use (an unreachable one, here) does not list it:
+  // nothing is left to show or manage.
+  await expect(echoCard(page)).toHaveCount(0)
 
   await installFromFiles(page)
   await expect(echoState(page)).toHaveText('Ready', { timeout: 60_000 })
