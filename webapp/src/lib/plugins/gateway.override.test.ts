@@ -142,8 +142,18 @@ describe('override/get', () => {
         targetGroup: 'path_traversal',
         displayName: 'Path Traversal / LFI / RFI',
         parts: [
-          { partId: 'tools', text: FACTORY.tools, sha256: sha(FACTORY.tools), chars: 26, maxChars: 4000 },
-          { partId: 'payload_reference', text: FACTORY.payload_reference, sha256: sha(FACTORY.payload_reference), chars: 18, maxChars: 4000 },
+          // kind and placeholders tell a plugin how to edit a part (TD-26): a template keeps
+          // its placeholders and doubles new literal braces; a plain part is verbatim.
+          { partId: 'tools', text: FACTORY.tools, sha256: sha(FACTORY.tools), chars: 26, maxChars: 4000, kind: 'template', placeholders: ['timeout'] },
+          {
+            partId: 'payload_reference',
+            text: FACTORY.payload_reference,
+            sha256: sha(FACTORY.payload_reference),
+            chars: 18,
+            maxChars: 4000,
+            kind: 'plain',
+            placeholders: [],
+          },
         ],
         active: null,
         pendingCount: 0,

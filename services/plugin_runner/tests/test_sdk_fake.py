@@ -141,6 +141,15 @@ def test_an_active_version_is_reported_by_override_get():
     assert out["fromRevision"] == 3
 
 
+def test_override_get_reports_each_part_kind_and_placeholders():
+    registry = {"path_traversal": {"parts": {
+        "tools": {"text": "Scan with {timeout} s.", "kind": "template", "placeholders": ["timeout"]},
+        "payload_reference": {"text": "Use ../ sequences."}}}}
+    got = asyncio.run(FakeSdk(registry=registry).override.get("skill.text", "path_traversal"))
+    kinds = {p["partId"]: (p["kind"], p["placeholders"]) for p in got["parts"]}
+    assert kinds == {"tools": ("template", ["timeout"]), "payload_reference": ("plain", [])}
+
+
 def test_project_scope_needs_a_project():
     registry = {"path_traversal": {"parts": {"payload_reference": {"text": "factory"}}}}
     sdk = FakeSdk(registry=registry)

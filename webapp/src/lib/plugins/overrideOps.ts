@@ -93,7 +93,17 @@ export async function getOverride(ctx: GatewayContext): Promise<Record<string, u
     point,
     targetGroup: group,
     displayName: skillDisplayName(group),
-    parts: skill.parts.map((p) => ({ partId: p.partId, text: p.text, sha256: p.sha256, chars: p.chars, maxChars: p.maxChars })),
+    // kind and placeholders say how a part may be edited (TD-26): a template keeps exactly its
+    // placeholders and doubles any new literal brace; a plain part is used verbatim.
+    parts: skill.parts.map((p) => ({
+      partId: p.partId,
+      text: p.text,
+      sha256: p.sha256,
+      chars: p.chars,
+      maxChars: p.maxChars,
+      kind: p.kind,
+      placeholders: p.placeholders,
+    })),
     active: set
       ? {
           changeSetId: set.changeSetId,

@@ -101,7 +101,9 @@ function defaultRegistry() {
   return { path_traversal: { skillMaxChars: 100, parts: { payload_reference: { text: 'Use ../ sequences.', maxChars: 4000 } } } }
 }
 
-function agentRegistry(setup: Record<string, { skillMaxChars: number; parts: Record<string, { text: string; maxChars: number }> }>) {
+function agentRegistry(
+  setup: Record<string, { skillMaxChars: number; parts: Record<string, { text: string; maxChars: number; kind?: string; placeholders?: string[] }> }>,
+) {
   return {
     skills: Object.entries(setup).map(([id, s]) => ({
       id,
@@ -109,8 +111,8 @@ function agentRegistry(setup: Record<string, { skillMaxChars: number; parts: Rec
       parts: Object.entries(s.parts).map(([partId, p], order) => ({
         partId,
         constant: `${id}_prompts.${partId.toUpperCase()}`,
-        kind: 'plain',
-        placeholders: [],
+        kind: p.kind ?? 'plain',
+        placeholders: p.placeholders ?? [],
         sha256: createHash('sha256').update(p.text, 'utf8').digest('hex'),
         chars: p.text.length,
         maxChars: p.maxChars,
