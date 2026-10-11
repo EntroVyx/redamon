@@ -23,8 +23,16 @@ const entry = (kp = makeKeyPair(), extra: Partial<TrustedKey> = {}): TrustedKey 
 })
 
 describe('extraKeys', () => {
-  test('the official keyring is empty until the production key is published (phase 08)', () => {
-    expect(OFFICIAL_KEYS).toEqual([])
+  test('an extra key cannot take the shipped production key id', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const [production] = OFFICIAL_KEYS
+    process.env.PLUGINS_EXTRA_TRUSTED_KEYS = JSON.stringify([entry(makeKeyPair(production.keyId))])
+    expect(extraKeys()).toEqual([])
+    expect(warn.mock.calls[0][0]).toMatch(/official/)
+    const found = findTrustedKey(production.keyId)
+    expect(found?.official).toBe(true)
+    const x = (found!.key.export({ format: 'jwk' }) as { x: string }).x
+    expect(Buffer.from(x, 'base64url').toString('base64')).toBe(production.publicKey)
   })
 
   test('unset or blank: no extra key and no warning', () => {
