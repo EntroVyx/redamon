@@ -495,8 +495,10 @@ RedAmon):
 3. Settings → Environments: create `release` with the owner as required reviewer, and add the
    secrets `CATALOG_SIGNING_KEY` (the PEM content) and `CATALOG_SIGNING_KEY_ID`. Then delete the
    local private key file, keeping only the offline backup.
-4. Actions → Workflow permissions: read and write, because the release workflow commits the
-   catalog. If `master` is protected, allow GitHub Actions to push to it.
+4. Leave Actions → Workflow permissions at its read-only default: each workflow declares its
+   own permissions, and only the jobs that commit the catalog ask for `contents: write`. A
+   `master` ruleset may block deletions and force pushes, but not require pull requests: the
+   release workflow pushes the catalog to `master` directly.
 5. Add a tag ruleset protecting `*-v*`, and CODEOWNERS for every plugin folder and for `tools/`,
    `.github/` and `catalog.json*`.
 6. In the base repository, in one RedAmon release: add the public key to the keyring and set
