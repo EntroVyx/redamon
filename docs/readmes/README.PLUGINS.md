@@ -471,7 +471,7 @@ never expires by itself, which is why the catalog carries its own expiry.
 | Workflow | Runs on | Does |
 |---|---|---|
 | `ci.yml` | every push and pull request | validates and tests every plugin and the tools |
-| `release.yml` | a tag `<pluginId>-v<version>` | the five steps of §6.2; signs in the `release` environment and commits the catalog and its signature to `main`; one concurrency group, `catalog` |
+| `release.yml` | a tag `<pluginId>-v<version>` | the five steps of §6.2; signs in the `release` environment and commits the catalog and its signature to `master`; one concurrency group, `catalog` |
 | `catalog-refresh.yml` | monthly, and by hand | re-signs the unchanged catalog with a new expiry (default 90 days) and `serial` + 1 |
 
 Python tools in `tools/` do the work, inside `python:3.11-slim` containers: `validate.py`,
@@ -496,12 +496,12 @@ RedAmon):
    secrets `CATALOG_SIGNING_KEY` (the PEM content) and `CATALOG_SIGNING_KEY_ID`. Then delete the
    local private key file, keeping only the offline backup.
 4. Actions → Workflow permissions: read and write, because the release workflow commits the
-   catalog. If `main` is protected, allow GitHub Actions to push to it.
+   catalog. If `master` is protected, allow GitHub Actions to push to it.
 5. Add a tag ruleset protecting `*-v*`, and CODEOWNERS for every plugin folder and for `tools/`,
    `.github/` and `catalog.json*`.
 6. In the base repository, in one RedAmon release: add the public key to the keyring and set
    the default catalog URL,
-   `https://raw.githubusercontent.com/<owner>/redamon-plugins/main/catalog.json`.
+   `https://raw.githubusercontent.com/<owner>/redamon-plugins/master/catalog.json`.
 
 **Rotating a key.**
 

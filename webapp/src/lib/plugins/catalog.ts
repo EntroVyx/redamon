@@ -23,7 +23,7 @@ import { parseCatalog, type CatalogRelease, type PluginCatalog } from './schemas
  * - An expired catalog blocks install and update. It never touches an installed plugin:
  *   nothing here writes anything but the serial record.
  */
-export const DEFAULT_CATALOG_URL = 'https://raw.githubusercontent.com/samugit83/redamon-plugins/main/catalog.json'
+export const DEFAULT_CATALOG_URL = 'https://raw.githubusercontent.com/samugit83/redamon-plugins/master/catalog.json'
 export const CATALOG_STATE_KEY = 'catalog.serial'
 export const CATALOG_CACHE_MS = 60_000
 export const EXPIRY_WARNING_DAYS = 14

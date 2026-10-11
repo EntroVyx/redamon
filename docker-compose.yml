@@ -1119,7 +1119,7 @@ services:
       PLUGIN_RUNNER_URL: http://plugin-gateway:7072
       PLUGIN_RUNNER_KEY: ${PLUGIN_RUNNER_KEY:-}
       PLUGIN_CALL_TOKEN_SECRET: ${PLUGIN_CALL_TOKEN_SECRET:-}
-      PLUGINS_CATALOG_URL: ${PLUGINS_CATALOG_URL:-https://raw.githubusercontent.com/samugit83/redamon-plugins/main/catalog.json}
+      PLUGINS_CATALOG_URL: ${PLUGINS_CATALOG_URL:-https://raw.githubusercontent.com/samugit83/redamon-plugins/master/catalog.json}
       PLUGINS_DOWNLOAD_HOSTS: ${PLUGINS_DOWNLOAD_HOSTS:-github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,raw.githubusercontent.com}
       PLUGINS_EXTRA_TRUSTED_KEYS: ${PLUGINS_EXTRA_TRUSTED_KEYS:-}
       # The public origin the plugin routes' same-origin check accepts. Empty locally;

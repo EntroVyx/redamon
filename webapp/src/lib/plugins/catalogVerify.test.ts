@@ -109,7 +109,7 @@ describe('signature', () => {
   })
 
   test('the default URL is the official catalog, overridable by PLUGINS_CATALOG_URL', async () => {
-    expect(catalogUrl()).toBe('https://raw.githubusercontent.com/samugit83/redamon-plugins/main/catalog.json')
+    expect(catalogUrl()).toBe('https://raw.githubusercontent.com/samugit83/redamon-plugins/master/catalog.json')
     process.env.PLUGINS_CATALOG_URL = ' https://raw.githubusercontent.com/example/other/main/catalog.json '
     expect(catalogUrl()).toBe('https://raw.githubusercontent.com/example/other/main/catalog.json')
     const f = serving(catalogOf(1))
