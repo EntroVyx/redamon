@@ -293,12 +293,15 @@ Plugins share a repo but are released one at a time. A release is a git tag of t
 5. regenerates `catalog.json`, increments its `serial`, and writes a detached signature.
 
 The GitHub release (step 4) and the catalog (step 5) are published only after a reviewer
-approves the protected `release` environment, and for two tags pushed together they run in one
-CI concurrency group, so they never race.
-The signing key lives in that environment; release tags are protected, and each plugin folder
-has its own CODEOWNERS, because one key signs every plugin in the repo. §6.4 covers the keys,
-the workflows and the one-time repository setup. The maintainer's step-by-step for releasing a
-new version or adding a plugin is in the plugin repository's
+approves the protected `release` environment, and every job that signs runs in one CI
+concurrency group, `catalog`, so two never race on the catalog. GitHub keeps one waiting run per
+group: a third run cancels the one still waiting, which is then re-run by hand.
+The signing key lives in that environment; release tags are protected. CODEOWNERS names an owner
+for every plugin folder and for the tools, but it is enforced only through pull-request review,
+which the `master` ruleset does not require (one maintainer pushes directly), so the reviewer of
+the `release` environment is the gate that matters: one key signs every plugin in the repo.
+§6.4 covers the keys, the workflows and the one-time repository setup. The maintainer's
+step-by-step for releasing a new version or adding a plugin is in the plugin repository's
 [README](https://github.com/samugit83/redamon-plugins#releases) ("Releases", "Adding a plugin").
 
 **Why one repository carries independent versions.** A tag marks one commit, and CI packs
@@ -345,20 +348,24 @@ whose range includes it.
 - **No expiry.** A catalog never expires (the owner's decision of 2026-10-11), so nobody has
   to re-sign it on a schedule, and installs and updates never pause because a date passed. An
   `expires` field left by older CI (the catalog of `skiller-v1.0.0` has one) is ignored. The
-  accepted limit: the serial cannot protect an installation that has never seen a newer
-  catalog (a new install), which could be shown an older, genuinely signed one that does not
-  yet list a revocation. It takes an attacker able to tamper with the HTTPS connection to
-  GitHub, or an admin who points `PLUGINS_CATALOG_URL` elsewhere.
+  accepted limit: the serial stops a *rollback* (an older catalog after a newer one), not a
+  *freeze*. Whoever controls an installation's connection to GitHub (an attacker able to tamper
+  with HTTPS there, or an admin who points `PLUGINS_CATALOG_URL` elsewhere) can keep serving it
+  the last catalog it saw, or a new installation any older genuine catalog, for as long as that
+  control lasts, hiding later releases and revocations.
 - **One mark per trust scope.** The highest serial is kept once for all the official keys, so
   a rotated-out key cannot replay below a newer key's serial, and once per extra trusted key,
   so a custom or development catalog never holds the official one back.
 - **Revocation.** An installed version that appears in `revoked` stops at the next
-  reconcile (every `PLUGIN_RECONCILE_INTERVAL`, 5 minutes by default): its actions and
-  worker, its menu items and the skill versions it proposed stop (the agent uses the
-  built-in text), the admin's `enabled` is left as it is, and the card shows the reason. A
-  revoked version is never offered for install. The plugin repository publishes a revocation
-  with its hand-run `revoke.yml` (`tools/catalog.py revoke`), approved like a release, and
-  lifts it with `unrevoke`.
+  reconcile (every `PLUGIN_RECONCILE_INTERVAL`, 5 minutes by default) that reads the new
+  catalog: after the raw CDN serves it (up to 5 minutes) and RedAmon's 60-second catalog cache,
+  so about 11 minutes at worst. Its actions and worker, its menu items and the skill versions
+  it proposed stop (the agent uses the built-in text), the admin's `enabled` is left as it
+  is, and the card shows the reason. A revoked version is never offered for install; an admin
+  brings the plugin back with **Update** to a release that is not revoked (the card offers
+  it), or uninstalls it. The plugin repository publishes a revocation with its hand-run
+  `revoke.yml` (`tools/catalog.py revoke`), approved like a release, and lifts it with
+  `unrevoke`.
 - **Release choice.** The platform installs the newest release whose `platform` range
   includes the running platform version, not simply the newest release.
 - **Download hosts.** Archive URLs must be `https` on an allowlisted host (GitHub release
@@ -485,8 +492,8 @@ is as safe as a download.
 
 A signature proves who published the bytes and that they are unchanged. It does not prove that
 the catalog is the newest one (the serial does, for an installation that has seen a newer one,
-§6.2), nor that the plugin code is good (review in `redamon-plugins`, CODEOWNERS per folder and
-the Runner's isolation, §5, do).
+§6.2), nor that the plugin code is good (review in `redamon-plugins` and the Runner's
+isolation, §5, do).
 
 **The CI of `redamon-plugins`.**
 
@@ -497,11 +504,12 @@ the Runner's isolation, §5, do).
 | `revoke.yml` | by hand | lists a released version in the catalog's `revoked` with a reason, or lifts it, then signs and commits the catalog; one concurrency group, `catalog` |
 | `catalog-resign.yml` | by hand | signs the unchanged catalog again with `serial` + 1, after a key rotation |
 
-Python tools in `tools/` do the work, inside `python:3.11-slim` containers: `validate.py`,
-`pack.py`, `catalog.py`, `sign.py` (which reads the PEM key from `CATALOG_SIGNING_KEY`) and
-`gen_key.py`. `pack.py` writes a deterministic ustar archive (sorted entries, zero timestamps
-and owners, no links), so two packs of one folder are byte-identical. Actions are pinned to
-commit SHAs.
+Python tools in `tools/` do the work (in the digest-pinned `python:3.11-slim` container for
+the CI and build jobs, with `setup-python` 3.11 on the runner for the jobs that sign):
+`validate.py`, `pack.py`, `catalog.py`, `sign.py` (which reads the PEM key from
+`CATALOG_SIGNING_KEY`) and `gen_key.py`. `pack.py` writes a deterministic ustar archive (sorted
+entries, zero timestamps and owners, no links), so two packs of one folder are byte-identical.
+Actions are pinned to commit SHAs.
 
 Every release, revocation and re-sign waits for the reviewer's approval of the `release`
 environment. Nothing runs on a schedule: a catalog never expires, so there is no routine
@@ -1548,7 +1556,7 @@ flowchart TB
 | Threat | Control |
 |---|---|
 | A tampered archive | SHA-256 from the signed catalog; signature checked against the keyring in the base repo |
-| An old catalog that hides a revocation | catalog `serial` must not go backwards (a new installation, which has seen no serial, is not covered: catalogs do not expire, §6.2) |
+| An old catalog that hides a revocation | catalog `serial` must not go backwards: this stops a rollback; a freeze (the same old catalog served on by whoever controls the connection) is not covered, because catalogs do not expire (§6.2) |
 | A catalog entry that points the webapp at an internal address | archive URLs must be `https` on an allowlisted host |
 | An archive that writes outside its folder | unpack rejects absolute paths, `..`, links and oversize archives |
 | A plugin that skips the SDK | permissions are enforced in the Gateway, not in the SDK client |
