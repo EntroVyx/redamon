@@ -353,7 +353,9 @@ test.describe.serial('Skiller', () => {
 
   test('analyse a session from the chat menu, review and approve, twice', async ({ page }) => {
     test.setTimeout(600_000)
-    test.skip(!ready, 'Pack and sign Skiller into SKILLER_DIST and switch the platform on (see the comment above).')
+    test.skip(!ready, FROM_CATALOG
+      ? 'Switch the platform on (see the comment above).'
+      : 'Pack and sign Skiller into SKILLER_DIST and switch the platform on (see the comment above).')
     const projects = (await (await api.get('/api/projects')).json()) as { id: string }[]
     projectId = projects[0]?.id ?? ''
     test.skip(!projectId, 'No project to seed a session into.')
@@ -430,8 +432,12 @@ test.describe.serial('Skiller', () => {
     await installSkiller(page)
     await expect.poll(async () => (await versions()).find((v) => v.status === 'active')?.revision).toBe(third)
 
-    const list = (await (await api.get('/api/plugins')).json()) as { plugins: { id: string; inCatalog?: boolean }[] }
-    const listed = list.plugins.find((p) => p.id === 'skiller')?.inCatalog === true
+    const list = (await (await api.get('/api/plugins')).json()) as { plugins: { id: string; inCatalog: boolean | null }[] }
+    const inCatalog = list.plugins.find((p) => p.id === 'skiller')?.inCatalog
+    // null means the catalog could not be read just now: what the purge leaves would be a guess.
+    expect(inCatalog, 'the catalog must be readable before the purge').not.toBeNull()
+    if (FROM_CATALOG) expect(inCatalog).toBe(true)
+    const listed = inCatalog === true
     await card.getByRole('button', { name: 'Uninstall' }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('radio', { name: /delete all data/i }).check()

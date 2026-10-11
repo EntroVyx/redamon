@@ -105,7 +105,7 @@ test('install from files, disable, enable, uninstall keep, reinstall, uninstall 
 
   await echoCard(page).getByRole('button', { name: 'Uninstall' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Uninstall', exact: true }).click()
-  // Echo stored nothing, and the catalog in use (an unreachable one, here) does not list it:
+  // Echo stored nothing, and the catalog in use (the official one, or none) does not list it:
   // nothing is left to show or manage.
   await expect(echoCard(page)).toHaveCount(0)
 

@@ -18,7 +18,7 @@ export interface TrustedKey {
 
 export const OFFICIAL_KEYS: readonly TrustedKey[] = [
   // The `release` environment key of samugit83/redamon-plugins, made by its tools/gen_key.py on
-  // 2026-10-11; the id is the first 16 hex digits of the key's sha256. Rotation: README.PLUGINS.md §6.2.
+  // 2026-10-11; the id is the first 16 hex digits of the key's sha256. Rotation: README.PLUGINS.md §6.4.
   { keyId: 'ee4a2df9065d36b1', publicKey: 'RfUjPbeO+6ftsMNGkM5CnM46XIwQs+yRcPy4m5msyFg=' },
 ]
 

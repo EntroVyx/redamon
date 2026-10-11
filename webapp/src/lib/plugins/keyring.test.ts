@@ -9,13 +9,12 @@ import { createHash } from 'crypto'
 import { describe, test, expect, afterEach } from 'vitest'
 import { OFFICIAL_KEYS, findTrustedKey } from './keyring'
 
-// The release environment's key of samugit83/redamon-plugins (README.PLUGINS.md §6.2).
-const PRODUCTION_KEY_IDS = ['ee4a2df9065d36b1']
-// The Skiller development key (~/.config/redamon-plugins/dev, phase 07) and the prefix of the
-// throwaway keys testing/e2e/scripts/make-plugin-fixtures.mjs generates: trusted only through
-// PLUGINS_EXTRA_TRUSTED_KEYS, never shipped.
+// The release environment's key of samugit83/redamon-plugins (README.PLUGINS.md §6.2, §6.4),
+// pinned whole: a changed byte is a different key.
+const PRODUCTION_KEYS = [{ keyId: 'ee4a2df9065d36b1', publicKey: 'RfUjPbeO+6ftsMNGkM5CnM46XIwQs+yRcPy4m5msyFg=' }]
+// The Skiller development key (~/.config/redamon-plugins/dev): trusted by a local RedAmon only
+// through PLUGINS_EXTRA_TRUSTED_KEYS, never shipped.
 const DEV_KEY_ID = 'b04ccc133d998579'
-const NOT_SHIPPED_PREFIXES = ['e2e-', 'test-', 'dev']
 
 afterEach(() => {
   delete process.env.PLUGINS_EXTRA_TRUSTED_KEYS
@@ -23,13 +22,11 @@ afterEach(() => {
 
 describe('OFFICIAL_KEYS', () => {
   test('lists the production key and nothing else', () => {
-    expect(OFFICIAL_KEYS.map((k) => k.keyId)).toEqual(PRODUCTION_KEY_IDS)
+    expect(OFFICIAL_KEYS).toEqual(PRODUCTION_KEYS)
   })
 
-  test('never lists a development or test key', () => {
-    const ids = OFFICIAL_KEYS.map((k) => k.keyId)
-    expect(ids).not.toContain(DEV_KEY_ID)
-    expect(ids.filter((id) => NOT_SHIPPED_PREFIXES.some((p) => id.startsWith(p)))).toEqual([])
+  test('never lists the development key', () => {
+    expect(OFFICIAL_KEYS.map((k) => k.keyId)).not.toContain(DEV_KEY_ID)
   })
 
   test.each(OFFICIAL_KEYS.map((k) => [k.keyId, k] as const))('%s is 32 raw bytes in canonical base64', (_id, k) => {
