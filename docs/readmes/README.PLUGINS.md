@@ -18,10 +18,10 @@ the plugins are its guests.
 > **Status: partly built.** The host side is built: the plugin tables and stores, the platform
 > switch, the Plugin Manager and the Plugins page, the catalog signature check, the Gateway, the
 > UI host ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
-> ([`services/plugin_runner/`](../../services/plugin_runner/)). The `redamon-plugins` repository
-> and its first plugin, Skiller (§6.5), exist but are not published yet: there is no public
-> repository and no signed catalog, so the default catalog cannot be reached and plugins install
-> from files (§9.7). Anything marked
+> ([`services/plugin_runner/`](../../services/plugin_runner/)). The plugin repository is public at
+> [`samugit83/redamon-plugins`](https://github.com/samugit83/redamon-plugins) with a signed
+> catalog, and its first plugin, Skiller 1.0.0 (§6.5), installs from that catalog or from files
+> (§9.7). Anything marked
 > *(proposed)* is intended layout, not a current file. Links to existing code are real.
 >
 > **Diagram convention.** Every diagram sets its own colours on its first line, so it reads
@@ -292,14 +292,18 @@ Plugins share a repo but are released one at a time. A release is a git tag of t
 4. computes its SHA-256 and attaches the archive to a GitHub release,
 5. regenerates `catalog.json`, increments its `serial`, and writes a detached signature.
 
-Steps 5 for two tags pushed together run in one CI concurrency group, so they never race.
-The signing key lives in a protected GitHub environment that needs a reviewer; release tags
-are protected, and each plugin folder has its own CODEOWNERS, because one key signs every
-plugin in the repo. §6.4 covers the keys, the workflows and the one-time repository setup.
+The GitHub release (step 4) and the catalog (step 5) are published only after a reviewer
+approves the protected `release` environment, and for two tags pushed together they run in one
+CI concurrency group, so they never race.
+The signing key lives in that environment; release tags are protected, and each plugin folder
+has its own CODEOWNERS, because one key signs every plugin in the repo. §6.4 covers the keys,
+the workflows and the one-time repository setup. The maintainer's step-by-step for releasing a
+new version or adding a plugin is in the plugin repository's
+[README](https://github.com/samugit83/redamon-plugins#releases) ("Releases", "Adding a plugin").
 
 **Why one repository carries independent versions.** A tag marks one commit, and CI packs
 only the tagged plugin's folder as it was at that commit. `skiller-v1.0.0` and
-`echo-v0.3.1` can point at different commits; later changes on `main` never alter an
+`echo-v0.3.1` can point at different commits; later changes on `master` never alter an
 archive already published, whose bytes the catalog pins by sha256. The catalog keeps every
 release of every plugin, so an installation on an older platform still finds a release
 whose range includes it.
@@ -399,8 +403,17 @@ The signature is what makes a downloaded catalog trustworthy and, through the sh
 lists, every archive. The verifying side is built
 ([`keyring.ts`](../../webapp/src/lib/plugins/keyring.ts),
 [`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)); the signing side is `tools/sign.py`
-and the release workflow of `redamon-plugins`, which sign for real once that repository is
-published with its key.
+and the release workflow of `redamon-plugins`, which signed the first official catalog (serial 1,
+for `skiller-v1.0.0`).
+
+**The official key today.** One key, id `ee4a2df9065d36b1` (public key
+`RfUjPbeO+6ftsMNGkM5CnM46XIwQs+yRcPy4m5msyFg=`), is the only entry of `OFFICIAL_KEYS` in
+[`keyring.ts`](../../webapp/src/lib/plugins/keyring.ts); `keyring.test.ts` fails if any other key,
+a development key included, is added without updating its list. The catalog is served from
+`https://raw.githubusercontent.com/samugit83/redamon-plugins/master/catalog.json` (the default
+`PLUGINS_CATALOG_URL`) and its archives from GitHub release assets, which redirect once to
+`release-assets.githubusercontent.com` (in the default `PLUGINS_DOWNLOAD_HOSTS`).
+`catalog.live.test.ts` checks all of this against GitHub when run with `PLUGINS_LIVE=1`.
 
 **How the signature works.** Signing uses an **Ed25519** key pair. The private key signs; the
 public key can only verify, so publishing it is safe, and the private key cannot be derived
@@ -507,13 +520,19 @@ RedAmon):
 
 **Rotating a key.**
 
-1. A RedAmon release adds the new public key next to the old one. CI still signs with the old
-   key.
-2. Once installations have updated, CI switches to the new key. The `keyId` in each signature
-   tells the verifier which key to use, so both keys work during the switch.
-3. A later RedAmon release removes the old key.
+1. Generate the new key outside both repositories (`tools/gen_key.py --out <dir>`), and keep its
+   private file only until step 3.
+2. A RedAmon release adds the new public key to `OFFICIAL_KEYS` next to the old one (and its id
+   to the list in `keyring.test.ts`). CI still signs with the old key.
+3. Once installations have updated, the owner replaces the `release` environment's
+   `CATALOG_SIGNING_KEY` and `CATALOG_SIGNING_KEY_ID` with the new key, deletes the local private
+   file, and runs `catalog-refresh.yml` by hand, so the catalog is re-signed with the new key at
+   once. The `keyId` in each signature tells the verifier which key to use, so both keys work
+   during the switch.
+4. A later RedAmon release removes the old key, or gives it a `notAfter` date after which it is
+   no longer trusted.
 
-An installation older than step 1 does not know the new key: after step 2 it refuses every new
+An installation older than step 2 does not know the new key: after step 3 it refuses every new
 catalog and sees no plugin updates until RedAmon itself is updated. That is why a new key ships
 well before it is used.
 
@@ -1656,9 +1675,11 @@ written alongside the first platform release:
 - The full `ctx` object, the screen-description schema, and the binding rules for every UI
   primitive.
 - How the SDK is distributed (a wheel attached to each platform release, or a package index).
-- Local development: an offline install of a locally packed archive, with a catalog signed by
-  a dev key trusted through `PLUGINS_EXTRA_TRUSTED_KEYS` (§6.4), an SDK fake for tests, and a
-  CLI that validates a manifest and its screens before release.
+- Local development, which exists: an offline install of a locally packed archive with a
+  catalog signed by a dev key trusted through `PLUGINS_EXTRA_TRUSTED_KEYS` (§6.4), the SDK
+  fakes `FakeSdk` and `ScriptedLlm` for tests, and `tools/validate.py`, which checks a manifest
+  and its screens before release. The commands are in the plugin repository's
+  [README](https://github.com/samugit83/redamon-plugins#developing-a-plugin-against-a-local-redamon).
 - The implementation of the Gateway's separate port inside the webapp container.
 - Where plugin logs are written and how admins read them.
 
