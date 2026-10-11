@@ -20,7 +20,7 @@ const n = (x: number) => x.toLocaleString('en-US')
 const mb = (bytes: number) => `${(bytes / 1_048_576).toFixed(1)} MB`
 
 /**
- * The admin's view of one plugin (README.PLUGINS.md §13): what failed last, what is on disk,
+ * The admin's view of one plugin (README.PLUGIN_SDK.md §12): what failed last, what is on disk,
  * what it was granted, how much it stores, whether a rollback is possible, an export, and the
  * last lines of its log from the runner's ring buffer.
  */

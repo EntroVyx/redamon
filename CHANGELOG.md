@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Plugins: optional features installed on demand, off by default** (plugin platform 1.0.0). With `PLUGINS_ENABLED=true` in `.env` and `./redamon.sh up`, a **Plugins** button opens `/plugins`, where an admin installs, updates, disables and uninstalls plugins from the signed [`redamon-plugins`](https://github.com/samugit83/redamon-plugins) catalog, or from files. Plugins add entries to the chat's gear menu, to project settings and a page of their own, drawn by RedAmon from descriptions (a plugin ships no JavaScript). A plugin that calls a model gets a tile in Global Settings → LLM Providers → Models by feature, **Not set** until a user chooses. Not to be confused with MCP Tool Plugins. Guide: the wiki's Plugins page; design: [README.PLUGINS.md](docs/readmes/README.PLUGINS.md); for authors: [README.PLUGIN_SDK.md](docs/readmes/README.PLUGIN_SDK.md).
+- **Plugin skill versions.** A plugin may propose new text for a built-in skill's playbook; nothing changes until a person approves it in RedAmon's review window, side by side with the text it replaces. An approved version applies from the next message or resume, for the user's projects or one project; **Skill versions** lists every version (numbers are never reused) with Delete and **Reset to factory**, which works even after the plugin is gone. A RedAmon update that changes a skill's factory text marks its versions stale and the factory text runs until someone reviews them again.
+- **Skiller**, the first plugin (in `redamon-plugins`, 1.0.0): from a finished chat's gear menu, **Improve skill from this session** proposes a better, session-agnostic version of the built-in skill the agent used, for you to approve.
+
+### Security
+
+- **Plugin code runs isolated.** Each plugin version runs in its own process in the `plugin-runner` container, under its own user, with memory and process limits and a clean environment, on an internal network with no internet access. It reaches RedAmon only through the Gateway, behind the `plugin-gateway` proxy, which re-checks every call against a short-lived token and the permissions an admin approved; it holds no database credentials and no LLM key (the agent makes model calls with the user's key). The single-host deploy also denies the plugin-internal routes at nginx.
+- **Signed catalog.** Catalogs are signed with Ed25519 and archives are pinned by SHA-256; RedAmon trusts only its built-in public key unless an admin adds one (`PLUGINS_EXTRA_TRUSTED_KEYS`, and the page warns). A catalog never expires: RedAmon keeps the highest serial it has seen and refuses to go back to an older one, and a revoked version stops everywhere within about ten minutes.
+
+### Upgrade notes
+
+- The first `./redamon.sh update` onto this release rebuilds the five core images (`docker-compose.yml` changed) and builds the plugin runner image in a separate step; a runner build failure does not stop the update.
+- It adds four `plugin_*` tables to Postgres and three keys to `.env` (`PLUGINS_ENABLED=false`, `PLUGIN_RUNNER_KEY`, `PLUGIN_CALL_TOKEN_SECRET`), without touching your other lines. Plugins stay **off**: no plugin container, network or volume is created, and nothing else changes.
+- Updating from a version older than 5.1.0: run `./redamon.sh up` once afterwards, which adds the keys (the image is built the first time you turn plugins on).
+- Turning plugins on needs Docker Engine 28.0.0 or newer. On an older engine, or with `INTERNAL_API_KEY` left as `changeme`, `./redamon.sh up` leaves plugins off, says why, and starts everything else.
+- Going back to an older RedAmon release drops the plugin tables with their data (installed plugins, plugin data, approved skill versions). Export first: each plugin's Details → **Export data**, or `docker compose exec postgres pg_dump -U redamon -d redamon -t 'plugin_*' > plugins-backup.sql`.
+
 ## [6.26.2] - 2026-10-08
 
 ### Fixed

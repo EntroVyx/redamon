@@ -1,5 +1,5 @@
 /**
- * The admin's details of one plugin (README.PLUGINS.md §13, D-77, R-12): its last error, the
+ * The admin's details of one plugin (README.PLUGIN_SDK.md §12, D-77, R-12): its last error, the
  * versions on disk, the granted permissions, its data usage against the quotas, its approved
  * skill versions, whether a rollback is possible and why not, an export, and the last 200
  * lines of its log from the runner's ring buffer, with a refresh.
