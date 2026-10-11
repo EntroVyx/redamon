@@ -17,12 +17,14 @@ When performing these actions, ALWAYS invoke the corresponding skill FIRST:
 | Adding or editing an MCP server the agent uses | `agentic-tool-integration` |
 | Adding or integrating an LLM provider | `llm-provider-integration` |
 | Changing how a triage score, review or verdict is computed or written | `priority-board-triage` |
+| Changing how plugin services, networks or the plugins overlay are started by redamon.sh or compose | `plugin-platform` |
 | Changing or adding a project setting or default value | `project-settings-cascade` |
 | Editing a Prisma @default, a Python settings default, or the /defaults endpoint | `project-settings-cascade` |
 | Editing agent skill classification, phase injection, or the attack-skill UI | `builtin-agent-skill` |
 | Editing model-id routing or provider credential handling | `llm-provider-integration` |
 | Editing the Priority Board, the triage graph mixin, or the MCP triage tools | `priority-board-triage` |
 | Editing the agent tool registry, phase map, or PhaseAwareToolExecutor dispatch | `agentic-tool-integration` |
+| Editing the plugin platform: the plugins lib or routes, the plugin runner, or the Gateway | `plugin-platform` |
 
 ---
 
@@ -51,7 +53,11 @@ hot-reload (read-only mounts): `agentic/logs`, `agentic/skills` (Chat Skills),
 ```
 api.py  orchestrator.py  job_runner.py   FastAPI surface + agent loop entrypoints
 orchestrator_helpers/                    agent orchestration helpers
-prompts/                                 system + tool prompts
+prompts/                                 system + tool prompts; prompts/skill_parts.py registers the
+                                         built-in skill parts a plugin may override (rule: the
+                                         `builtin-agent-skill` skill, layer 10)
+plugin_api.py                            master-key /plugins/* routes (skill parts, proposal
+                                         validation, plugin model calls); `plugin-platform` skill
 skills/               Chat Skills (volume-mounted, no rebuild)
 community-skills/     Community Agent Skills (volume-mounted, no rebuild)
 cypherfix_triage/  cypherfix_codefix/    CypherFix triage + codefix agents

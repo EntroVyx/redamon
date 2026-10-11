@@ -16,11 +16,13 @@ When performing these actions, ALWAYS invoke the corresponding skill FIRST:
 | Adding, removing or changing a tool on the inbound MCP server | `mcp-server-tools` |
 | Changing MCP token scopes, their UI wording, or the MCP API reference generator | `mcp-server-tools` |
 | Changing how a triage score, review or verdict is computed or written | `priority-board-triage` |
+| Changing how plugin services, networks or the plugins overlay are started by redamon.sh or compose | `plugin-platform` |
 | Changing or adding a project setting or default value | `project-settings-cascade` |
 | Editing a Prisma @default, a Python settings default, or the /defaults endpoint | `project-settings-cascade` |
 | Editing agent skill classification, phase injection, or the attack-skill UI | `builtin-agent-skill` |
 | Editing model-id routing or provider credential handling | `llm-provider-integration` |
 | Editing the Priority Board, the triage graph mixin, or the MCP triage tools | `priority-board-triage` |
+| Editing the plugin platform: the plugins lib or routes, the plugin runner, or the Gateway | `plugin-platform` |
 
 ---
 
@@ -42,12 +44,16 @@ Tailwind) · Vitest 4. Runs in the `webapp` container; build via Docker.
 
 ```
 src/app/          App Router routes + API route handlers (src/app/api/**)
-src/components/   React components
+src/components/   React components (shared primitives, incl. useAlertModal, in src/components/ui)
 src/context/      React context providers        src/providers/  provider wrappers
-src/hooks/        hooks (e.g. useAlertModal)      src/lib/        client/server utilities
+src/hooks/        hooks                          src/lib/        client/server utilities
 src/types/        shared TS types                 src/middleware.ts  edge middleware
 server_actions/   Next.js server actions          prisma/schema.prisma  data model
 ```
+
+The optional plugin platform (off unless `PLUGINS_ENABLED=true`) is `src/lib/plugins/`, its
+routes `src/app/api/{plugins,plugin-gateway,plugin-runner,internal/plugins}/`, its UI
+`src/components/plugins/` and `src/app/plugins/`; the `plugin-platform` skill holds its rules.
 
 ## COMMANDS
 
@@ -68,5 +74,5 @@ docker compose exec webapp npx prisma db push
 - [ ] `npm run test` green (with `--no-file-parallelism`).
 - [ ] New or changed behaviour is covered by a test (see the `redamon-testing` skill for where + how).
 - [ ] Prisma schema edited? Applied with `db push` (not `prisma migrate`) and client regenerated.
-- [ ] UI prompts/alerts use the `useAlertModal` hook, never `window.alert` / `window.confirm`.
+- [ ] UI prompts/alerts use the `useAlertModal` hook (`import { useAlertModal } from '@/components/ui'`), never `window.alert` / `window.confirm`.
 - [ ] Rebuilt the webapp image (prod) or relied on dev hot-reload as appropriate.
