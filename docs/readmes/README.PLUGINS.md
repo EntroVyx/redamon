@@ -15,14 +15,16 @@ What a specific plugin does (for example the first one, **`skiller`**) is docume
 that plugin's own folder in `redamon-plugins`, never here. This file describes the host;
 the plugins are its guests.
 
-> **Status: partly built.** The host side is built: the plugin tables and stores, the platform
-> switch, the Plugin Manager and the Plugins page, the catalog signature check, the Gateway, the
-> UI host ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
-> ([`services/plugin_runner/`](../../services/plugin_runner/)). The plugin repository is public at
-> [`samugit83/redamon-plugins`](https://github.com/samugit83/redamon-plugins) with a signed
-> catalog, and its first plugin, Skiller 1.0.0 (§6.5), installs from that catalog or from files
-> (§9.7). Anything marked
-> *(proposed)* is intended layout, not a current file. Links to existing code are real.
+> **Status: built, plugin platform 1.0.0, off by default** (`PLUGINS_ENABLED=false`). The plugin
+> tables and stores, the platform switch, the Plugin Manager and the Plugins page, the catalog
+> signature check, the Gateway, the UI host
+> ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
+> ([`services/plugin_runner/`](../../services/plugin_runner/)) all exist. The plugin repository is
+> public at [`samugit83/redamon-plugins`](https://github.com/samugit83/redamon-plugins) with a
+> signed catalog, and its first plugin, Skiller 1.0.0 (§6.5), installs from that catalog or from
+> files (§9.7). The plugin author's contract is [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
+> Where the build differs from the first design, this document describes the build; §13 lists
+> the differences. Links to code are real.
 >
 > **Diagram convention.** Every diagram sets its own colours on its first line, so it reads
 > the same in light and dark themes whatever the viewer's default. When you add a diagram,
@@ -148,35 +150,43 @@ flowchart TB
     subgraph WEB["webapp · trusted"]
         PM["Plugin Manager"]
         UIH["UI Host"]
+        GW["Gateway routes<br/>/api/plugin-gateway/v1"]
     end
 
     VOL[("plugins volume")]
+    PX["plugin-gateway proxy<br/>plugins-edge + plugins-net"]
 
-    subgraph RUN["Plugin Runner · untrusted"]
+    subgraph RUN["Plugin Runner · untrusted · plugins-net, no internet"]
         LD["supervisor + Loader"]
         WK["plugin workers<br/>one process per plugin version"]
     end
 
     subgraph CORE["trusted services"]
-        GW["Gateway<br/>(own port on the webapp)"]
         AG["Agent<br/>holds the LLM keys"]
         PG[("Postgres")]
     end
 
     CAT -- "download" --> PM
     PM -- "write" --> VOL
-    PM -- "start / stop" --> LD
-    UIH -- "run action" --> LD
+    PM -- "start / stop" --> PX
+    UIH -- "run action" --> PX
+    PX -- "/runner/v1" --> LD
     VOL -- "read-only" --> WK
     LD --> WK
-    WK -- "SDK calls" --> GW
+    WK -- "SDK calls" --> PX
+    PX -- "/api/plugin-gateway/v1" --> GW
     GW -- "LLM calls" --> AG
     GW -- "sessions, plugin data" --> PG
     PG -. "approved overrides,<br/>via the settings payload" .-> AG
 ```
 
 The six platform components (§7) are all **generic**: none contains logic for `skiller` or
-any other plugin. The dashed line is the only way plugin output can change core behaviour:
+any other plugin. The Runner sits alone on `plugins-net`, an internal network with no route out.
+The only way between it and the webapp is the `plugin-gateway` proxy, a small container on
+`plugins-net` and `plugins-edge` (which the webapp joins while plugins are on) that passes
+plugin code's calls to the Gateway routes and the run list, and the webapp's calls to the
+supervisor, and nothing else. Neither network publishes a host port, and the proxy is not on the
+`redamon` network where Postgres, Neo4j and the agent listen. The dashed line is the only way plugin output can change core behaviour:
 approved overrides are **data** the agent reads at each turn (§8.2). The agent never calls
 plugin code.
 
@@ -194,14 +204,15 @@ So plugin code runs in its **own container, the Plugin Runner**:
 - **Isolated failure.** A broken plugin cannot crash the agent or the webapp.
 - **Isolated secrets.** The Runner holds no database credentials and no LLM keys. When a
   plugin needs an LLM it asks the Gateway, and the **agent** makes the call with the user's
-  key. The agent already has the helper that builds a model for a given user
-  ([`_build_llm_with_model_for_user`](../../agentic/api.py#L594)); the platform adds an
-  internal endpoint around it *(proposed)*. The key never enters the Runner, which keeps the
-  credential boundary RedAmon already enforces.
+  key. The agent's master-key endpoint `POST /plugins/llm/invoke`
+  ([plugin_api.py](../../agentic/plugin_api.py#L196)) builds the model the user chose for the
+  plugin with the helper every per-feature model choice uses
+  ([`_build_feature_llm`](../../agentic/api.py#L488)). The key never enters the Runner, which
+  keeps the credential boundary RedAmon already enforces.
 - **Code loaded at runtime, no rebuild.** Plugin code lives on a persistent volume that the
   Runner reads. The idea extends an existing precedent: community skills are Markdown files
   bind-mounted read-only into the agent and picked up without a rebuild
-  ([docker-compose.yml:903](../../docker-compose.yml#L903)). Plugins apply the same idea to
+  ([docker-compose.yml:906](../../docker-compose.yml#L906)). Plugins apply the same idea to
   code, in a container built for it. A new plugin needs **no image rebuild**, as long as it
   only uses libraries the Runner image provides (§11.3).
 
@@ -243,12 +254,27 @@ loads plugin code into its own process:
 
 ### 5.4 How it runs, and what happens when it is down
 
-The Runner is a normal service of the stack, built and started by `./redamon.sh` like the
-others *(proposed)*. It is small, and idle when no plugin is installed. It has container limits
-(`mem_limit`, `pids_limit`, `cpus`), as the webapp service does.
+The Runner is a service of the stack that runs only while the platform is on. Its two
+services, `plugin-runner` and the `plugin-gateway` proxy (one image, `redamon-plugin-runner`),
+are in the `plugins` compose profile, and the webapp's plugin wiring (the `plugins-edge`
+network and the plugins volume) is in the `docker-compose.plugins.yml` overlay. `./redamon.sh
+install` and `update` build the image in a separate step whose failure never stops them;
+`./redamon.sh up` loads the overlay and starts the profile only while `PLUGINS_ENABLED` is
+effectively on, and removes both services otherwise. With the switch off nothing plugin-related
+is created, and plain `docker compose up -d` never loads the overlay.
+
+Turning it on needs Docker Engine 28.0.0 or newer (the networks use `gateway_mode_ipv4:
+isolated`). A host that cannot run the platform (an older engine, a weak internal key, a
+missing secret, a runner image that does not build, too little memory) starts everything else
+with plugins off for that run, prints the reason, and `./redamon.sh status` repeats it.
+
+The Runner is small, and idle when no plugin is installed. It has container limits
+(`mem_limit` sized by the memory governor, `pids_limit`, `cpus`), a healthcheck, and `json-file`
+log rotation (10 MB × 3). The proxy has the same healthcheck and rotation and a fixed 128 MB
+limit.
 
 **No other service depends on it.** If it is stopped or missing, the stack runs normally:
-plugin actions return `503 Runner unavailable`, the Plugins page shows the Runner as down, and
+plugin actions return `503 runner_unavailable`, the Plugins page shows the Runner as down, and
 **overrides that were already approved keep applying**, because they are data in Postgres, not
 plugin code (§8.2).
 
@@ -260,16 +286,18 @@ plugin code (§8.2).
 
 ```
 redamon-plugins/
-├── catalog.json                 # generated by CI, never hand-edited
+├── catalog.json                 # written by the release, revoke and re-sign workflows, never by hand
 ├── catalog.json.sig             # detached signature over catalog.json
-├── .github/workflows/release.yml
+├── .github/workflows/           # ci.yml, release.yml, revoke.yml, catalog-resign.yml
+├── .platform-sdk/<version>/     # unedited copy of the platform SDK and schemas, per platform version
+├── tools/                       # validate, pack, catalog, sign, gen_key, semver, sync_sdk, run_tests
 ├── skiller/
 │   ├── plugin.json              # the manifest: the whole contract with the platform
 │   ├── engine/                  # Python actions, executed by a worker
 │   ├── vendor/                  # optional bundled pure-Python dependencies
 │   ├── ui/                      # screen descriptions (JSON), drawn by the UI host
-│   ├── migrations/              # numbered data migrations: 0001_up.py, 0001_down.py, ...
-│   ├── tests/
+│   ├── migrations/              # data migrations: 0002_up.py, 0002_down.py, ... (§9.5)
+│   ├── tests/                   # never packed
 │   ├── CHANGELOG.md
 │   └── README.md                # what skiller does is documented HERE, not in base
 ├── <next-plugin>/
@@ -397,6 +425,7 @@ not a real plugin.
     "llm:invoke",
     "override:skill.text"
   ],
+  "llmFeature": { "description": "…" },   // required with llm:invoke: its tile in Models by feature
 
   "actions": [                            // entry points a worker can execute (§7.7)
     { "id": "run", "entry": "engine/main.py:run", "timeoutSeconds": 120 }
@@ -405,13 +434,16 @@ not a real plugin.
   "contributes": {                        // extension points it uses (§7.6)
     "nav": { "label": "Example", "icon": "puzzle", "screen": "ui/home.json" },
     "chat.session.actions": [ { "label": "Run example", "action": "run" } ]
-  }
+  },
+  "screens": ["ui/home.json"]              // every screen file it uses
 }
 ```
 
 The platform decides what a plugin may do from its manifest alone and never inspects its
 Python for that. A capability missing from the manifest is a capability the plugin does not
-have. `timeoutSeconds` is capped by a platform maximum.
+have. `timeoutSeconds` is capped by a platform maximum (`PLUGIN_ACTION_MAX_TIMEOUT`). The
+manifest is strict: an unknown key is refused, not ignored. Every field, with its limits, is in
+[README.PLUGIN_SDK.md](README.PLUGIN_SDK.md) §3.
 
 ### 6.4 Catalog signing: keys, CI and trust
 
@@ -669,13 +701,15 @@ What a plugin does with that single installation stays scoped:
 ### 7.2 Loader
 
 The part of the Runner's supervisor that knows which plugins to run. It does not read the
-database (the Runner has no credentials): on start, and whenever the Manager tells it, it asks
-the Manager for the **run list**, the plugins that are enabled and `ready` with their active
-version, and starts or stops workers to match. Every action is then served through one
-generic endpoint:
+database (the Runner has no credentials): on start, and whenever the Manager tells it
+(`POST /runner/v1/reload`), it asks the Manager for the **run list**, the plugins that are
+enabled and `ready` with their active version (`GET /api/plugin-runner/v1/run-list`, with the
+runner key, through the proxy), and starts or stops workers to match. Every action is then
+served through one generic endpoint of the supervisor
+([app.py](../../services/plugin_runner/supervisor/app.py)):
 
 ```
-POST /plugins/{pluginId}/actions/{actionId}
+POST /runner/v1/plugins/{pluginId}/actions/{actionId}     sync: 200, async: 202 {jobId}
 ```
 
 ### 7.3 SDK and Gateway
@@ -684,25 +718,39 @@ A plugin reaches the outside world only through the SDK, which has two halves:
 
 - **SDK client**: a small Python library the plugin imports, running inside its worker. It
   is only a convenience wrapper over HTTP calls.
-- **Gateway**: endpoints on the trusted side that actually serve those calls. **All
-  permission checks happen here**, never in the client, so a plugin that skips the SDK and
-  makes raw requests gains nothing. The Gateway listens on **its own port** of the webapp
-  *(proposed)*, and that is the only port reachable from the plugins network, so a worker
-  cannot reach any other webapp route.
+- **Gateway**: webapp routes under `/api/plugin-gateway/v1/` that actually serve those calls
+  ([gateway.ts](../../webapp/src/lib/plugins/gateway.ts)). **All permission checks happen
+  here**, never in the client, so a plugin that skips the SDK and makes raw requests gains
+  nothing. A worker reaches them only through the `plugin-gateway` proxy, which passes
+  `/api/plugin-gateway/v1/*` and the runner's run list and nothing else, so a worker cannot
+  reach any other webapp route. The single-host deploy also denies these prefixes at nginx.
 
 Each action invocation carries a short-lived **call token**, minted by the webapp and bound
-to `(plugin, acting user, project, session)`. The session is set only when the action was
-started from a session, so `sdk.session.read` can read that one session and nothing else.
-The Gateway authorizes every call against the token and the plugin's granted permissions.
+to `(plugin, version, acting user, project, session)`. The session is set only when the action
+was started from a session, so `sdk.session.read` can read that one session and nothing else.
+A token lives no longer than its action (`403 action_ended`) or job (`403 job_ended`) and makes
+at most `PLUGIN_GATEWAY_CALLS_PER_TOKEN` calls. The Gateway authorizes every call again: the
+token, the plugin still serving (enabled, `ready`, not revoked, at the token's version), the
+permission granted and declared, and the tenancy of the project and session.
 
 | SDK call | Permission | What the Gateway does |
 |---|---|---|
-| `sdk.session.read()` | `session:read` | returns the transcript of the token's session, with credentials masked (see below) |
-| `sdk.llm.invoke(messages)` | `llm:invoke` | forwards to the agent, which runs the model the user chose for this plugin |
-| `sdk.data.get / put / query / delete` | always granted | reads and writes rows in the plugin's own namespace, within its quota |
-| `sdk.override.get(point, target)` | `override:<point>` | returns the factory text of the target, its checksum and the active override, if any |
-| `sdk.override.propose(point, target, value, note)` | `override:<point>` | validates the value and stores it as **Proposed** (§7.6) |
-| `sdk.override.withdraw(proposalId)` | `override:<point>` | withdraws one of the plugin's own proposals |
+| `sdk.session.read()` | `session:read` | returns the transcript of the token's session, masked and capped (see below) |
+| `sdk.llm.invoke(messages, *, max_tokens, temperature)` | `llm:invoke` | forwards to the agent, which runs the model the user chose for this plugin |
+| `sdk.data.get / put / delete / query / count` | always granted | reads and writes rows of the plugin's own data, within its quotas; `query` takes `prefix`, `where` (top-level JSON equality), `order`, `limit` and `cursor`, and answers `{items, next}` (§7.4) |
+| `sdk.override.get(point, target_group)` | `override:<point>` | returns the factory parts of the target with their checksums, the version that applies, if any, and the limits |
+| `sdk.override.propose(point, target_group, parts, *, note, meta, scope)` | `override:<point>` | has the agent validate the snapshot and stores it as **Proposed** (§7.6) |
+| `sdk.override.withdraw(change_set_id)` | `override:<point>` | withdraws one of the plugin's own pending proposals |
+| `sdk.jobs.progress(message, fields)` | inside an async action | updates the job's progress window |
+
+Every refusal is `{error, code}` with a stable code: besides the permission and token refusals,
+`invalid_text` (400: U+0000 or an unpaired surrogate anywhere in a body, which Postgres cannot
+store), `body_too_large` (413; 64 KB per call, 2 MB for `override.propose`, 8 MB for
+`data.put`, `llm.invoke` and the runner's `jobs/complete`, with JSON nesting and container sizes
+bounded too) and `factory_changed` (409: the factory text a proposal was built on changed since
+the plugin read it; the SDK sends the hashes it read as `readSha256`, or those of a `get` answer
+passed as `based_on=`). The full list, per call, is in
+[README.PLUGIN_SDK.md](README.PLUGIN_SDK.md) §5.
 
 Three rules shape these calls:
 
@@ -710,7 +758,13 @@ Three rules shape these calls:
   (keys, tokens, cookies, private keys) the same way the CypherFix evidence bundle does
   ([`redact_secret_shapes`](../../agentic/cypherfix_triage/evidence.py#L147)). Target
   hostnames, IPs and findings stay readable, because a transcript without them is useless and
-  regex anonymisation of free text is not reliable. The consent text for `session:read`
+  regex anonymisation of free text is not reliable. A value is masked together with its key,
+  and a key that is itself secret-shaped is masked too. The session is read in pages of 500 rows
+  and capped at `PLUGIN_TRANSCRIPT_MAX_BYTES` (2 MiB; never below 64 KiB): long strings keep
+  their head and tail, an event above 64 KB becomes a preview, and three tiers (what people
+  wrote, the agent's priority events, the rest) each keep a head and a sliding tail, so the middle
+  of a long session is what is dropped. Phase rows that differ only in their iteration count are
+  dropped, and only the latest todo and LATS snapshots are kept. The consent text for `session:read`
   therefore says plainly that **plugin code sees target data**. That is acceptable because
   plugin code comes only from the signed catalog, runs with no internet access, and cannot
   send data out through the browser (§7.5). The transcript is handed over marked as
@@ -720,12 +774,15 @@ Three rules shape these calls:
   ([llmFeatures.ts](../../webapp/src/lib/llmFeatures.ts)), where the user chooses its model.
   Plugin LLM calls have their own budget, separate from the user's shared daily cap, and
   usage is attributed to the plugin, so a plugin cannot starve other LLM features.
-- **Migrations get a narrower token.** During an update, the new version's data migration
-  runs with a token that can only touch the plugin's own data (§9.5).
+- **Migrations get no token.** A data migration is a function the platform hands the plugin's
+  rows to, one at a time; it has no call token and cannot reach the Gateway (§9.5).
 
-The SDK package is **owned by the base repo** because it *is* the contract, and is published
-with each platform release *(proposed)*. `redamon-plugins` pins a platform version of it for
-development and CI.
+The SDK package ([`services/plugin_runner/sdk/`](../../services/plugin_runner/sdk/)) is **owned
+by the base repo** because it *is* the contract. `redamon-plugins` keeps an unedited copy per
+platform version (`.platform-sdk/<version>/`, made by its `tools/sync_sdk.sh` from a RedAmon git
+ref) and tests every plugin against the lowest version its `platform` range accepts. The wire
+format is pinned by [contract_cases.json](../../services/plugin_runner/sdk/contract_cases.json),
+run against both the SDK's fake Gateway and the real one.
 
 ### 7.4 Generic data store
 
@@ -785,6 +842,8 @@ erDiagram
         text value
         string baseSha256
         string status
+        text note "the plugin's, for the reviewer"
+        json meta "the plugin's own, plus the platform's fromRevision, basedOn, staleReason"
         string createdBy
         string decidedBy
         datetime decidedAt
@@ -919,17 +978,20 @@ agent follows. It is defined precisely:
 - **What it targets.** A built-in skill's text is not one string. The agent assembles it from
   several **parts**, and which parts are included depends on project toggles, the tools
   allowed in the current phase, and the Rules of Engagement
-  ([`build_builtin_skill_workflow`](../../agentic/prompts/__init__.py#L171)). An override
+  ([`build_builtin_skill_workflow`](../../agentic/prompts/__init__.py#L174)). An override
   therefore targets **one part**: `targetKey = <skillId>/<partId>`. The agent publishes the
-  list of parts that can be overridden *(proposed)*. Each entry gives the part's kind
-  (**template** or **plain text**), its placeholder names and the SHA-256 of its factory text.
+  list of parts that can be overridden (`GET /plugins/skill-parts`, master key; 47 parts across
+  the 14 built-in skills, registered in [skill_parts.py](../../agentic/prompts/skill_parts.py)).
+  Each entry gives the part's kind (**template** or **plain text**), its placeholder names and
+  the SHA-256 of its factory text.
 - **Where it applies.** At the exact moment the factory code appends that part, after every
   gate has decided to include it. A project toggle or RoE rule that would leave the part out
   still leaves it out. An override can change wording; it can never switch a part on.
 - **How it is validated.** Python's formatting rules live in the agent, so validation runs
   there, behind the master internal key
-  ([`require_master_internal_auth`](../../agentic/llm_guard.py#L215)). The Gateway calls it on
-  every `propose` *(proposed endpoint)*.
+  ([`require_master_internal_auth`](../../agentic/llm_guard.py#L215)). The Gateway calls it
+  (`POST /plugins/skill-parts/validate`) on every `propose`, and the approve route calls it
+  again.
   - *Template parts* are filled from project settings with Python's `str.format`. A value
     must parse with Python's format parser; it must use **exactly the same set** of
     placeholder names as the factory part; and every placeholder must be a plain name, with no
@@ -937,7 +999,12 @@ agent follows. It is defined precisely:
     and `}}`. Plugin authors must know this: a single brace breaks the template.
   - *Plain-text parts* are inserted as they are and never formatted, so braces in them are
     harmless.
-  - Every value is capped in length.
+  - Every part is capped (twice its factory length, or the factory length plus 20,000
+    characters, whichever is larger), and the whole skill at `PLUGIN_SKILL_TEXT_MAX_GROWTH`
+    (1.5) times its factory size.
+  - Invisible and control characters, and text that imitates the headings placed after the
+    skill text (the guardrail and Rules of Engagement sections), are refused, also when split
+    around a placeholder or disguised with look-alike letters.
 - **Scope.** A proposal targets a **user scope**, which applies to every project that user
   owns, or a **project scope**, which applies to one project and, for that skill, replaces the
   user-scope version as a whole, never part by part. For each skill of a project the agent
@@ -948,18 +1015,34 @@ agent follows. It is defined precisely:
   leaves that skill on factory text; it does not fall back to a user version nobody chose for
   the project.
 - **Approval (principle 5).** A valid proposal is stored as **Proposed** and changes nothing.
-  The project's owner, or an admin, sees it in the **core** project settings as a before/after
-  comparison against the factory text, with the plugin's note, and approves or rejects it.
+  The scope's owner, or an admin, sees it in the **core** review window, opened from the chat
+  right after the plugin's action or from "N pending" in project settings, as a before/after
+  comparison of every part against the version it would replace, with the plugin's note, and
+  approves or rejects it.
   Text a plugin proposes may be shaped by content from the target, which is untrusted; that is
   why no proposal reaches the agent without a person's decision.
 - **Staleness.** Each override stores the `baseSha256` of the factory part it was approved
-  against. If a base update changes that part, the override becomes **Stale** and the factory
-  text is used until a person re-approves it, so a base improvement is never silently hidden.
+  against. The agent compares it with its own factory text at every use and, on any mismatch,
+  renders the factory text for the **whole skill** (all parts of a version or none). Every
+  `PLUGIN_RECONCILE_INTERVAL`, reconciliation compares each active version with the agent's
+  part registry and marks the whole version **Stale**: `factory_changed` when a factory text
+  changed (a person may re-approve it, re-based on the new text, under the same number) or
+  `part_removed` when the agent no longer has a part (it can only be deleted). A base
+  improvement is never silently hidden.
 - **Visibility and reset.** Core project settings show every active override as "changed by
   *plugin*", with a **Reset to factory** button. Reset works even when the plugin is disabled
   or uninstalled, because it is core UI.
-- **Conflicts.** Approving a proposal replaces the active override for that target, whichever
-  plugin made it. The person approving sees which one is being replaced.
+- **Conflicts.** A proposal is a complete snapshot of the skill's changed parts, and approving
+  it replaces the scope's whole active version of that skill, whichever plugin made it, so a
+  one-part proposal never runs beside another plugin's other parts. The review warns when the
+  proposal was built on another version than the active one ("approving discards the changes
+  of v*m*").
+- **Numbers and dormancy.** Version numbers come from a counter per scope and skill in
+  `PluginPlatformState` that never goes down, so a deleted version's number is never reused.
+  A version applies only while the plugin that made it is installed, enabled, serving and still
+  holds `override:skill.text`; otherwise it is **dormant** (shown as "not applied") and the
+  agent uses factory text, and it applies again when the plugin does. Any version but the
+  active one can be deleted.
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#EEF2F7", "primaryTextColor": "#0F172A", "primaryBorderColor": "#475569", "secondaryColor": "#E2E8F0", "tertiaryColor": "#F8FAFC", "lineColor": "#7B8794", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#94A3B8", "titleColor": "#0F172A", "edgeLabelBackground": "#FFFFFF", "relationLabelBackground": "#FFFFFF", "relationLabelColor": "#0F172A", "attributeBackgroundColorOdd": "#FFFFFF", "attributeBackgroundColorEven": "#F8FAFC", "actorBkg": "#EEF2F7", "actorBorder": "#475569", "actorTextColor": "#0F172A", "actorLineColor": "#7B8794", "signalColor": "#7B8794", "signalTextColor": "#0F172A", "labelBoxBkgColor": "#E2E8F0", "labelBoxBorderColor": "#475569", "labelTextColor": "#0F172A", "loopTextColor": "#0F172A", "noteBkgColor": "#FFF7D6", "noteTextColor": "#0F172A", "noteBorderColor": "#B7A24A", "sequenceNumberColor": "#FFFFFF"}}}%%
@@ -1025,6 +1108,135 @@ plugin UI, and where the skill-version decisions live:
 - Project export and import leave plugin rows out: the export manifest says
   `excluded: ["plugin_overrides", "plugin_data"]`, and the import never reads a plugin file.
 
+#### 7.6.1 How a plugin appears in the app
+
+For plugin authors and platform developers: where each UI point is drawn, by whom, and what
+happens to what an action returns.
+
+**Why a plugin ships no React.** The webapp is a standalone Next.js build compiled once into its
+image, so components that arrive later cannot join it; and plugin JavaScript running in the page
+would act with the signed-in user's session, approval routes included (§7.5). A plugin declares
+*where* it appears in its manifest and *what* it shows as JSON; core components draw both.
+
+**From manifest to pixels.**
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#EEF2F7", "primaryTextColor": "#0F172A", "primaryBorderColor": "#475569", "secondaryColor": "#E2E8F0", "tertiaryColor": "#F8FAFC", "lineColor": "#7B8794", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#94A3B8", "titleColor": "#0F172A", "edgeLabelBackground": "#FFFFFF", "relationLabelBackground": "#FFFFFF", "relationLabelColor": "#0F172A", "attributeBackgroundColorOdd": "#FFFFFF", "attributeBackgroundColorEven": "#F8FAFC", "actorBkg": "#EEF2F7", "actorBorder": "#475569", "actorTextColor": "#0F172A", "actorLineColor": "#7B8794", "signalColor": "#7B8794", "signalTextColor": "#0F172A", "labelBoxBkgColor": "#E2E8F0", "labelBoxBorderColor": "#475569", "labelTextColor": "#0F172A", "loopTextColor": "#0F172A", "noteBkgColor": "#FFF7D6", "noteTextColor": "#0F172A", "noteBorderColor": "#B7A24A", "sequenceNumberColor": "#FFFFFF"}}}%%
+flowchart LR
+    M["plugin.json<br/>in the archive"] -- "install" --> R[("PluginInstall.manifest")]
+    R --> C["GET /api/plugins/contributions<br/>enabled, ready or updating,<br/>not revoked"]
+    C --> H["usePluginContributions()<br/>(chat, Plugins page)<br/>usePluginSkillOverrides()<br/>(project settings)"]
+    H --> G["PhaseIndicatorBar<br/>chat gear menu"]
+    H --> S["PluginSkillRow in<br/>AttackSkillsSection"]
+    H --> N["PluginNavLinks on /plugins,<br/>ScreenRenderer at /plugins/&lt;id&gt;"]
+```
+
+The manifest is copied into the `PluginInstall` row at install, so a page load never reads the
+volume. The contributions route answers 404 while the switch is off, and the hooks then show no
+plugin UI at all.
+
+| Point | Drawn where | Drawn by |
+|---|---|---|
+| `chat.session.actions` | The chat's gear menu, in one group per plugin after "Agent Skills", labelled with the plugin's name and the plugin badge (never "Plugins": the Tool Matrix already speaks of "MCP Tool Plugins"). Disabled until the first message creates the conversation. | [`PhaseIndicatorBar.tsx`](../../webapp/src/app/graph/components/AIAssistantDrawer/PhaseIndicatorBar.tsx) |
+| `project.skills.row` | Under each built-in skill of a **saved** project's Agent Skills settings, after the core chip, Versions, Reset and "N pending" controls, each with the plugin badge. | [`PluginSkillRow.tsx`](../../webapp/src/components/plugins/skills/PluginSkillRow.tsx) in [`AttackSkillsSection.tsx`](../../webapp/src/components/projects/ProjectForm/sections/AttackSkillsSection.tsx) |
+| `nav` | An **Open** entry on the Plugins page, and the page at `/plugins/<id>` (another listed screen at `/plugins/<id>/<path>`, its file name without `ui/` and `.json`). **Not** a top-level header entry: the header has one Plugins button ([`GlobalHeader.tsx`](../../webapp/src/components/layout/GlobalHeader/GlobalHeader.tsx)). | [`PluginNavLinks.tsx`](../../webapp/src/components/plugins/PluginNavLinks.tsx), [`ScreenRenderer.tsx`](../../webapp/src/components/plugins/host/ScreenRenderer.tsx) |
+
+**What happens to an action's result** ([`runPluginAction.ts`](../../webapp/src/components/plugins/runPluginAction.ts)):
+
+- An action declared `llm: true` first passes the **model gate**: if the user has no model for the
+  plugin in Models by feature, a core window asks for one, and cancelling it cancels the action.
+- An `async` action answers a job id; the core **job window** shows its progress messages, lets
+  the user cancel it, and on success treats its result like a sync one.
+- A result carrying `reviewProposal` (`{extensionPoint, changeSetId}`) opens the **core review
+  window** on that proposal. This is the Skiller flow: chat → job → the active version (v1, the
+  factory text) beside the proposed v2 → Approve. The webapp drops the field unless the change set
+  exists, is this plugin's, is in the caller's scope and names that point.
+- A menu item naming `coreScreen: "skill.text.versions"` opens the **core versions window** without
+  running plugin code.
+- Any other result shows its `message` as a notice (or "Done"). Inside a plugin page, a form opens
+  its `resultScreen` with the result as the next screen's inputs.
+
+The review, versions and reset screens are **core code**. A plugin can open them; it cannot draw
+them, change them or imitate them, and they keep working when the plugin is disabled or gone.
+
+**A small example: a page that lists items and opens one.** The manifest declares the page and
+lists both screens (only the relevant fields shown):
+
+```json
+"actions": [
+  { "id": "list_items", "entry": "engine/main.py:list_items", "timeoutSeconds": 30 },
+  { "id": "get_item", "entry": "engine/main.py:get_item", "timeoutSeconds": 30 }
+],
+"contributes": { "nav": { "label": "Saved items", "icon": "list", "screen": "ui/home.json" } },
+"screens": ["ui/home.json", "ui/detail.json"]
+```
+
+`ui/home.json` is a table fed by `list_items`; its row action opens the detail screen and passes
+only the row's `key`:
+
+```json
+{
+  "type": "page",
+  "title": "Saved items",
+  "children": [
+    {
+      "type": "table",
+      "source": { "action": "list_items" },
+      "columns": [
+        { "field": "name", "label": "Name" },
+        { "field": "updatedAt", "label": "Updated", "format": "date" }
+      ],
+      "rowActions": [{ "label": "Open", "screen": "ui/detail.json", "pass": ["key"] }],
+      "emptyText": "Nothing saved yet."
+    }
+  ]
+}
+```
+
+`ui/detail.json` is a page whose `source` gets the passed `key` as its params:
+
+```json
+{
+  "type": "page",
+  "source": { "action": "get_item" },
+  "children": [
+    { "type": "badge", "content": { "field": "kind" } },
+    { "type": "markdown", "content": { "field": "body" } }
+  ]
+}
+```
+
+The actions read the plugin's own data; a list answers `{items, next}` and "Load more" calls it
+again with `cursor`:
+
+```python
+from redamon_plugin_sdk import PluginError
+
+
+async def list_items(ctx, params):
+    page = await ctx.sdk.data.query("items", limit=50, cursor=params.get("cursor"))
+    items = [{"key": r["key"], "name": r["value"].get("name", r["key"]), "updatedAt": r["updatedAt"]}
+             for r in page["items"]]
+    return {"items": items, "next": page["next"]}
+
+
+async def get_item(ctx, params):
+    value = await ctx.sdk.data.get("items", str(params.get("key") or "-"))
+    if value is None:
+        raise PluginError("not_found", "This item no longer exists.")
+    return {"kind": value.get("kind", "note"), "body": value.get("body", "")}
+```
+
+What the user sees: on `/plugins` the plugin's card gains **Open**; the page shows a table of the
+saved items, newest first, with dates in the reader's locale; **Open** on a row shows that item's
+kind as a badge and its body as Markdown (no images, links through the exit page). The example
+passes `tools/validate.py` in `redamon-plugins`; a complete plugin with a form and its tests is in
+[README.PLUGIN_SDK.md](README.PLUGIN_SDK.md) §14.
+
+**The limit.** A plugin can use only the primitives of §7.5 and the points of this section. A new
+primitive or extension point is a platform change shipped in a RedAmon release (§11.4), never
+something a plugin adds.
+
 ### 7.7 The action contract
 
 An action is an `async` Python function:
@@ -1036,19 +1248,27 @@ async def run(ctx, params: dict) -> dict:
 
 - **`ctx`** carries the plugin's identity, the acting user, the project, the session when
   there is one, and the SDK client bound to the call token.
-- **`params`** is the input from the UI: form fields, the row fields a row action passes, or
-  the session and skill context of the extension point that triggered it.
+- **`params`** is the input from the UI: form fields, the row fields a row action passes, a
+  screen source's params, or `{}` from a menu item. The project and session reach the action as
+  `ctx.project_id` and `ctx.session_id`. (In 1.0.0 a `project.skills.row` action is not told which
+  skill row was clicked; see the known limits in §10.)
 - **The return value** is JSON. Screens bind to it by field name.
 - **Errors** are raised as `PluginError(code, message)`. The UI host shows the message; any
   other exception is reported as an internal plugin error, with details only in the plugin's
   log.
 - **Long work.** An action declared with `"async": true` returns at once with a job id. The
-  Gateway keeps the job's state in the plugin's own data, so it survives a Runner restart.
-  The UI polls it and can cancel it, the same start-and-poll pattern the webapp already uses
-  for long scans.
+  webapp keeps the job as a platform-reserved row of the data store (`__jobs`, kept 30 days),
+  so any webapp copy can serve the poll and a Runner restart loses nothing but the run itself
+  (the job then fails as `runner_restarted`). The UI polls it and can cancel it, the same
+  start-and-poll pattern the webapp already uses for long scans. One job per (plugin, action,
+  user, project, session) can be active; starting it again answers the running one. Every status
+  change is a compare-and-swap, so a late or repeated report changes nothing. A job whose plugin
+  stopped serving before it ended fails as `plugin_unavailable`, one whose project or session was
+  deleted as `context_gone`; a `cancelled` report nobody asked for is recorded as `failed`, and a
+  result that cannot be stored becomes `invalid_result`.
 
-The full reference for `ctx`, the screen-description schema and local development lives in
-the SDK reference (§13), not here.
+The full reference for `ctx`, results, the screen-description schema and local development is
+[README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
 
 ---
 
@@ -1069,14 +1289,14 @@ sequenceDiagram
     participant U as User
     participant W as webapp
     participant R as Plugin Runner
-    participant G as Gateway
+    participant G as Gateway (webapp routes)
     participant A as Agent
     participant D as Postgres
 
     rect rgb(248, 250, 252)
     U->>W: click a plugin button
     Note over W: check user and project access,<br/>mint a call token
-    W->>R: POST /plugins/{id}/actions/{action}
+    W->>R: POST /runner/v1/plugins/{id}/actions/{action}
     R->>G: sdk.session.read with the call token
     Note over G: verify token and permission
     G->>D: load the conversation
@@ -1092,7 +1312,8 @@ sequenceDiagram
     end
 ```
 
-If the Runner is down, step 3 fails fast with `503 Runner unavailable` and the UI says so.
+Every arrow between the webapp and the Runner, either way, passes the `plugin-gateway` proxy
+(§4). If the Runner is down, step 3 fails fast with `503 runner_unavailable` and the UI says so.
 
 ### 8.2 The behaviour path: core-triggered, must never block
 
@@ -1114,9 +1335,13 @@ flowchart TB
     V -- "yes" --> O["use the override"]
 ```
 
-The first three questions are answered by the webapp while it builds the settings payload;
-the last one by the agent while it assembles the prompt. "Allowed" means the plugin's status
-is `ready` or `updating` and its `override:skill.text` permission is still granted (§9.1).
+The webapp answers the first two questions while it builds the settings payload: it sends only
+the active version that governs each skill, and only while its plugin qualifies. The agent
+answers the last two while it assembles the prompt: it compares each part's recorded factory
+hash with its own factory text and validates the text, and on any doubt renders the factory
+text for the **whole skill**. Reconciliation marks such a version Stale for the review and
+versions windows (§7.6, §9.7). "Allowed" means the plugin is enabled, its status is `ready` or
+`updating`, it is not revoked and its `override:skill.text` permission is still granted (§9.1).
 "Part included" means the factory gates (project toggles, phase tools, Rules of Engagement)
 chose to include this part on this turn.
 
@@ -1127,7 +1352,7 @@ In practice:
   ([`_apply_project_settings`](../../agentic/orchestrator.py#L206), called from each entry
   point). Applicable overrides come in that same payload, so the lookup is in memory. This
   mirrors how enabled user skills are resolved to their stored text today
-  ([`get_enabled_user_skills`](../../agentic/project_settings.py#L967)).
+  ([`get_enabled_user_skills`](../../agentic/project_settings.py#L1018)).
 - **Changes take effect at the next turn** of every session, including sessions already open.
   A turn already running keeps the snapshot it started with.
 - **A failure never breaks the settings.** If settings cannot be fetched at all, the agent falls
@@ -1354,25 +1579,35 @@ flowchart TB
 - A plugin migration is a **data** migration of the plugin's own rows, never a schema
   migration. It writes no SQL and cannot touch any other table; the database schema changes
   only with a RedAmon release (§11.5).
-- Migrations are numbered files in the plugin's `migrations/` folder. Each moves the data up
-  one `dataVersion`, and may have a matching down migration.
+- Migrations are files in the plugin's `migrations/` folder: `NNNN_up.py` moves the data from
+  `dataVersion` N-1 to N, and an optional `NNNN_down.py` moves it back (N from 2 to 9999). Each
+  defines a plain function `migrate_row(row)` that receives one row (`collection`, `key`,
+  `ownerType`, `value`) and returns its new value, or the SDK's `DELETE` sentinel to drop it.
 - While a migration runs, the plugin's actions are **paused**, so nothing writes the data
   being migrated.
-- The migration runs in the new version's worker with a **migration token**. That token can
-  only read and write the plugin's own data, and it writes into a **copy** in a staging
-  namespace. On success the Gateway swaps the copy in with one database transaction. On
-  failure the copy is thrown away. Either way the data is never half-migrated. The copy is the
-  `migrating:<operationId>` namespace of `PluginData`; copying and swapping are
-  `copyNamespace` and `swapNamespace` in
-  [dataStore.ts](../../webapp/src/lib/plugins/dataStore.ts).
+- The platform copies the live rows into a **copy** (the `migrating:<operationId>` namespace
+  of `PluginData`), then, for each step, sends every row of the copy, **for every owner**, in
+  batches to a temporary worker of the version that ships the step, and writes the answers
+  back into the copy with the store's value checks, checking the quotas after each step. On
+  success the copy is swapped in, together with the install row's new version, in one database
+  transaction; on any failure (an exception in `migrate_row`, a bad answer, a timeout, the
+  Runner down) the copy is thrown away. Either way the data is never half-migrated
+  ([migrations.ts](../../webapp/src/lib/plugins/migrations.ts); copying and swapping are
+  `copyNamespace` and `swapNamespace` in [dataStore.ts](../../webapp/src/lib/plugins/dataStore.ts)).
+- Migration code gets **no call token** and no Gateway access: it transforms the rows it is
+  handed and nothing else. This reaches every owner's rows, which a token bound to one user
+  could not.
 
 **Rollback** makes the previous version active again:
 
 - **No data migration in the update:** the switch is immediate.
 - **Data migrated forward:** the new version's down migrations run first, the same
   copy-and-swap way, back to the previous `dataVersion`.
-- **No down migration:** rollback is refused, and the Update screen warns about this before
-  the admin confirms.
+- **No down migration:** rollback is refused (`no_down_migration`), and the Update screen warns
+  about this before the admin confirms.
+- **Reinstalling an older release over newer data** (its `dataVersion` lower than the data kept
+  from a newer one) is refused (`data_newer_than_release`): export, then delete the kept data,
+  to go back.
 
 The platform never runs old code on data in a newer shape.
 
@@ -1533,7 +1768,7 @@ trust boundaries are explicit.
 flowchart TB
     subgraph TRUSTED["trusted"]
         PM["Plugin Manager<br/>only writer of the volume"]
-        GW["Gateway port<br/>token, permissions,<br/>masking, validation"]
+        GW["Gateway routes<br/>token, permissions,<br/>masking, validation"]
         AG["Agent<br/>LLM keys"]
         DB[("Postgres")]
         PER["a person<br/>approves overrides"]
@@ -1541,13 +1776,16 @@ flowchart TB
 
     FS[("plugins volume")]
 
-    subgraph UNTRUSTED["untrusted · plugins network, no internet"]
+    subgraph UNTRUSTED["untrusted · plugins-net, no internet"]
         PC["plugin worker"] --> SC["SDK client"]
     end
 
+    PX["plugin-gateway proxy<br/>two route prefixes only"]
+
     PM -- "read-write" --> FS
     FS -- "read-only" --> PC
-    SC -- "call token only" --> GW
+    SC -- "call token only" --> PX
+    PX --> GW
     GW --> AG
     GW --> DB
     PER -- "approves a comparison" --> DB
@@ -1562,7 +1800,8 @@ flowchart TB
 | A plugin that skips the SDK | permissions are enforced in the Gateway, not in the SDK client |
 | A plugin that reads secrets | workers get a clean environment, their own UID, and only per-call tokens; no DB credentials, LLM keys or runner key |
 | A plugin that reads another user's data | every call token is bound to (plugin, acting user, project, session) and checked on every call |
-| A plugin that reaches other webapp routes | the plugins network can reach only the Gateway port |
+| A plugin that reaches other webapp routes or services | workers are alone on `plugins-net` with the `plugin-gateway` proxy, which passes only `/api/plugin-gateway/v1/*` and `/api/plugin-runner/v1/*` to the webapp and never joins `redamon`; `gateway_mode_ipv4: isolated` removes the bridge's address on the host; `tests/plugins_isolation_live.sh` probes every one of these from inside |
+| A cross-site request that drives a plugin route | plugin routes accept only same-origin JSON requests, checked against `PLUGINS_ALLOWED_ORIGIN` behind a reverse proxy (the single-host deploy sets it: nginx drops the port from `Host`) |
 | A plugin that sends data out of the host | the plugins network has no internet egress; screens cannot load remote images and run under a strict Content Security Policy |
 | A plugin that spoofs core UI | plugin contributions always carry a plugin badge; icons come from an allowlist |
 | A plugin that changes how the agent behaves | proposals change nothing until a person approves them in core UI; every active override is visible and resettable |
@@ -1591,7 +1830,7 @@ generically in a RedAmon release (§11.4).
 
 **Why approval matters so much.** RedAmon's scope guardrail is itself part of the agent's
 instructions
-([think_node.py:566](../../agentic/orchestrator_helpers/nodes/think_node.py#L566)), and
+([think_node.py:590](../../agentic/orchestrator_helpers/nodes/think_node.py#L590)), and
 the instructions are what `skill.text` changes. So an override is the most powerful thing a
 plugin can produce, and its consent text says so plainly: it can rewrite the instructions the
 agent follows. The platform treats every proposal as untrusted input until a person approves
@@ -1605,6 +1844,18 @@ it (principle 5).
 - Plugin code sees target data in the transcripts it is allowed to read (§7.3). Its
   containment relies on the trusted catalog and the absence of any way out, not on
   anonymisation.
+- No per-process CPU-rate limit exists for an unprivileged worker inside the container: workers
+  run at `nice 10`, and the container's `cpus:` cap (`PLUGIN_RUNNER_CPUS`) is the hard bound.
+- Several webapp copies (a documented ECS layout, not shipped) need the plugins volume on a
+  shared read-write filesystem, or only one copy may run the Manager. Leases, compare-and-swap
+  updates and database counters make the rest safe to share.
+- A `project.skills.row` action receives the project but not the skill whose row was clicked,
+  runs as a plain action (no model gate, no job window) and does not open the review window from
+  its result; Skiller does not use this point. An action's own `resultScreen` is accepted and
+  checked at install but opened by no point (a form's `resultScreen` is). Both are candidates for
+  a minor platform release.
+- A plugin page the route refuses while the switch is on shows the not-found screen with HTTP
+  status 200 (§7.5).
 
 ---
 
@@ -1631,17 +1882,22 @@ The rules:
 
 ### 11.2 Where the platform version lives
 
-The platform version is a single constant in the base repo *(proposed)*, exposed by the
-webapp. The Runner image reports the platform version it was built with. If the two differ,
-for example after a partial rebuild, the Manager marks the Runner as out of date and starts no
-workers until they match. All range checks use one semver evaluator, in the webapp.
+The platform version is `PLUGIN_PLATFORM_VERSION` (1.0.0) in
+[platformVersion.ts](../../webapp/src/lib/plugins/platformVersion.ts), with copies in the
+Runner (`platform_version.py`), the SDK and its contract cases that
+`platformVersion.parity.test.ts` holds equal. The Runner image reports the platform version it
+was built with. If the two differ, for example after a partial rebuild, the Runner reports
+itself out of date and runs no worker until they match. All range checks use one semver
+evaluator, in the webapp ([semver.ts](../../webapp/src/lib/semver.ts)); `redamon-plugins` has a
+second one for its CI (`tools/semver.py`), held equal by shared cases.
 
 ### 11.3 Libraries available to plugins
 
-The Python version (3.11) and the libraries installed in the Runner image are **part of the
-platform contract** and are listed in the platform release notes. A plugin may bundle small
-pure-Python dependencies in its `vendor/` folder. Anything that needs a compiled or system
-library requires a new Runner image, which is a platform release.
+The Python version (3.11) is **part of the platform contract**. The libraries of the Runner
+image are not: workers start with `python -I -S`, so plugin code sees only the standard
+library, the SDK and its own `vendor/` folder, never the supervisor's packages. A plugin may
+bundle pure-Python dependencies in `vendor/`. Anything that needs a compiled or system library
+requires a platform change and a new Runner image, which is a RedAmon release.
 
 ### 11.4 Growing the platform
 
@@ -1656,12 +1912,17 @@ The schema changes only with a RedAmon release. At every start, the webapp's ent
 the `prisma/schema.prisma` baked into its image with `prisma db push`, then the platform's
 constraint script ([Dockerfile:123](../../webapp/Dockerfile#L123)). The four plugin tables were
 added this way, once. A plugin archive has no route to the schema: its files land on the
-plugins volume, the webapp only reads JSON from them, and its migrations work on its own rows
-through the Gateway (§9.5).
+plugins volume, the webapp only reads JSON from them, and its migrations transform the rows
+the platform hands them, with no Gateway access (§9.5).
 
-The push runs with `--accept-data-loss`, so the base can delete plugin data: starting an older
-RedAmon image whose schema predates the plugin tables drops those tables with their rows.
-Export plugin data before such a downgrade.
+The push runs with `--accept-data-loss`, so the base can delete plugin data: **starting an
+older RedAmon image whose schema predates the plugin tables drops all four tables with their
+rows** (installs, plugin data, approved skill versions, catalog and counter state). Export
+first: Plugins page → the plugin's details → Export data, or
+
+```bash
+docker compose exec postgres pg_dump -U redamon -d redamon -t 'plugin_*' > plugins-backup.sql
+```
 
 ---
 
@@ -1671,34 +1932,59 @@ Export plugin data before such a downgrade.
 |---|---|---|
 | Hosting | Plugin Manager, Runner (supervisor, Loader, workers) | — |
 | Contract | SDK client, Gateway, manifest and screen schemas | depends on a pinned platform version |
-| Storage | `PluginInstall`, `PluginData`, `PluginOverride` tables | rows in its own namespace |
+| Storage | `PluginInstall`, `PluginData`, `PluginOverride`, `PluginPlatformState` tables | rows of its own data |
 | UI | UI host, primitives, extension slots, override review screens | screen descriptions (JSON) |
 | Behaviour | generic seams at behaviour points, inert when empty | `sdk.override.propose` calls |
 | Distribution | catalog fetch, keyring (public keys), signature and checksum checks | catalog generation, signed releases; the signing key as an environment secret (§6.4) |
 | Feature logic | **none** | all of it (`engine/`) |
 | Feature documentation | **none** | the plugin's own `README.md` |
 
-The one-time cost in the base repo is the components of §7, the three tables, and the seams of
+The one-time cost in the base repo is the components of §7, the four tables, and the seam of
 §8.2. After that, `skiller` and every plugin after it adds **no plugin-specific code** to the
 base repo. The base repo grows only when the platform itself gains a generic capability.
 
 ---
 
-## 13. Not covered here
+## 13. Further reading, and where the build departs from the first design
 
-This document fixes the architecture. These belong in the **SDK reference** *(proposed)*,
-written alongside the first platform release:
+This document fixes the architecture. The rest lives here:
 
-- The full `ctx` object, the screen-description schema, and the binding rules for every UI
-  primitive.
-- How the SDK is distributed (a wheel attached to each platform release, or a package index).
-- Local development, which exists: an offline install of a locally packed archive with a
-  catalog signed by a dev key trusted through `PLUGINS_EXTRA_TRUSTED_KEYS` (§6.4), the SDK
-  fakes `FakeSdk` and `ScriptedLlm` for tests, and `tools/validate.py`, which checks a manifest
-  and its screens before release. The commands are in the plugin repository's
-  [README](https://github.com/samugit83/redamon-plugins#developing-a-plugin-against-a-local-redamon).
-- The implementation of the Gateway's separate port inside the webapp container.
-- Where plugin logs are written and how admins read them.
+- [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md): the plugin author's contract, with the full `ctx`,
+  every SDK call and refusal, action results, the screen schema and binding rules, migrations,
+  the runner environment, testing with `FakeSdk`, local development and where logs go.
+- The plugin repository's [README](https://github.com/samugit83/redamon-plugins#readme):
+  releasing, revoking and re-signing, adding a plugin, and developing one against a local
+  RedAmon; each plugin's own `README.md` for what it does.
+- [README.WEBAPP.md](README.WEBAPP.md) "Plugin platform API" for every route, and
+  [README.DEV.md](README.DEV.md) §6.6 for adding an extension point.
+- The wiki's Plugins page for administrators and users.
+
+The design was written before the code. These are the places where the build differs, each
+already reflected in the sections above:
+
+| First design | As built |
+|---|---|
+| The Gateway on its own port of the webapp | Webapp routes under `/api/plugin-gateway/v1/`, reached only through the `plugin-gateway` proxy on `plugins-net` and `plugins-edge` (§4, §7.3). A Next.js server listens on one port. |
+| Three tables | Four: `PluginPlatformState` holds the catalog serial marks, the never-lowered version counters and the reconcile lease (§7.4). |
+| A navigation entry in `NavigationBar.tsx`; `nav` as a top-level entry | One Plugins button in `GlobalHeader.tsx`; `nav` is an Open entry on `/plugins` and a page at `/plugins/<id>` (§7.6.1). |
+| Plugin model calls through `_build_llm_with_model_for_user` | The newer `_build_feature_llm`, behind the agent's `/plugins/llm/invoke` (§5.1). |
+| Approval in project settings | The same core review window opens from the chat and from project settings (§7.6). |
+| Overrides per project | A user scope (applies to every project the user owns; Skiller's default) and a project scope, resolved per skill (§7.6). |
+| `override.get(point, target)`, `propose(point, target, value, note)`, `withdraw(proposalId)` | Change sets: `get(point, target_group)`, `propose(point, target_group, parts, *, note, meta, scope)`, `withdraw(change_set_id)`, plus `jobs.progress` (§7.3). |
+| Approving replaces the active override of one target | It replaces the scope's whole active version of that skill, a snapshot, so parts of two versions never run together (§7.6). |
+| The override state machine | Adds deleting any non-active version, staleness of a whole version (`factory_changed`, `part_removed`), and re-approval of a `factory_changed` version without a new number (§7.6). |
+| Staleness detected in the delivery path | Detected by reconciliation every `PLUGIN_RECONCILE_INTERVAL`, plus the agent's own per-skill check at use; in between, the factory text is used anyway (§8.2, §9.7). |
+| Migrations with a migration token through `sdk.data.*` | Per-row `migrate_row` functions, applied by the platform to every owner's rows, with no token (§9.5). |
+| Per-worker CPU limits | `nice 10` per worker and the container's `cpus:` cap as the hard bound (§10). |
+| A strict Content Security Policy on plugin content | On `/plugins` pages; plugin text in the chat drawer and project settings is React-escaped or image-free Markdown (§7.5). |
+| The Runner image's libraries are part of the contract | Workers start with `python -I -S`: the contract is the standard library, the SDK and `vendor/` (§11.3). |
+| One semver evaluator, in the webapp | A second one in `redamon-plugins` for CI, held equal by shared cases (§11.2). |
+| No plugin-specific code in the base repository | Skiller appears in the base only as test data: `pluginsSkiller.spec.ts` and its fixtures (§6.5). |
+| A dev mode that loads a plugin folder | An offline install of a catalog signed with a development key trusted through `PLUGINS_EXTRA_TRUSTED_KEYS` (§9.7). |
+| A revoked plugin is disabled automatically | Revocation sets the system-written `revokedReason`; the admin's `enabled` is untouched; every serving check is false while it is set (§6.2, §9.7). |
+| Uninstalling returns to Available | Keeping data returns to Available; a purge deletes the row with its data (§9.6). |
+| The action endpoint `/plugins/{id}/actions/{action}`; a field `approvedBy` | `/runner/v1/plugins/{id}/actions/{action}` (§7.2); `decidedBy`, which covers approval and rejection (§7.4). |
+| A catalog with an expiry date, re-signed on a schedule | No expiry: freshness is the serial alone, and the catalog is re-signed by hand only to rotate a key (§6.2, §6.4). |
 
 ---
 
@@ -1721,11 +2007,12 @@ written alongside the first platform release:
   starts and stops workers from the Manager's run list.
 - **Worker**: one process running one version of one plugin.
 - **Staging**: the per-operation folder where downloads land before they are checked.
-- **SDK client / Gateway**: the library a plugin calls, and the trusted endpoints that serve it
-  and enforce permissions.
+- **SDK client / Gateway**: the library a plugin calls, and the trusted webapp routes that serve
+  it and enforce permissions, reached only through the `plugin-gateway` proxy.
 - **Call token**: a short-lived credential for one action invocation, bound to (plugin, user,
   project, session).
-- **Namespace**: the set of `PluginData` rows that belong to one plugin.
+- **Namespace**: `live`, or `migrating:<operationId>` for the copy of a plugin's `PluginData`
+  rows a data migration works on.
 - **Data version**: the integer shape version of a plugin's stored data.
 - **Extension point**: a named UI or behaviour slot where a plugin may contribute.
 - **UI primitive / screen description**: a building block the UI host can draw, and the JSON a
