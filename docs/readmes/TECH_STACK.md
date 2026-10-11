@@ -26,6 +26,16 @@
 | **SSE (Server-Sent Events)** | Real-time log streaming from recon pipeline and GVM scans to the webapp |
 | **WebSocket** | Bidirectional real-time communication between the agent and the webapp chat |
 
+## Plugin Platform (optional, off by default)
+
+| Technology | Role |
+|-----------|------|
+| **Plugin runner** (Python 3.11, FastAPI + Uvicorn) | Supervisor that runs third-party plugin code, one worker process per plugin version. Workers start with `python -I -S` and see only the standard library, the plugin SDK and the plugin's own `vendor/` folder |
+| **plugin-gateway proxy** (Python standard library) | The only door between the internal plugin network and the webapp; built from the runner image |
+| **Ed25519** (Node.js `crypto` in the webapp, Python `cryptography` in `redamon-plugins`) | Signature over the exact bytes of the plugin catalog; archives are pinned by SHA-256 |
+
+See [README.PLUGINS.md](README.PLUGINS.md) for the design and [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md) for the plugin author's contract.
+
 ## AI & LLM
 
 | Technology | Role |

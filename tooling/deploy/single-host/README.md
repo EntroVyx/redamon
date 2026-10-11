@@ -317,6 +317,11 @@ forwards `Host $host` without the port).
   they authenticate with, so the edge must not offer them.
 - The runner's CPU cap (`PLUGIN_RUNNER_CPUS`, 2) is fitted to the server's cores like the
   other services' caps.
+- **Installing from the official catalog needs outbound HTTPS** from the server to
+  `raw.githubusercontent.com` (the signed catalog), `github.com` and
+  `release-assets.githubusercontent.com` (the release archives); `PLUGINS_DOWNLOAD_HOSTS` is the
+  allowlist checked on every redirect hop. Without egress, an admin can still install a plugin
+  from files on the Plugins page.
 
 ## Security posture
 

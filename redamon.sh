@@ -4886,7 +4886,8 @@ cmd_help() {
 # imports and git HEAD resolve), test deps runtime-installed if not already
 # baked, and each test FILE isolated in its own pytest subprocess via
 # tooling/scripts/pytest_isolated.py (determinism — see docs/readmes/README.TESTING.md).
-# Sections whose image is absent are skipped cleanly.
+# A section whose image is absent fails the unit/all/coverage gate unless
+# REDAMON_TEST_ALLOW_MISSING names it (_test_missing_input below).
 #
 #   ./redamon.sh test              # unit gate across all sections (canonical)
 #   ./redamon.sh test unit|integration|live|all|coverage

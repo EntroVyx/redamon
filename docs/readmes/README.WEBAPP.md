@@ -546,6 +546,10 @@ another runs).
 | `PLUGINS_EXTRA_TRUSTED_KEYS` | Extra catalog signing keys an admin trusts, JSON `[{keyId, publicKey}]` (a custom catalog; the page warns) | (unset) |
 | `PLUGINS_DIR` | Where the plugins volume is mounted | `/data/plugins` |
 | `PLUGIN_ARCHIVE_MAX_BYTES` | Cap on a plugin archive, unpacked | `20971520` |
+| `PLUGIN_DATA_MAX_ROWS`, `PLUGIN_DATA_MAX_BYTES` | One plugin's data quota (per data namespace, across every owner; platform-reserved collections not counted): rows, and bytes of stored values | `10000`, `52428800` |
+| `PLUGIN_DATA_MAX_VALUE_BYTES` | The largest single value a plugin may store | `1048576` |
+| `PLUGIN_DATA_MAX_ROWS_PER_OWNER` | Rows one plugin may keep for one user or project | `2000` |
+| `PLUGIN_SKILL_TEXT_MAX_GROWTH` | How much larger than its factory text a whole skill may grow in an approved version (also read by the agent, which applies the same bound) | `1.5` |
 
 ---
 
