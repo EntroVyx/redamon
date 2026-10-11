@@ -240,6 +240,24 @@ describe('GET /api/plugins', () => {
     expect(e.available).toBeNull()
     expect(e.installBlocked).toMatch(/newer RedAmon/)
   })
+
+  test('every release this RedAmon can run is revoked: Install is blocked with the reason, not "newer RedAmon"', async () => {
+    h.catalog = catalog([echo([rel('1.0.0'), rel('1.1.0'), rel('3.0.0', { platform: '>=3.0.0' })])], {}, [
+      { id: 'echo', version: '1.0.0', reason: 'old' },
+      { id: 'echo', version: '1.1.0', reason: 'Sends transcripts out.' },
+    ])
+    const e = (await list()).body.plugins[0]
+    expect(e.available).toBeNull()
+    expect(e.installBlocked).toBe('Every release of this plugin that runs on this RedAmon was revoked: Sends transcripts out.')
+  })
+
+  test('a revoked installed plugin is offered the newer release that is not revoked', async () => {
+    install({ revokedReason: 'Sends transcripts out.' })
+    h.catalog = catalog([echo([rel('1.0.0'), rel('1.1.0')])], {}, [{ id: 'echo', version: '1.0.0', reason: 'Sends transcripts out.' }])
+    const e = (await list()).body.plugins[0]
+    expect(e.state).toBe('revoked')
+    expect(e.update).toMatchObject({ version: '1.1.0' })
+  })
 })
 
 describe('GET /api/plugins/[pluginId]', () => {

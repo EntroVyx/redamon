@@ -54,7 +54,8 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
       buttons.push({ action: 'install', label: 'Install', disabled: !entry.available })
       if (entry.keptData) buttons.push({ action: 'deleteKept', label: 'Delete kept data', danger: true })
     } else {
-      if (entry.update && state !== 'revoked') buttons.push({ action: 'update', label: `Update to ${entry.update.version}` })
+      // Updating to a release the catalog has not revoked is how a revoked plugin comes back.
+      if (entry.update) buttons.push({ action: 'update', label: `Update to ${entry.update.version}` })
       if (state === 'ready') buttons.push({ action: 'disable', label: 'Disable' })
       if (state === 'disabled') buttons.push({ action: 'enable', label: 'Enable' })
       if (state === 'failed') buttons.push({ action: 'enable', label: 'Retry' })

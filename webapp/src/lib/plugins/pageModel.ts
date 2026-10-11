@@ -1,7 +1,7 @@
 import type { PluginInstall } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { compareVersions, parseVersion } from '@/lib/semver'
-import { CatalogError, chooseRelease, loadCatalog, type LoadedCatalog } from './catalog'
+import { CatalogError, chooseRelease, isRevoked, loadCatalog, type LoadedCatalog } from './catalog'
 import { likePrefix } from './dataStore'
 import { hasKeptAnything, rollbackCheck, type RollbackCheck } from './lifecycle'
 import { PERMISSION_TEXT, isPluginPermission } from './permissions'
@@ -179,7 +179,12 @@ function entryOf(
   let installBlocked: string | null = null
   if (!loaded) installBlocked = 'The catalog is unavailable.'
   else if (!releases) installBlocked = 'The catalog in use does not list this plugin.'
-  else if (!best) installBlocked = 'No release of this plugin runs on this RedAmon; it needs a newer RedAmon.'
+  else if (!best) {
+    const newestRevoked = chooseRelease({ id, releases }, PLUGIN_PLATFORM_VERSION, [])
+    installBlocked = newestRevoked
+      ? `Every release of this plugin that runs on this RedAmon was revoked: ${isRevoked(loaded.catalog, id, newestRevoked.version)}`
+      : 'No release of this plugin runs on this RedAmon; it needs a newer RedAmon.'
+  }
   const entry: PluginEntry = {
     id,
     displayName: meta?.displayName ?? manifest?.displayName ?? id,

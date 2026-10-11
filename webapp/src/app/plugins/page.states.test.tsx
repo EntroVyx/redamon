@@ -216,6 +216,8 @@ describe('card states, as an admin', () => {
     ['incompatible', {}, ['Uninstall']],
     ['incompatible', { update: { version: '1.1.0', newPermissions: [], migratesData: false } }, ['Update to 1.1.0', 'Uninstall']],
     ['revoked', {}, ['Uninstall']],
+    // A fixed release is how a revoked plugin comes back (README.PLUGINS.md §6.2).
+    ['revoked', { update: { version: '1.1.0', newPermissions: [], migratesData: false } }, ['Update to 1.1.0', 'Uninstall']],
     ['installing', {}, []],
     ['updating', {}, []],
     ['uninstalling', {}, []],
