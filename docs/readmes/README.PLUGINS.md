@@ -1756,6 +1756,40 @@ while `PLUGINS_ENABLED` is on (TD-20).
 - A failed plugin is retried; expired data rows are deleted; a job past its deadline is
   failed with `timeout`.
 
+### 9.8 Turning the platform on, off and back: the operator's checklist
+
+**Turning it on**
+
+1. `./redamon.sh update` (or `install`): builds the runner image and writes `PLUGINS_ENABLED=false`,
+   `PLUGIN_RUNNER_KEY` and `PLUGIN_CALL_TOKEN_SECRET` into `.env`.
+2. Check that `docker version --format '{{.Server.Version}}'` reports 28.0.0 or newer.
+3. Set `PLUGINS_ENABLED=true` in `.env` and run `./redamon.sh up`. It starts `plugin-runner` and
+   `plugin-gateway` and recreates the webapp with the overlay; if the preflight fails it prints
+   why and starts everything else with plugins off (`./redamon.sh status` repeats the reason).
+4. As an admin: **Plugins** → the plugin's card → **Install**, and accept its permissions.
+5. Each user who runs a plugin that calls a model: Global Settings → LLM Providers → Models by
+   feature → the plugin's tile → choose a model.
+6. For Skiller: in a finished chat, gear menu → **Improve skill from this session**; review;
+   approve.
+
+On a single-host deploy, set the flag in the deploy's `.env` and run `./deploy.sh update`; the
+server needs outbound HTTPS to the catalog and release hosts (§6.2).
+
+**Undoing**
+
+- One skill: **Skill versions** (or Versions in project settings) → **Reset to factory**. It
+  works whatever state the plugin is in.
+- One plugin: **Disable** (code and data stay) or **Uninstall** (keep the data, or export then
+  purge, §9.6).
+- The platform: `PLUGINS_ENABLED=false` and `./redamon.sh up`. Menus, the page and the plugin
+  services go away, plugin routes answer 404, and the agent uses the factory text from its next
+  turn (a run in progress keeps the text it started with). Tables and the plugins volume stay and
+  come back when the switch is turned on again.
+- **Before running an older RedAmon image on this database**, export: each plugin's Details →
+  Export data, or `docker compose exec postgres pg_dump -U redamon -d redamon -t 'plugin_*' >
+  plugins-backup.sql`. The older image's `prisma db push --accept-data-loss` drops the plugin
+  tables with their rows (§11.5).
+
 ---
 
 ## 10. Trust and security model
