@@ -32,8 +32,9 @@ export interface RevokedEntry {
 export interface BuildCatalogInput {
   releases: ReleaseInput[]
   serial: number
-  expires: Date | string
   key: TestKeyPair
+  /** The `expires` field catalogs signed before 2026-10-11 carried; RedAmon ignores it. */
+  legacyExpires?: string
   revoked?: RevokedEntry[]
   catalogVersion?: number
   /** Signs with this key id instead of key.keyId (an "unknown key" case). */
@@ -76,7 +77,7 @@ export function buildCatalog(input: BuildCatalogInput): BuiltCatalog {
   const catalog = {
     catalogVersion: input.catalogVersion ?? 1,
     serial: input.serial,
-    expires: typeof input.expires === 'string' ? input.expires : input.expires.toISOString(),
+    ...(input.legacyExpires !== undefined ? { expires: input.legacyExpires } : {}),
     plugins,
     revoked: input.revoked ?? [],
   }

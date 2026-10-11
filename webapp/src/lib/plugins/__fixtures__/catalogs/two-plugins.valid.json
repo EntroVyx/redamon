@@ -1,7 +1,6 @@
 {
   "catalogVersion": 1,
   "serial": 42,
-  "expires": "2026-12-31T00:00:00Z",
   "plugins": [
     {
       "id": "skiller",

@@ -7,7 +7,6 @@ const ERROR_LABEL: Record<Exclude<CatalogView['state'], 'ok'>, string> = {
   unreachable: 'Catalog unreachable',
   invalid: 'Catalog invalid',
   untrusted: 'Catalog not trusted',
-  expired: 'Catalog expired',
 }
 
 /** The state of the signed plugin catalog in use, with what to do about it. */
@@ -22,14 +21,10 @@ export function CatalogStatus({ catalog }: { catalog: CatalogView }) {
       </div>
     )
   }
-  const days = catalog.expiresInDays ?? 0
   return (
     <div className={styles.titleRow} data-testid="catalog-status">
       <span className={`chip ${catalog.official ? 'chipSuccess' : 'chipWarning'}`}>
         {catalog.official ? 'Official catalog' : 'Custom catalog'}
-      </span>
-      <span className={`chip ${catalog.expiresSoon ? 'chipWarning' : 'chipSecondary'}`}>
-        {days <= 0 ? 'expires today' : `expires in ${days} day${days === 1 ? '' : 's'}`}
       </span>
       {catalog.extraKey && (
         <span className={styles.notice}>

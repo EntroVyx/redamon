@@ -152,11 +152,11 @@ describe('refusals before anything is written', () => {
     expect([e.status, e.code]).toEqual([409, 'platform_incompatible'])
   })
 
-  test('an unreachable or expired catalog → 503, no row', async () => {
-    w.catalog.unavailable = new CatalogError('expired', 'The catalog expired.')
+  test('an unreachable catalog → 503, no row', async () => {
+    w.catalog.unavailable = new CatalogError('catalog_unreachable', 'The catalog could not be downloaded.')
     const e = await refusal(go())
     expect([e.status, e.code]).toEqual([503, 'catalog_unavailable'])
-    expect(e.details).toEqual(['expired'])
+    expect(e.details).toEqual(['catalog_unreachable'])
     expect(row()).toBeUndefined()
   })
 

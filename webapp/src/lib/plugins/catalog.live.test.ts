@@ -1,6 +1,6 @@
 /**
  * The GitHub half of the catalog contract (T3): the published catalog, loaded through the
- * production path and verified with the shipped keyring (signature, schema, expiry, serial),
+ * production path and verified with the shipped keyring (signature, schema, serial),
  * and one of its release archives downloaded through fetchRemote's host allowlist and checked
  * exactly as an install checks it.
  *
@@ -27,8 +27,6 @@ import type { CatalogRelease, PluginCatalog } from './schemas/catalog'
 
 const LIVE = process.env.PLUGINS_LIVE === '1'
 const NETWORK_TIMEOUT_MS = 120_000
-// OQ-11: the release and refresh workflows sign for 90 days; a day of slack for the clock.
-const MAX_SIGNED_DAYS = 91
 
 let savedExtraKeys: string | undefined
 
@@ -64,17 +62,15 @@ function expectedRelease(catalog: PluginCatalog): { pluginId: string; release: C
 
 describe.skipIf(!LIVE)('the official plugin catalog on GitHub (set PLUGINS_LIVE=1 to run)', () => {
   test(
-    'is signed by a shipped official key, unexpired, with a serial',
+    'is signed by a shipped official key, with a serial',
     async () => {
       const loaded = await loadCatalog({ source: 'official' }, { noCache: true })
-      console.info(`[plugins live] ${catalogUrl()}: serial ${loaded.serial}, key ${loaded.keyId}, expires ${loaded.expiresAt.toISOString()}`)
+      console.info(`[plugins live] ${catalogUrl()}: serial ${loaded.serial}, key ${loaded.keyId}`)
       expect(loaded.official).toBe(true)
       expect(OFFICIAL_KEYS.map((k) => k.keyId)).toContain(loaded.keyId)
       expect(loaded.warnings).not.toContain('extra_key')
       expect(Number.isSafeInteger(loaded.serial) && loaded.serial >= 1).toBe(true)
-      const left = loaded.expiresAt.getTime() - Date.now()
-      expect(left).toBeGreaterThan(0)
-      expect(left).toBeLessThanOrEqual(MAX_SIGNED_DAYS * 86_400_000)
+      expect(loaded.warnings).toEqual([])
     },
     NETWORK_TIMEOUT_MS,
   )

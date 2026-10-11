@@ -42,7 +42,7 @@ beforeEach(() => {
     if (url === '/api/plugins/status') return new Response(JSON.stringify({ platformVersion: '1.0.0', runner: { reachable: true, state: 'ok' } }))
     const page: PluginsPage = {
       enabled: true, platformVersion: '1.0.0', isAdmin,
-      catalog: { state: 'ok', message: null, official: true, extraKey: false, replayed: false, serial: 1, expiresAt: null, expiresInDays: 30, expiresSoon: false },
+      catalog: { state: 'ok', message: null, official: true, extraKey: false, replayed: false, serial: 1 },
       plugins: entries(),
     }
     return new Response(JSON.stringify(page))

@@ -61,7 +61,6 @@ function trio(a: EchoArchive = w.archives.get('1.0.0')!, opts: { key?: typeof de
   const c = buildCatalog({
     releases: [{ pluginId: 'echo', ...a.release, ...opts.release }],
     serial: opts.serial ?? 5,
-    expires: new Date(NOW.getTime() + 30 * 86_400_000),
     key: opts.key ?? dev,
   })
   return { archive: a.bytes, catalog: c.bytes, signature: c.sigBytes }

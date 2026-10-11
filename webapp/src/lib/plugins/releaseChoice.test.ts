@@ -52,7 +52,6 @@ describe('lookups', () => {
   const catalog: PluginCatalog = {
     catalogVersion: 1,
     serial: 1,
-    expires: '2027-01-01T00:00:00Z',
     plugins: [entry([rel('1.0.0')])],
     revoked: [{ id: 'echo', version: '0.9.0', reason: 'Exfiltrated transcripts.' }],
   }

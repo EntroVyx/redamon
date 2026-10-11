@@ -16,21 +16,22 @@ import { parseCatalog, type CatalogRelease, type PluginCatalog } from './schemas
  *   and signature of that catalog. A lower serial is not an error: the raw CDN can serve
  *   an older copy for minutes after a push (E5), so the stored last-good catalog is used
  *   and the replay logged (RV-45). It is verified again on every use, so a key removed
- *   from the keyring or an expiry still applies to it.
+ *   from the keyring (or past its `notAfter`) still applies to it.
  * - One mark for all the official keys, so a catalog signed by a rotated-out key cannot be
  *   replayed under the newer key's serial; one mark per extra key, so a custom or
  *   development catalog (whose serial may be a Unix time) never holds the official one back.
- * - An expired catalog blocks install and update. It never touches an installed plugin:
- *   nothing here writes anything but the serial record.
+ * - A catalog never expires (the owner's decision of 2026-10-11): an `expires` field left
+ *   by older CI is ignored. A replay of an old catalog is caught by the serial only, so an
+ *   installation that never saw a newer one can be shown an older genuine catalog.
+ * - Nothing here writes anything but the serial record.
  */
 export const DEFAULT_CATALOG_URL = 'https://raw.githubusercontent.com/samugit83/redamon-plugins/master/catalog.json'
 export const CATALOG_STATE_KEY = 'catalog.serial'
 export const CATALOG_CACHE_MS = 60_000
-export const EXPIRY_WARNING_DAYS = 14
 const SIGNATURE_FILE_MAX_BYTES = 4096
 
-export type CatalogErrorCode = 'catalog_unreachable' | 'signature_invalid' | 'unknown_key' | 'schema_invalid' | 'expired'
-export type CatalogWarning = 'extra_key' | 'replayed' | 'expires_soon'
+export type CatalogErrorCode = 'catalog_unreachable' | 'signature_invalid' | 'unknown_key' | 'schema_invalid'
+export type CatalogWarning = 'extra_key' | 'replayed'
 
 export class CatalogError extends Error {
   constructor(
@@ -50,7 +51,6 @@ export interface LoadedCatalog {
   keyId: string
   official: boolean
   serial: number
-  expiresAt: Date
   warnings: CatalogWarning[]
 }
 
@@ -109,7 +109,7 @@ function parseSignature(sigBytes: Buffer): { keyId: string; sig: Buffer } {
   return { keyId, sig: raw }
 }
 
-/** Signature, then schema, then expiry; the serial is the caller's business. */
+/** Signature, then schema; the serial is the caller's business. */
 function verifyCatalog(bytes: Buffer, sigBytes: Buffer, officialKeys: readonly TrustedKey[]): Verified {
   const { keyId, sig } = parseSignature(sigBytes)
   const trusted = findTrustedKey(keyId, officialKeys)
@@ -129,20 +129,14 @@ function verifyCatalog(bytes: Buffer, sigBytes: Buffer, officialKeys: readonly T
   if (!parsed.ok) {
     throw new CatalogError('schema_invalid', 'The signed catalog does not match the catalog schema.', parsed.errors)
   }
-  const expires = Date.parse(parsed.value.expires)
-  if (!(expires > now().getTime())) {
-    throw new CatalogError('expired', `The catalog expired on ${parsed.value.expires}; install and update wait for a fresh one.`)
-  }
   return { catalog: parsed.value, keyId, official: trusted.official }
 }
 
 function result(v: Verified, replayed: boolean): LoadedCatalog {
-  const expiresAt = new Date(v.catalog.expires)
   const warnings: CatalogWarning[] = []
   if (!v.official) warnings.push('extra_key')
   if (replayed) warnings.push('replayed')
-  if (expiresAt.getTime() - now().getTime() < EXPIRY_WARNING_DAYS * 86_400_000) warnings.push('expires_soon')
-  return { catalog: v.catalog, keyId: v.keyId, official: v.official, serial: v.catalog.serial, expiresAt, warnings }
+  return { catalog: v.catalog, keyId: v.keyId, official: v.official, serial: v.catalog.serial, warnings }
 }
 
 const markKey = (v: Verified) => (v.official ? CATALOG_STATE_KEY : `${CATALOG_STATE_KEY}:extra:${v.keyId}`)
@@ -221,9 +215,8 @@ export async function loadCatalog(source: CatalogSource, deps: CatalogDeps = {})
   const url = catalogUrl()
   const t = now().getTime()
   const cached = !deps.noCache && cache && cache.url === url && t - cache.at < CATALOG_CACHE_MS ? cache.result : null
-  // An expired catalog blocks install and update: one that expired since it was cached too.
   if (cached instanceof CatalogError) throw cached
-  if (cached && cached.expiresAt.getTime() > t) return cached
+  if (cached) return cached
   let out: LoadedCatalog | CatalogError
   try {
     const fetcher = deps.fetch ?? fetchRemote

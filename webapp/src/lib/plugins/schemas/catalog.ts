@@ -5,8 +5,9 @@ import { parseWith } from './common'
 
 /**
  * `catalog.json` of the plugin repository (README.PLUGINS.md §6.2), signed by its CI.
- * The schema checks shape only: https, the download host allowlist, the signature,
- * the serial and the expiry are the catalog client's checks.
+ * The schema checks shape only: https, the download host allowlist, the signature and
+ * the serial are the catalog client's checks. A catalog has no expiry: an `expires`
+ * field written by older CI is dropped like any other unknown field.
  *
  * Objects here are NOT strict, unlike the manifest: a field the CI adds later must not
  * make every older platform refuse the whole catalog. `catalogVersion` is the lever
@@ -45,7 +46,6 @@ export const catalogSchema = z
   .object({
     catalogVersion: z.literal(1),
     serial: z.number().int().min(1),
-    expires: z.iso.datetime({ offset: true, error: 'must be an ISO 8601 date-time' }),
     plugins: z.array(plugin).max(500),
     revoked: z
       .array(z.object({ id: pluginId, version, reason: z.string().min(1).max(500) }))

@@ -130,7 +130,6 @@ const releases = RELEASES.map((r) => {
 const catalog = {
   catalogVersion: 1,
   serial: Math.floor(Date.now() / 1000),
-  expires: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   plugins: [{ id: 'echo', displayName: manifest.displayName, description: manifest.description, releases }],
   revoked: [],
 }

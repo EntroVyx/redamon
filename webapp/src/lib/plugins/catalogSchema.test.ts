@@ -51,12 +51,20 @@ describe('shape checks', () => {
     expect(refusal((c) => (c.plugins[0].releases[0].url = 'not a url'))).toMatch(/url/)
   })
 
-  test('a missing expires', () => {
-    expect(refusal((c) => delete c.expires)).toMatch(/expires/)
+  test('a catalog has no expiry: none is needed', () => {
+    const r = parseCatalog(clone(valid))
+    expect(r.ok ? [] : r.errors).toEqual([])
+    expect(r.ok && 'expires' in r.value).toBe(false)
   })
 
-  test('an expires that is not a date-time', () => {
-    expect(refusal((c) => (c.expires = '2026-12-31'))).toMatch(/expires: must be an ISO 8601 date-time/)
+  test('an expires left by an older catalog is ignored, whatever its value', () => {
+    for (const expires of ['2026-10-01T00:00:00Z', '2026-12-31', 7, null]) {
+      const c = clone(valid) as Doc
+      c.expires = expires
+      const r = parseCatalog(c)
+      expect(r.ok ? [] : r.errors).toEqual([])
+      expect(r.ok && 'expires' in r.value).toBe(false)
+    }
   })
 
   test('another catalogVersion', () => {

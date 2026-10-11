@@ -1,7 +1,7 @@
 /**
  * Every state of the /plugins page (R-04) and of a plugin card (README.PLUGINS.md §7.1):
  * loading, each card state with its admin actions, the catalog unreachable (installed plugins
- * still listed and manageable, Install disabled with the reason), invalid or expired, an
+ * still listed and manageable, Install disabled with the reason), invalid or untrusted, an
  * extra-key catalog, the runner down, an empty catalog, 404 with the switch off. The subtitle
  * tells the page apart from Global Settings → MCP Tool Plugins (R-03). Confirmations go
  * through useAlertModal, never window.confirm.
@@ -51,7 +51,7 @@ function entry(state: PluginEntry['state'], over: Partial<PluginEntry> = {}): Pl
 function model(plugins: PluginEntry[], over: Partial<PluginsPage> = {}): PluginsPage {
   return {
     enabled: true, platformVersion: '1.0.0', isAdmin: true,
-    catalog: { state: 'ok', message: null, official: true, extraKey: false, replayed: false, serial: 3, expiresAt: '2026-12-31T00:00:00Z', expiresInDays: 82, expiresSoon: false },
+    catalog: { state: 'ok', message: null, official: true, extraKey: false, replayed: false, serial: 3 },
     plugins, ...over,
   }
 }
@@ -141,7 +141,7 @@ describe('the page', () => {
   })
 
   test('the catalog unreachable with nothing installed: no claim about what it lists', async () => {
-    page = model([], { catalog: { state: 'unreachable', message: 'The plugin catalog could not be reached (http_error).', official: false, extraKey: false, replayed: false, serial: null, expiresAt: null, expiresInDays: null, expiresSoon: false } })
+    page = model([], { catalog: { state: 'unreachable', message: 'The plugin catalog could not be reached (http_error).', official: false, extraKey: false, replayed: false, serial: null } })
     show()
     expect(await screen.findByText('No plugins installed')).toBeTruthy()
     expect(screen.queryByText(/catalog lists no plugin/)).toBeNull()
@@ -164,18 +164,18 @@ describe('the page', () => {
 })
 
 describe('the catalog', () => {
-  test('official, with its expiry', async () => {
+  test('official, with no expiry: a catalog never expires', async () => {
     show()
     const s = await screen.findByTestId('catalog-status')
     expect(s.textContent).toMatch(/Official catalog/)
-    expect(s.textContent).toMatch(/expires in 82 days/)
+    expect(s.textContent).not.toMatch(/expire/i)
+    expect(within(s).queryAllByText(/./).filter((el) => el.className.includes('chipWarning'))).toEqual([])
   })
 
-  test('under 14 days: a warning chip', async () => {
-    page = model([entry('not_installed')], { catalog: { ...model([]).catalog, expiresInDays: 9, expiresSoon: true } })
+  test('a catalog in an error state says nothing about expiry either', async () => {
+    page = model([], { catalog: { ...model([]).catalog, state: 'unreachable', message: 'The plugin catalog could not be reached (http_error).' } })
     show()
-    const chip = within(await screen.findByTestId('catalog-status')).getByText(/expires in 9 days/)
-    expect(chip.className).toMatch(/chipWarning/)
+    expect((await screen.findByTestId('catalog-status')).textContent).not.toMatch(/expire/i)
   })
 
   test('an extra-key catalog is flagged', async () => {
@@ -190,7 +190,6 @@ describe('the catalog', () => {
     ['unreachable', 'Catalog unreachable'],
     ['invalid', 'Catalog invalid'],
     ['untrusted', 'Catalog not trusted'],
-    ['expired', 'Catalog expired'],
   ] as const)('%s: the reason, installed plugins still managed, Install disabled with why', async (state, label) => {
     page = model(
       [entry('ready'), { ...entry('not_installed', { available: null, installBlocked: 'The catalog is unavailable.' }), id: 'other', displayName: 'Other' }],

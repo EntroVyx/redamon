@@ -40,7 +40,6 @@ export function catalogOf(archives: EchoArchive[], revoked: LifecycleWorld['cata
     catalog: {
       catalogVersion: 1,
       serial: 1,
-      expires: '2027-01-01T00:00:00Z',
       plugins: archives.length
         ? [{ id: 'echo', displayName: 'Echo', description: 'Test fixture', releases: archives.map((a) => a.release) }]
         : [],
@@ -49,7 +48,6 @@ export function catalogOf(archives: EchoArchive[], revoked: LifecycleWorld['cata
     keyId: 'test',
     official: true,
     serial: 1,
-    expiresAt: new Date('2027-01-01T00:00:00Z'),
     warnings: [],
   }
 }

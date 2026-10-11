@@ -1,0 +1,13 @@
+{
+  "catalogVersion": 1,
+  "serial": 3,
+  "expires": "2026-01-01T00:00:00Z",
+  "plugins": [],
+  "revoked": [
+    {
+      "id": "echo",
+      "version": "0.3.1",
+      "reason": "test revocation"
+    }
+  ]
+}

@@ -1130,7 +1130,7 @@ export interface OfflineInput {
 
 /**
  * An archive uploaded with a catalog and signature that cover it (§9.7), through exactly
- * the checks of a download: the uploaded catalog is verified (keyring, serial, expiry) and
+ * the checks of a download: the uploaded catalog is verified (keyring, signature, serial) and
  * must pin this archive's sha256; then the normal install, or the update of an installed
  * plugin, runs with that catalog and these bytes.
  */

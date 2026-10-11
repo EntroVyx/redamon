@@ -17,15 +17,14 @@ describe('buildCatalog', () => {
         { pluginId: 'skiller', version: '1.1.0', platform: '>=1.1.0 <2.0.0', dataVersion: 2 },
       ],
       serial: 7,
-      expires: new Date('2026-12-31T00:00:00Z'),
       key,
     })
     expect(catalog).toMatchObject({
       catalogVersion: 1,
       serial: 7,
-      expires: '2026-12-31T00:00:00.000Z',
       revoked: [],
     })
+    expect('expires' in catalog).toBe(false)
     const plugins = catalog.plugins as Array<{ id: string; releases: Array<Record<string, unknown>> }>
     expect(plugins.map(p => p.id)).toEqual(['skiller', 'echo'])
     expect(plugins[0].releases.map(r => r.version)).toEqual(['1.0.0', '1.1.0'])
@@ -35,34 +34,40 @@ describe('buildCatalog', () => {
   })
 
   test('the bytes are the JSON of the catalog, and the signature file is {keyId, sig}', () => {
-    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 1, expires: '2026-06-01T00:00:00Z', key })
+    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 1, key })
     expect(JSON.parse(built.bytes.toString('utf8'))).toEqual(built.catalog)
     const sigFile = JSON.parse(built.sigBytes.toString('utf8'))
     expect(sigFile).toEqual({ keyId: 'k1', sig: built.sigB64 })
   })
 
   test('the signature verifies over the exact bytes with crypto.verify', () => {
-    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 3, expires: '2026-06-01T00:00:00Z', key })
+    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 3, key })
     const sig = Buffer.from(built.sigB64, 'base64')
     expect(verify(null, built.bytes, key.publicKey, sig)).toBe(true)
   })
 
   test('one flipped byte in the catalog breaks the signature', () => {
-    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 3, expires: '2026-06-01T00:00:00Z', key })
+    const built = buildCatalog({ releases: [{ pluginId: 'a', version: '1.0.0' }], serial: 3, key })
     const tampered = Buffer.from(built.bytes)
     tampered[tampered.length - 3] ^= 0x01
     expect(verify(null, tampered, key.publicKey, Buffer.from(built.sigB64, 'base64'))).toBe(false)
   })
 
   test('claimKeyId names a different key while signing with the given one', () => {
-    const built = buildCatalog({ releases: [], serial: 1, expires: '2026-06-01T00:00:00Z', key, claimKeyId: 'unknown-key' })
+    const built = buildCatalog({ releases: [], serial: 1, key, claimKeyId: 'unknown-key' })
     expect(JSON.parse(built.sigBytes.toString('utf8')).keyId).toBe('unknown-key')
   })
 
   test('revoked entries are carried as given', () => {
     const revoked = [{ id: 'skiller', version: '1.0.0', reason: 'test' }]
-    const { catalog } = buildCatalog({ releases: [], serial: 2, expires: '2026-06-01T00:00:00Z', key, revoked })
+    const { catalog } = buildCatalog({ releases: [], serial: 2, key, revoked })
     expect(catalog.revoked).toEqual(revoked)
+  })
+
+  test('legacyExpires writes the expires field older catalogs carried, after serial', () => {
+    const { catalog } = buildCatalog({ releases: [], serial: 2, key, legacyExpires: '2026-01-01T00:00:00Z' })
+    expect(Object.keys(catalog)).toEqual(['catalogVersion', 'serial', 'expires', 'plugins', 'revoked'])
+    expect(catalog.expires).toBe('2026-01-01T00:00:00Z')
   })
 })
 

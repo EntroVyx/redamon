@@ -51,11 +51,10 @@ const rel = (version: string, extra: Record<string, unknown> = {}) => ({
 
 function catalog(plugins: unknown[], extra: Partial<LoadedCatalog> = {}, revoked: unknown[] = []): LoadedCatalog {
   return {
-    catalog: { catalogVersion: 1, serial: 3, expires: '2026-12-31T00:00:00Z', plugins, revoked } as LoadedCatalog['catalog'],
+    catalog: { catalogVersion: 1, serial: 3, plugins, revoked } as LoadedCatalog['catalog'],
     keyId: 'redamon-2026',
     official: true,
     serial: 3,
-    expiresAt: new Date('2026-12-31T00:00:00Z'),
     warnings: [],
     ...extra,
   }
@@ -214,7 +213,6 @@ describe('GET /api/plugins', () => {
     ['signature_invalid', 'invalid', /signature/],
     ['schema_invalid', 'invalid', /not a valid/],
     ['unknown_key', 'untrusted', /not trust/],
-    ['expired', 'expired', /expired/],
   ] as const)('a catalog that fails with %s: state %s, installed plugins still listed, Install blocked', async (code, state, message) => {
     install()
     h.catalogError = new CatalogError(code, 'detail')
@@ -227,10 +225,11 @@ describe('GET /api/plugins', () => {
     expect(body.plugins[0].inCatalog).toBeNull()
   })
 
-  test('an extra-key catalog is flagged, and so is an expiry under 14 days', async () => {
-    h.catalog = catalog([echo()], { official: false, warnings: ['extra_key', 'expires_soon'], expiresAt: new Date('2026-10-20T12:00:00Z') })
+  test('an extra-key catalog is flagged; the view carries no expiry', async () => {
+    h.catalog = catalog([echo()], { official: false, warnings: ['extra_key'] })
     const c = (await list()).body.catalog
-    expect(c).toMatchObject({ state: 'ok', official: false, extraKey: true, expiresSoon: true, expiresInDays: 10 })
+    expect(c).toMatchObject({ state: 'ok', official: false, extraKey: true })
+    expect(Object.keys(c).filter((k) => /expir/i.test(k))).toEqual([])
   })
 
   test('a revoked release is not offered; a plugin with nothing compatible says why', async () => {

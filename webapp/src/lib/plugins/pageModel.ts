@@ -2,7 +2,6 @@ import type { PluginInstall } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { compareVersions, parseVersion } from '@/lib/semver'
 import { CatalogError, chooseRelease, loadCatalog, type LoadedCatalog } from './catalog'
-import { now } from './clock'
 import { likePrefix } from './dataStore'
 import { hasKeptAnything, rollbackCheck, type RollbackCheck } from './lifecycle'
 import { PERMISSION_TEXT, isPluginPermission } from './permissions'
@@ -36,15 +35,12 @@ export interface PermissionView {
 }
 
 export interface CatalogView {
-  state: 'ok' | 'unreachable' | 'invalid' | 'untrusted' | 'expired'
+  state: 'ok' | 'unreachable' | 'invalid' | 'untrusted'
   message: string | null
   official: boolean
   extraKey: boolean
   replayed: boolean
   serial: number | null
-  expiresAt: string | null
-  expiresInDays: number | null
-  expiresSoon: boolean
 }
 
 export interface InstalledView {
@@ -96,7 +92,6 @@ const CATALOG_MESSAGES: Record<string, (e: CatalogError) => string> = {
   schema_invalid: () => 'The plugin catalog is not a valid catalog for this RedAmon, so it is not used. Installed plugins keep working.',
   unknown_key: () =>
     'The plugin catalog is signed with a key this RedAmon does not trust (PLUGINS_EXTRA_TRUSTED_KEYS). Installed plugins keep working.',
-  expired: () => 'The plugin catalog has expired; install and update wait for a fresh one. Installed plugins keep working.',
 }
 
 const STATE_OF: Record<string, CatalogView['state']> = {
@@ -104,7 +99,6 @@ const STATE_OF: Record<string, CatalogView['state']> = {
   signature_invalid: 'invalid',
   schema_invalid: 'invalid',
   unknown_key: 'untrusted',
-  expired: 'expired',
 }
 
 function catalogView(loaded: LoadedCatalog | null, error: CatalogError | null): CatalogView {
@@ -117,12 +111,8 @@ function catalogView(loaded: LoadedCatalog | null, error: CatalogError | null): 
       extraKey: false,
       replayed: false,
       serial: null,
-      expiresAt: null,
-      expiresInDays: null,
-      expiresSoon: false,
     }
   }
-  const days = Math.floor((loaded.expiresAt.getTime() - now().getTime()) / 86_400_000)
   return {
     state: 'ok',
     message: null,
@@ -130,9 +120,6 @@ function catalogView(loaded: LoadedCatalog | null, error: CatalogError | null): 
     extraKey: loaded.warnings.includes('extra_key'),
     replayed: loaded.warnings.includes('replayed'),
     serial: loaded.serial,
-    expiresAt: loaded.expiresAt.toISOString(),
-    expiresInDays: days,
-    expiresSoon: loaded.warnings.includes('expires_soon'),
   }
 }
 

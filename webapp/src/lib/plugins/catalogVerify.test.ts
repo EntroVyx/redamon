@@ -1,8 +1,8 @@
 /**
  * Loading the signed plugin catalog (README.PLUGINS.md §6.2, TD-11): the Ed25519
- * signature over the exact bytes, against the key the signature names; the schema; the
- * expiry; and the serial high-water mark kept with the accepted bytes, so a replayed
- * (older) catalog never wins and is not an error either (RV-45).
+ * signature over the exact bytes, against the key the signature names; the schema; and
+ * the serial high-water mark kept with the accepted bytes, so a replayed (older) catalog
+ * never wins and is not an error either (RV-45). A catalog never expires.
  *
  * @vitest-environment node
  */
@@ -58,7 +58,6 @@ function catalogOf(serial: number, extra: Partial<BuildCatalogInput> = {}) {
   return buildCatalog({
     releases: [{ pluginId: 'echo', version: '1.0.0', permissions: ['session:read'] }],
     serial,
-    expires: new Date(NOW.getTime() + 90 * 86_400_000),
     key: official,
     ...extra,
   })
@@ -102,7 +101,7 @@ describe('signature', () => {
     expect(out.keyId).toBe('redamon-2026')
     expect(out.serial).toBe(7)
     expect(out.catalog.plugins[0].id).toBe('echo')
-    expect(out.expiresAt.toISOString()).toBe(new Date(NOW.getTime() + 90 * 86_400_000).toISOString())
+    expect('expiresAt' in out).toBe(false)
     expect(out.warnings).toEqual([])
     expect(stored()).toMatchObject({ serial: 7, keyId: 'redamon-2026' })
     expect(Buffer.from(stored()!.bytes, 'base64').equals(c.bytes)).toBe(true)
@@ -180,21 +179,29 @@ describe('signature', () => {
   })
 })
 
-describe('expiry', () => {
-  test('a catalog past its expires is refused and changes no installed plugin (R-43)', async () => {
-    db.seed('pluginInstall', [{ pluginId: 'echo', status: 'ready', enabled: true, activeVersion: '1.0.0' }])
-    const before = JSON.stringify(db.rows('pluginInstall'))
-    const c = catalogOf(9, { expires: new Date(NOW.getTime() - 1000) })
-    const e = await refused(loadCatalog({ source: 'official' }, { fetch: serving(c), officialKeys: officialKeys() }))
-    expect(e.code).toBe('expired')
-    expect(JSON.stringify(db.rows('pluginInstall'))).toBe(before)
-    expect(stored()).toBeUndefined()
+describe('no expiry (owner decision of 2026-10-11)', () => {
+  test('a catalog signed years ago is still accepted, with no warning', async () => {
+    const c = catalogOf(9)
+    clock = new Date(NOW.getTime() + 5 * 365 * 86_400_000)
+    const out = await loadCatalog({ source: 'official' }, { fetch: serving(c), officialKeys: officialKeys() })
+    expect(out.serial).toBe(9)
+    expect(out.warnings).toEqual([])
   })
 
-  test('within 14 days of expiry the catalog is accepted with a warning', async () => {
-    const c = catalogOf(9, { expires: new Date(NOW.getTime() + 13 * 86_400_000) })
+  test('an older catalog that still carries a past expires is accepted; the field is ignored', async () => {
+    const c = catalogOf(9, { legacyExpires: new Date(NOW.getTime() - 86_400_000).toISOString() })
     const out = await loadCatalog({ source: 'official' }, { fetch: serving(c), officialKeys: officialKeys() })
-    expect(out.warnings).toContain('expires_soon')
+    expect(out.serial).toBe(9)
+    expect(out.warnings).toEqual([])
+    expect('expires' in out.catalog).toBe(false)
+    expect(stored()).toMatchObject({ serial: 9 })
+  })
+
+  test('the same holds for an uploaded catalog (offline install)', async () => {
+    const c = catalogOf(11, { key: dev, legacyExpires: '2026-01-01T00:00:00Z' })
+    const out = await loadCatalog({ source: 'upload', bytes: c.bytes, sigBytes: c.sigBytes }, { officialKeys: officialKeys() })
+    expect(out.serial).toBe(11)
+    expect(out.warnings).toEqual(['extra_key'])
   })
 })
 
@@ -226,16 +233,14 @@ describe('serial', () => {
 
   test('a replay falls back to the stored catalog only while it still verifies', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await loadCatalog(
-      { source: 'official' },
-      { fetch: serving(catalogOf(10, { expires: new Date(NOW.getTime() + 86_400_000) })), officialKeys: officialKeys() },
-    )
+    // The stored catalog's key is rotated out (notAfter passed) while a newer key still signs.
+    const next = makeKeyPair('redamon-2027')
+    const keys = [{ ...asTrusted(official), notAfter: new Date(NOW.getTime() + 86_400_000).toISOString() }, asTrusted(next)]
+    await loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(10)), officialKeys: keys })
     clearCatalogCache()
     clock = new Date(NOW.getTime() + 2 * 86_400_000)
-    const e = await refused(
-      loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(4, { expires: new Date(clock.getTime() + 86_400_000) })), officialKeys: officialKeys() }),
-    )
-    expect(e.code).toBe('expired')
+    const e = await refused(loadCatalog({ source: 'official' }, { fetch: serving(catalogOf(4, { key: next })), officialKeys: keys }))
+    expect(e.code).toBe('unknown_key')
   })
 
   test('a custom or development catalog never holds the official one back', async () => {
@@ -303,12 +308,14 @@ describe('sources and caching', () => {
     expect((await refused(loadCatalog({ source: 'upload', bytes: bad, sigBytes: c.sigBytes }))).code).toBe('signature_invalid')
   })
 
-  test('a cached catalog is not used past its expiry, within the 60 s', async () => {
-    const c = catalogOf(7, { expires: new Date(NOW.getTime() + 30_000) })
+  test('an expires field left in a cached catalog does not cut the 60 s short', async () => {
+    const c = catalogOf(7, { legacyExpires: new Date(NOW.getTime() + 30_000).toISOString() })
     const fetch = serving(c)
     await loadCatalog({ source: 'official' }, { fetch, officialKeys: officialKeys() })
     clock = new Date(NOW.getTime() + 40_000)
-    expect((await refused(loadCatalog({ source: 'official' }, { fetch, officialKeys: officialKeys() }))).code).toBe('expired')
+    const again = await loadCatalog({ source: 'official' }, { fetch, officialKeys: officialKeys() })
+    expect(again.serial).toBe(7)
+    expect(fetch.calls).toHaveLength(2)
   })
 
   test('the official catalog is cached for 60 s, failures too', async () => {
