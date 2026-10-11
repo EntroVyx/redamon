@@ -151,7 +151,12 @@ test('review a proposed skill version from project settings, approve it, then re
  *   agent container reaches as host.docker.internal (STUB_LLM_HOST, or asked from the agent
  *   container), and registers for the admin as an OpenAI-compatible provider, removed at the end.
  * Skipped when the files are missing. SKILLER_EVIDENCE_DIR, when set, receives screenshots.
+ *
+ * SKILLER_FROM_CATALOG=1 installs Skiller from its card in the official catalog instead (no
+ * files, no extra trusted key): the catalog must be the signed, official one and list Skiller
+ * 1.0.0.
  */
+const FROM_CATALOG = process.env.SKILLER_FROM_CATALOG === '1'
 const SKILLER_DIST = process.env.SKILLER_DIST || join(__dirname, '..', '..', '..', 'redamon-plugins', 'dist')
 const SKILLER_FILES = ['skiller-1.0.0.tar.gz', 'catalog.json', 'catalog.json.sig']
 const SESSION = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'skiller-session.json'), 'utf8')) as {
@@ -204,18 +209,34 @@ test.describe.serial('Skiller', () => {
     expect(res.ok(), await res.text()).toBeTruthy()
   }
 
-  async function installSkiller(page: Page) {
+  async function openInstallDialog(page: Page) {
     await page.goto('/plugins')
-    await page.getByRole('button', { name: /install from file/i }).click()
     const dialog = page.getByRole('dialog')
+    if (FROM_CATALOG) {
+      await expect(page.getByTestId('catalog-status')).toContainText('Official catalog')
+      const card = page.getByTestId('plugin-card-skiller')
+      await expect(card.getByTestId('plugin-state')).toHaveText('Not installed')
+      await expect(card).toContainText('1.0.0 available')
+      for (const title of ['Read chat sessions', 'Use a language model', 'Propose agent instructions']) {
+        await expect(card.getByText(title, { exact: true })).toBeVisible()
+      }
+      await shot(page, 'catalog_card')
+      await card.getByRole('button', { name: 'Install', exact: true }).click()
+      return { dialog, install: dialog.getByRole('button', { name: /^Install 1\.0\.0/ }) }
+    }
+    await page.getByRole('button', { name: /install from file/i }).click()
     const inputs = dialog.locator('input[type="file"]')
     await inputs.nth(0).setInputFiles(join(SKILLER_DIST, 'skiller-1.0.0.tar.gz'))
     await inputs.nth(1).setInputFiles(join(SKILLER_DIST, 'catalog.json'))
     await inputs.nth(2).setInputFiles(join(SKILLER_DIST, 'catalog.json.sig'))
+    return { dialog, install: dialog.getByRole('button', { name: /^Install Skiller 1\.0\.0/ }) }
+  }
+
+  async function installSkiller(page: Page) {
+    const { dialog, install } = await openInstallDialog(page)
     await expect(dialog.getByText(/sees this data while it works/)).toBeVisible()
     await dialog.getByRole('checkbox').check()
     await shot(page, 'install_consent')
-    const install = dialog.getByRole('button', { name: /^Install Skiller 1\.0\.0/ })
     await install.click()
     // A reinstall over kept data asks, after the first click, whether to restore the approved
     // versions Skiller left; answer "restore" and install again.
@@ -284,7 +305,7 @@ test.describe.serial('Skiller', () => {
   }
 
   test.beforeAll(async () => {
-    if (!SKILLER_FILES.every((f) => existsSync(join(SKILLER_DIST, f)))) return
+    if (!FROM_CATALOG && !SKILLER_FILES.every((f) => existsSync(join(SKILLER_DIST, f)))) return
     if ((await api.get('/api/plugins/status')).status() === 404) return
     stub = spawn(process.execPath, [join(__dirname, '..', 'scripts', 'stub-llm-server.mjs'), '0', agentHost()], {
       env: { ...process.env, STUB_LLM_DELAY_MS: '5000' },
@@ -409,6 +430,8 @@ test.describe.serial('Skiller', () => {
     await installSkiller(page)
     await expect.poll(async () => (await versions()).find((v) => v.status === 'active')?.revision).toBe(third)
 
+    const list = (await (await api.get('/api/plugins')).json()) as { plugins: { id: string; inCatalog?: boolean }[] }
+    const listed = list.plugins.find((p) => p.id === 'skiller')?.inCatalog === true
     await card.getByRole('button', { name: 'Uninstall' }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('radio', { name: /delete all data/i }).check()
@@ -418,7 +441,10 @@ test.describe.serial('Skiller', () => {
     await dialog.getByRole('textbox', { name: /type skiller/i }).fill('skiller')
     await dialog.getByRole('button', { name: 'Delete everything and uninstall' }).click()
     await expect(dialog).toBeHidden()
-    await expect(card).toHaveCount(0)
+    // A purged plugin keeps its card, not installed, while the catalog in use lists it (the
+    // official one has since skiller-v1.0.0, whichever way it was installed); otherwise it leaves none.
+    if (listed) await expect(card.getByTestId('plugin-state')).toHaveText('Not installed', { timeout: 60_000 })
+    else await expect(card).toHaveCount(0)
     rows = await versions()
     expect(rows).toEqual([])
   })
