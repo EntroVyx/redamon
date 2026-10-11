@@ -18,9 +18,10 @@ the plugins are its guests.
 > **Status: partly built.** The host side is built: the plugin tables and stores, the platform
 > switch, the Plugin Manager and the Plugins page, the catalog signature check, the Gateway, the
 > UI host ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
-> ([`services/plugin_runner/`](../../services/plugin_runner/)). Not yet: the `redamon-plugins`
-> repository with its first plugin and the published, signed catalog; until then the default
-> catalog cannot be reached and plugins install from files (§9.7). Anything marked
+> ([`services/plugin_runner/`](../../services/plugin_runner/)). The `redamon-plugins` repository
+> and its first plugin, Skiller (§6.5), exist but are not published yet: there is no public
+> repository and no signed catalog, so the default catalog cannot be reached and plugins install
+> from files (§9.7). Anything marked
 > *(proposed)* is intended layout, not a current file. Links to existing code are real.
 >
 > **Diagram convention.** Every diagram sets its own colours on its first line, so it reads
@@ -397,8 +398,9 @@ have. `timeoutSeconds` is capped by a platform maximum.
 The signature is what makes a downloaded catalog trustworthy and, through the sha256 values it
 lists, every archive. The verifying side is built
 ([`keyring.ts`](../../webapp/src/lib/plugins/keyring.ts),
-[`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)); the signing side lives in
-`redamon-plugins` and is *(proposed)* until that repository exists.
+[`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)); the signing side is `tools/sign.py`
+and the release workflow of `redamon-plugins`, which sign for real once that repository is
+published with its key.
 
 **How the signature works.** Signing uses an **Ed25519** key pair. The private key signs; the
 public key can only verify, so publishing it is safe, and the private key cannot be derived
@@ -520,6 +522,17 @@ that accepted it would refuse every genuine catalog below it. The platform handl
 mark counts only while the key that set it is still in the keyring
 ([`catalog.ts`](../../webapp/src/lib/plugins/catalog.ts)), so the release that removes the
 leaked key also discards any serial that key set.
+
+### 6.5 First plugin: Skiller
+
+Skiller reads one finished chat session and proposes a better, session-agnostic version of the
+built-in skill the agent used, for a person to approve in the core review window (§7.6). What
+it does, what it reads and stores (nothing of the session), its checks and its limits are
+documented where its code lives: `skiller/README.md` in `redamon-plugins`, with its evaluation
+harness in `skiller/eval/`. It uses only generic platform surfaces: `session:read`,
+`llm:invoke`, `override:skill.text`, two items in the chat's gear menu, and the core versions
+window. The base repository holds it only as test data: the `pluginsSkiller.spec.ts` flows
+and their fixtures.
 
 ---
 
