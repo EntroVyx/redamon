@@ -1484,18 +1484,28 @@ networks:
   # `internal`: no route out. `gateway_mode_ipv4: isolated` (Docker Engine >= 28.0.0)
   # removes the bridge's own address on the host, without which a worker reaches every
   # host service listening on all interfaces (experiment E1).
+  # Fixed subnets outside Docker's default pools (172.17-31, 192.168): redamon.sh creates
+  # these two before the core `up`, and left to Docker they took the first free /16s
+  # (172.27, 172.28), so the core networks pinned to 172.28/172.29 failed with "Pool
+  # overlaps". Internal-only, so a host route to the same range changes nothing.
   plugins-net:
     name: redamon-plugins-net
     driver: bridge
     internal: true
     driver_opts:
       com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 10.213.80.0/24
   plugins-edge:
     name: redamon-plugins-edge
     driver: bridge
     internal: true
     driver_opts:
       com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 10.213.81.0/24
 
 # =============================================================================
 # Volumes

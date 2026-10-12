@@ -79,6 +79,36 @@ eq "plugins-net has a fixed name" "$(q "$C" "c['networks']['plugins-net']['name'
 eq "plugins-edge has a fixed name" "$(q "$C" "c['networks']['plugins-edge']['name']")" "redamon-plugins-edge"
 
 echo
+echo "== the plugin networks never take a range the core networks are pinned to =="
+# redamon.sh creates the plugin networks before the core `up`. Left to Docker, they took the
+# first free /16s of its default pools (172.27, 172.28) and the core up then failed with
+# "Pool overlaps with other one on this address space": 172.28 is pentest-net's, and
+# redamon-network, pushed up a slot, took orchestrator-net's 172.29.
+subnets() {   # <json> <network>: its fixed subnets, one per line
+    q "$1" "'\n'.join(x.get('subnet','') for x in (c['networks']['$2'].get('ipam') or {}).get('config') or [])"
+}
+OVERLAPS='
+import ipaddress, json, sys
+c = json.load(sys.stdin)
+fixed = {n: [ipaddress.ip_network(x["subnet"]) for x in (v.get("ipam") or {}).get("config") or [] if x.get("subnet")]
+         for n, v in c.get("networks", {}).items()}
+auto = [ipaddress.ip_network(p) for p in ("172.17.0.0/16", "172.18.0.0/15", "172.20.0.0/14", "172.24.0.0/14",
+                                          "172.28.0.0/14", "192.168.0.0/16")]
+out = []
+for n in ("plugins-net", "plugins-edge"):
+    for a in fixed.get(n, []):
+        out += [f"{n} {a} overlaps {m} {b}" for m, nets in fixed.items() if m != n for b in nets if a.overlaps(b)]
+        out += [f"{n} {a} is inside a Docker default pool ({p})" for p in auto if a.overlaps(p)]
+print("\n".join(sorted(set(out))) or "none")
+'
+for net in plugins-net plugins-edge; do
+    [[ -n "$(subnets "$C" "$net")" ]] && ok "$net has a fixed subnet ($(subnets "$C" "$net"))" \
+        || bad "$net has a fixed subnet" "none (Docker picks one)" "an explicit ipam subnet"
+done
+eq "no plugin subnet overlaps another fixed subnet or Docker's default pools" \
+   "$(python3 -c "$OVERLAPS" <<<"$C")" "none"
+
+echo
 echo "== a .env copied from .env.example =="
 # Every compose command reads the whole file, profiles or not: one value compose cannot
 # use breaks `up` for every operator who copied the example.
