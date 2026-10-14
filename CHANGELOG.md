@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Replace and remove a project's Rules of Engagement after it is created.** The upload is no longer limited to the creation form: an existing project takes a document from its Engagement Record tab or from the graph dashboard's **RoE** tab (**Upload RoE**, then **Replace RoE** and **Remove**). A new document replaces the old one rather than merging with it. The engagement record is replaced as a whole. A setting only the previous document set goes back to its value from before any document, unless someone changed it since, in which case it is kept and the review says so. Remove is a replace with an empty document. The review groups the rows into set, reset, restored and kept, and marks every row that loosens the engagement **Widens**. Confirming saves at once. Guide: the wiki's Rules of Engagement page.
+- **RoE history.** A replaced or removed document is kept, the ten newest per project, with when it was applied and why it was superseded. **History** in the project form lists them and downloads any of them, and they travel with a project export and import.
+- **Scans record the RoE they ran under.** Each scan job stores the SHA-256 of the RoE text it started with. `preflight_scope_check` reports `lastRun.roeChangedSince`, and a pentest report names the current document and warns when it was applied after the newest scan in the report.
+- **A RoE parse survives leaving the page.** The review waits for you when you switch tabs or leave the RoE page while the model reads, and a notification says when it is ready. Closing the browser tab mid-parse asks first.
+
+### Changed
+
+- **The RoE document limit is 9 MB** (was 20 MB), under the 10 MB request limit that silently truncated larger uploads; a PDF may have up to 200 pages. `.pdf`, `.docx`, `.txt` and `.md` are still accepted.
+- **The engagement record is changed only by a document after creation.** Its fields stay read-only in the project form, and replacing or removing the document is how they change.
+- **Load Preset** fetches the preset first, then asks, listing the settings a RoE document set that it would overwrite, and saves against the project's version, so it can no longer silently undo a replace made in another tab.
+- **A widening RoE replace pauses scheduled scans**, all of them, and a narrower window or end date pauses the ones it would make fail. The review lists them before you confirm. Queued jobs whose settings changed are held for re-confirmation as before, and the result says how many.
+- **Re-confirming an AI Gauntlet job held after a settings change asks for RoE confirmation again**, instead of restarting with the confirmation the job carried from before the change.
+- The graph toolbar's **Limits** badge updates right after a replace, and an MCP drift report no longer counts a replaced RoE as legacy drift.
+
+### Fixed
+
+- **A slow RoE parse fails with a clear message.** The agent stops a model call at 270 seconds and answers `agent_timeout`, and the webapp waits for that answer instead of dropping the request first; the agent log says whether the model answered or failed.
+
+### Security
+
+- **A RoE document is untrusted configuration.** A parsed document may never set the target, the agent's system prompts, LHOST/LPORT and other callback hosts, the models, repositories or credentials (`roe_parse: deny`, left out of the parse catalogue). It may set the approval and confirmation gates, the guardrail, tunnels, Kali installs and the post-exploitation phase only to their safe value (`tighten_only`). The server rebuilds the stored parse itself and re-checks a stored or imported one against today's registry, so a planted `applied.targetDomain` is dropped. A replace is recomputed on the server and must equal what the person confirmed.
+- **The document's text never reaches the agent's prompt.** Its terms reach the agent only through validated settings; the notes and incident procedure are quoted at the end of the prompt, capped at 2,000 characters each, as client text that cannot change scope, tools, approvals or phases.
+- **Documents are parsed in isolation.** Text extraction runs in a child process with no secrets in its environment, a 256 MB heap, code generation from strings disabled and a 30-second kill. A DOCX must prove it inflates to at most 50 MB before it is parsed. `pdf-parse` is replaced by a pinned `pdfjs-dist` with eval and font loading off.
+- **RoE downloads are the owner's.** The current document and every superseded one download only for the project's owner (404 for anyone else), with the media type from an allowlist and `nosniff`. Parsing, replacing and removing a RoE require the same origin. Every parse, replace, remove and download is audited (`roe.parse`, `project.roe.replace`, `project.roe.remove`, `project.roe.download`) with digests, never the document's text or contacts.
+- **Changing a RoE fails closed.** A replace or remove is refused while a scan of the project runs (or when that cannot be checked), when the project changed since the review, and on a third-party engagement when it widens the terms without an authorization for the new document or leaves no rate ceiling.
+
+### Upgrade notes
+
+- **Rebuild the webapp and the agent together** (`./redamon.sh update` does). The parse route refuses an agent built from a different settings registry, with `agent_registry_outdated`, because the two must agree on what a document may set. The database gains the `RoeDocumentRevision` table and the `ScanJob.roeTextSha256` column on the webapp's next start.
+- **The agent does not yet enforce forbidden tools, categories, the phase cap or the allow flags unless a rate ceiling, an excluded host or a scanning window is set.** This predates the change; the review and the RoE tab now say so when a document sets those rules alone.
+
 ## [7.0.0] - 2026-10-12
 
 ### Added
