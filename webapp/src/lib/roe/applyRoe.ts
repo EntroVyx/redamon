@@ -28,6 +28,7 @@ import { validateValue } from '@/lib/reconSettings/validators'
 import { describeAffectedSchedules, countQueuedJobsNeedingReview } from '@/lib/mcp/writeTools'
 import type { EffectiveUser } from '@/lib/session'
 import { actingAdminId } from './actor'
+import { cleanRoeFileName as cleanFileName } from './createRoe'
 import { agentEnforcementWarning } from './agentWarning'
 import { sha256Hex, type ExtractedDocument } from './extractText'
 import { canonicalMimeType, MAX_MODEL_CHARS, type RoeFileKind } from './limits'
@@ -80,13 +81,6 @@ export const STALE_ROE_MESSAGE =
   'The project changed while you were reviewing this RoE. Nothing was written; the review has been rebuilt against the current project.'
 
 class StaleRow extends Error {}
-
-/** A stored filename, kept readable and bounded: it reaches headers and the report. */
-function cleanFileName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  const clean = name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 255)
-  return clean || 'roe-document'
-}
 
 export async function applyRoe(input: ApplyRoeInput): Promise<NextResponse> {
   const started = Date.now()

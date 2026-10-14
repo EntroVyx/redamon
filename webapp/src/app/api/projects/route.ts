@@ -8,6 +8,12 @@ import { requireEffectiveUser, ownerScope } from '@/lib/access'
 import { validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
 import { normalizeUserSkillToggles, UserSkillError } from '@/lib/userSkills'
 import { validateDomainBatch, splitWildcard } from '@/lib/domainBatch'
+import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
+import { actingAdminId } from '@/lib/roe/actor'
+import { buildCreateRoeArtefacts, stripRoeArtefacts } from '@/lib/roe/createRoe'
+import { extractRoeText, ExtractError, type ExtractedDocument } from '@/lib/roe/extractText'
+import { ALLOWED_EXTENSIONS_LABEL, MAX_FILE_SIZE, classifyRoeFile, type RoeFileKind } from '@/lib/roe/limits'
+import { contentLengthProblem } from '@/lib/roe/upload'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || 'http://localhost:8080'
 
@@ -61,23 +67,38 @@ export async function POST(request: NextRequest) {
     if (eff instanceof NextResponse) return eff
 
     let body: Record<string, unknown>
-    let roeFileBuffer: Buffer | null = null
-    let roeFileName = ''
-    let roeFileMimeType = ''
+    let roeFile: { name: string; kind: RoeFileKind; bytes: Buffer } | null = null
+    let roeDoc: ExtractedDocument | null = null
 
     const contentType = request.headers.get('content-type') || ''
 
     if (contentType.includes('multipart/form-data')) {
+      // The multipart create carries the RoE document: the same origin check and
+      // size limit as the RoE routes, checked before the body is parsed.
+      if (!sameOrigin(request)) return crossOriginResponse()
+      const lengthProblem = contentLengthProblem(request)
+      if (lengthProblem) return lengthProblem
       const formData = await request.formData()
       const jsonStr = formData.get('data') as string
       body = JSON.parse(jsonStr)
 
-      const file = formData.get('roeDocument') as File | null
-      if (file) {
-        const arrayBuffer = await file.arrayBuffer()
-        roeFileBuffer = Buffer.from(arrayBuffer)
-        roeFileName = file.name
-        roeFileMimeType = file.type || 'application/octet-stream'
+      const file = formData.get('roeDocument')
+      if (file instanceof File) {
+        const kind = classifyRoeFile(file.name, file.type)
+        if (!kind) {
+          return NextResponse.json({ error: `Unsupported RoE file type. Use ${ALLOWED_EXTENSIONS_LABEL}.` }, { status: 400 })
+        }
+        if (file.size > MAX_FILE_SIZE) {
+          return NextResponse.json({ error: `The RoE file is larger than ${MAX_FILE_SIZE / 1024 / 1024} MB.` }, { status: 413 })
+        }
+        roeFile = { name: file.name, kind, bytes: Buffer.from(await file.arrayBuffer()) }
+        // The stored text is the server's own extraction, never the client's copy.
+        try {
+          roeDoc = await extractRoeText(roeFile.bytes, kind)
+        } catch (e) {
+          if (e instanceof ExtractError) return NextResponse.json({ error: e.message, code: e.code }, { status: e.status })
+          throw e
+        }
       }
     } else {
       body = await request.json()
@@ -206,13 +227,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Attach RoE document binary if uploaded
-    if (roeFileBuffer) {
-      optionalParams.roeDocumentData = roeFileBuffer
-      optionalParams.roeDocumentName = roeFileName
-      optionalParams.roeDocumentMimeType = roeFileMimeType
-    }
-
     // Sanitize array fields - LLM parsing may return strings instead of arrays
     // String[] fields: split comma-separated strings into arrays
     const STRING_ARRAY_FIELDS = [
@@ -316,6 +330,21 @@ export async function POST(request: NextRequest) {
         if (e instanceof UserSkillError) return NextResponse.json({ error: e.message, code: e.code }, { status: 400 })
         throw e
       }
+    }
+
+    // The document's artefacts come from the server, never from the body: the
+    // text is the extraction above, and the parse is rebuilt from the confirmed
+    // keys a document may write. A create without a document stores none.
+    const clientRoeParsed = sanitizedParams.roeParsedJson
+    stripRoeArtefacts(sanitizedParams)
+    if (roeFile && roeDoc) {
+      Object.assign(sanitizedParams, buildCreateRoeArtefacts({
+        doc: roeDoc,
+        file: roeFile,
+        clientParsed: clientRoeParsed,
+        appliedById: userId,
+        actingAdminId: await actingAdminId(eff),
+      }))
     }
 
     // A new project starts with every engine on the LLM, so any Jev flag in the

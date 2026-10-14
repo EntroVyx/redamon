@@ -22,6 +22,7 @@ import {
 } from '@/lib/reconPresets/server'
 import { MUTEABLE_FINDING_LABELS } from '@/lib/mcp/findingLabels'
 import { pickProjectColumns } from '@/lib/projectColumns'
+import { sanitizeImportedRoeParsedJson } from '@/lib/roe/createRoe'
 import { jevImportWarnings } from '@/lib/reconSettings/jevEngine'
 import { PROJECT_EXPORT_EXCLUDED, isPluginArchivePath } from '@/lib/projectExport/pluginExclusion'
 import { validateSerializedScanChange } from '@/lib/reconSettings/serializedScanGate'
@@ -238,6 +239,16 @@ export async function POST(request: NextRequest) {
     // Restore binary RoE document from base64 encoding
     if (roeDocumentDataBase64 && typeof roeDocumentDataBase64 === 'string') {
       projectFields.roeDocumentData = Buffer.from(roeDocumentDataBase64, 'base64')
+    }
+    // The stored parse is what the next RoE replace believes the previous
+    // document set, so a bundle may not plant keys in it.
+    if ('roeParsedJson' in projectFields) {
+      const sanitized = sanitizeImportedRoeParsedJson(projectFields.roeParsedJson, {
+        roeRawText: projectFields.roeRawText,
+        roeDocumentData: projectFields.roeDocumentData as Uint8Array | null | undefined,
+      })
+      if (sanitized) projectFields.roeParsedJson = sanitized
+      else delete projectFields.roeParsedJson
     }
 
     // Import is a SECOND creation path, and it has to apply the same rule
