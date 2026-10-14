@@ -25,6 +25,8 @@ import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { useDetectedHostIp } from '@/hooks/useDetectedHostIp'
 import { useAlertModal, useToast, WikiInfoButton } from '@/components/ui'
 import { deepEqual } from '@/lib/deepEqual'
+import { clearRoeEntry, roeEntryBusy, useRoeEntry } from '@/components/roe/roeParseStore'
+import { mergeServerRow } from '@/components/roe/mergeServerRow'
 import { postUserSkillsChanged, useUserSkillsChanged } from '@/lib/userSkillsChannel'
 import type { PartialReconParams, PartialReconState } from '@/lib/recon-types'
 import { PARTIAL_RECON_PHASE_MAP } from '@/lib/recon-types'
@@ -175,9 +177,16 @@ type PresetSource =
   | { kind: 'builtin'; preset: ReconPreset }
   | { kind: 'user'; id: string; name: string }
 
-function PresetLoadWarning({ saves }: { saves: boolean }) {
+function PresetLoadWarning({ saves, documentKeys = [] }: { saves: boolean; documentKeys?: string[] }) {
   return (
     <>
+      {documentKeys.length > 0 && (
+        <p>
+          <strong>It also changes {documentKeys.length} setting{documentKeys.length === 1 ? '' : 's'} the Rules of
+          Engagement document set:</strong> <code>{documentKeys.join(', ')}</code>. Replacing or removing the
+          document later keeps these as the preset leaves them.
+        </p>
+      )}
       <p>
         The current project settings will be <strong>discarded</strong> and replaced with the
         preset&apos;s. Every setting the preset does not define goes back to its default.
@@ -316,7 +325,12 @@ export function ProjectForm({
   // unsaved-changes guard. Applying a preset mutates formData, so it naturally
   // marks the form dirty -- fixing the "preset applied but never saved" footgun.
   const { isDirty, baseline, setBaseline } = useDirtyState(formData)
-  const { guardedNavigate } = useUnsavedChangesGuard(isDirty)
+  // A RoE parse in flight, or a review not yet confirmed, is unsaved work too.
+  const savedProjectId = mode === 'edit'
+    ? projectIdFromRoute ?? (initialData as { id?: string } | undefined)?.id
+    : undefined
+  const roeEntry = useRoeEntry(savedProjectId ?? 'create')
+  const { guardedNavigate } = useUnsavedChangesGuard(isDirty || roeEntryBusy(roeEntry))
 
   // The loaded preset's name, while the settings still match it. Edit mode reads
   // the SAVED state, so an edit only hides it once Update Settings writes it; a
@@ -366,6 +380,13 @@ export function ProjectForm({
 
   // RoE document file (held in memory until project creation)
   const [roeFile, setRoeFile] = useState<File | null>(null)
+  // A create form owns the 'create' RoE entry: a review left by an earlier
+  // create form belongs to a file that form no longer holds.
+  useEffect(() => {
+    if (mode !== 'create') return
+    clearRoeEntry('create')
+    return () => clearRoeEntry('create')
+  }, [mode])
 
   // GitHub Access Token check (stored in Global Settings, not project)
   const { userId } = useProject()
@@ -641,6 +662,33 @@ export function ProjectForm({
     setFormData(prev => ({ ...prev, ...fields }))
   }
 
+  // Fields edited and not yet saved, so a RoE replace that overwrites one can say so.
+  const unsavedKeys = useMemo(() => {
+    const now = formData as unknown as Record<string, unknown>
+    const saved = baseline as unknown as Record<string, unknown>
+    return Object.keys(now).filter(k => !deepEqual(now[k], saved[k]))
+  }, [formData, baseline])
+
+  /**
+   * Take the row the RoE route saved (mergeServerRow), so the next "Update
+   * Settings" does not PUT the pre-replace values back.
+   */
+  const baselineRef = useRef(baseline)
+  baselineRef.current = baseline
+  const formDataNowRef = useRef(formData)
+  formDataNowRef.current = formData
+  const onServerRowMerged = useCallback((row: Record<string, unknown>, changedKeys: string[]) => {
+    const merged = mergeServerRow(
+      formDataNowRef.current as unknown as Record<string, unknown>,
+      baselineRef.current as unknown as Record<string, unknown>,
+      row,
+      changedKeys,
+    )
+    setFormData(merged.form as unknown as ProjectFormData)
+    setBaseline(merged.baseline as unknown as ProjectFormData)
+    adoptSavedVersion(row)
+  }, [setBaseline, adoptSavedVersion])
+
   /**
    * Load a preset: confirm, replace every preset-owned setting, and in edit mode
    * save straight away so the project never sits on a loaded-but-unsaved preset.
@@ -655,13 +703,9 @@ export function ProjectForm({
   const loadPreset = async (source: PresetSource): Promise<void> => {
     const presetName = source.kind === 'builtin' ? source.preset.name : source.name
     const saves = mode === 'edit' && Boolean(projectId)
-    const ask = saves ? dangerConfirm : confirmModal
-    const confirmed = await ask(<PresetLoadWarning saves={saves} />, `Load preset "${presetName}"?`, {
-      confirmLabel: saves ? 'Replace and save' : 'Replace settings',
-      size: 'default',
-    })
-    if (!confirmed) return
 
+    // Fetched BEFORE the confirmation, so it can name the settings the RoE
+    // document set that this preset would change.
     let presetSettings: Record<string, unknown>
     let backendDefaults: Record<string, unknown>
     try {
@@ -687,6 +731,19 @@ export function ProjectForm({
       presetSettings,
       backendDefaults,
     ) as unknown as ProjectFormData
+
+    const roeApplied = (formData.roeParsedJson && typeof formData.roeParsedJson === 'object'
+      ? (formData.roeParsedJson as { applied?: unknown }).applied
+      : null) as Record<string, unknown> | null
+    const documentKeys = Object.keys(roeApplied && typeof roeApplied === 'object' ? roeApplied : {})
+      .filter(k => !deepEqual((next as unknown as Record<string, unknown>)[k], (formData as unknown as Record<string, unknown>)[k]))
+      .sort()
+    const ask = saves ? dangerConfirm : confirmModal
+    const confirmed = await ask(<PresetLoadWarning saves={saves} documentKeys={documentKeys} />, `Load preset "${presetName}"?`, {
+      confirmLabel: saves ? 'Replace and save' : 'Replace settings',
+      size: 'default',
+    })
+    if (!confirmed) return
 
     if (source.kind === 'builtin') {
       // A built-in preset declares the kind of target it is for, and that is the
@@ -725,6 +782,9 @@ export function ProjectForm({
       ...pickPresetFields(next as unknown as Record<string, unknown>),
       loadedPreset,
     }
+    // A compare-and-swap like a whole-row save: a RoE replaced or an MCP write
+    // made in another tab since this form loaded is refused (409), not reverted.
+    const versioned = savedVersionRef.current ? { ...saved, updatedAt: savedVersionRef.current } : saved
     const invalid = validateProjectForm(next as unknown as Record<string, unknown>)
       .filter(e => e.field in saved)
     if (invalid.length > 0) {
@@ -736,7 +796,7 @@ export function ProjectForm({
       return
     }
     try {
-      adoptSavedVersion(await presetSaveMutation.mutateAsync({ projectId, data: saved as Partial<Project> }))
+      adoptSavedVersion(await presetSaveMutation.mutateAsync({ projectId, data: versioned as Partial<Project> }))
       setBaseline(prev => ({ ...prev, ...saved }) as ProjectFormData)
       toast.success(`Preset "${presetName}" loaded and saved`, 'Preset Loaded')
     } catch (error) {
@@ -1216,6 +1276,7 @@ export function ProjectForm({
                 onRunPartial={(toolId) => setPartialReconToolId(toolId)}
                 runningPartialToolIds={runningPartialToolIds}
                 onAutoSaveField={autoSaveField}
+                onOpenRoe={() => setActiveTab('roe' as TabId)}
               />
             )}
 
@@ -1227,6 +1288,9 @@ export function ProjectForm({
             updateMultipleFields={updateMultipleFields}
             mode={mode}
             onFileSelected={setRoeFile}
+            projectId={mode === 'edit' ? projectId : undefined}
+            onServerRowMerged={onServerRowMerged}
+            unsavedKeys={unsavedKeys}
           />
         )}
 

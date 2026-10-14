@@ -17,10 +17,17 @@
 import { describe, test, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
 import { RoeViewer } from './RoeViewer'
+import { ToastProvider } from '@/components/ui'
 import { fieldsWhere } from '@/lib/reconSettings/registry'
 
 vi.mock('./AuthorizationHistory', () => ({ AuthorizationHistory: () => null }))
+// The panel refreshes the toolbar's project after a RoE replace.
+vi.mock('@/providers/ProjectProvider', () => ({
+  useProject: () => ({ currentProject: null, setCurrentProject: () => {}, userId: null }),
+}))
 
 afterEach(cleanup)
 
@@ -48,7 +55,11 @@ const LIMITED = {
 
 function panel(over: Record<string, unknown> = {}) {
   const { container } = render(
-    <RoeViewer projectId="p1" project={{ ...LIMITED, ...over } as never} />
+    <QueryClientProvider client={new QueryClient()}>
+      <ToastProvider>
+        <RoeViewer projectId="p1" project={{ ...LIMITED, ...over } as never} />
+      </ToastProvider>
+    </QueryClientProvider>
   )
   return container.textContent ?? ''
 }

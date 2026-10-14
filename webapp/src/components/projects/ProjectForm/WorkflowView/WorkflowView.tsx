@@ -33,6 +33,8 @@ interface WorkflowViewProps {
   onRunPartial?: (toolId: string) => void
   runningPartialToolIds?: Set<string>
   onAutoSaveField?: <K extends keyof FormData>(field: K, value: FormData[K]) => void
+  /** Leave the workflow for the RoE tab, from the Target dialog of a new project. */
+  onOpenRoe?: () => void
 }
 
 const nodeTypes = {
@@ -45,7 +47,7 @@ const edgeTypes = {
   custom: CustomEdge,
 }
 
-export function WorkflowView({ formData, updateField, projectId, mode, onSave, onRunPartial, runningPartialToolIds, onAutoSaveField }: WorkflowViewProps) {
+export function WorkflowView({ formData, updateField, projectId, mode, onSave, onRunPartial, runningPartialToolIds, onAutoSaveField, onOpenRoe }: WorkflowViewProps) {
   const [selectedToolId, setSelectedToolId] = useState<string | null>(mode === 'create' ? 'input' : null)
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null)
   const [badgeNodeType, setBadgeNodeType] = useState<string | null>(null)
@@ -307,6 +309,7 @@ export function WorkflowView({ formData, updateField, projectId, mode, onSave, o
         updateField={updateField}
         projectId={projectId}
         mode={mode}
+        onOpenRoe={onOpenRoe}
       />
 
       {badgeNodeType && (

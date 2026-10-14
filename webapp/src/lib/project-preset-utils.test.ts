@@ -756,20 +756,24 @@ describe('ProjectForm: both preset kinds go through loadPreset', () => {
     expect(form.match(/loadPreset\(\{ kind: 'user', \.\.\.preset \}\)/g)).toHaveLength(2)
   })
 
-  test('it confirms first, then applies through applyPresetSettings, then saves', () => {
-    const confirmAt = loadPreset.indexOf('await ask(')
+  test('it computes the preset first, confirms, and only then touches the form or saves', () => {
+    // The preset is fetched and applied to a COPY before the question, so the
+    // question can name the RoE-set settings it would change. Nothing reaches
+    // the form or the server until the person confirms.
     const applyAt = loadPreset.indexOf('applyPresetSettings(')
+    const confirmAt = loadPreset.indexOf('await ask(')
     const setAt = loadPreset.indexOf('setFormData(next)')
     const saveAt = loadPreset.indexOf('presetSaveMutation.mutateAsync')
-    expect(confirmAt).toBeGreaterThan(-1)
-    expect(applyAt).toBeGreaterThan(confirmAt)
-    expect(setAt).toBeGreaterThan(applyAt)
+    expect(applyAt).toBeGreaterThan(-1)
+    expect(confirmAt).toBeGreaterThan(applyAt)
+    expect(setAt).toBeGreaterThan(confirmAt)
     expect(saveAt).toBeGreaterThan(setAt)
   })
 
-  test('it saves only the preset fields, not the whole form', () => {
+  test('it saves only the preset fields, not the whole form, as a compare-and-swap', () => {
     expect(loadPreset).toMatch(/pickPresetFields\(next/)
-    expect(loadPreset).toMatch(/mutateAsync\(\{ projectId, data: saved/)
+    expect(loadPreset).toMatch(/const versioned = savedVersionRef\.current \? \{ \.\.\.saved, updatedAt: savedVersionRef\.current \} : saved/)
+    expect(loadPreset).toMatch(/mutateAsync\(\{ projectId, data: versioned/)
   })
 
   test('it records the loaded preset, and saves that record with the settings', () => {

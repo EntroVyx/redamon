@@ -1,8 +1,19 @@
 'use client'
 
-import { Download, Shield, Clock, Ban, FileText, Users, AlertTriangle, Lock, Globe, FileCheck } from 'lucide-react'
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Download, Shield, Clock, Ban, FileText, Users, AlertTriangle, Lock, Globe, FileCheck, Trash2 } from 'lucide-react'
 import { AuthorizationHistory } from './AuthorizationHistory'
 import { deriveRoeEnabled } from '@/lib/engagement'
+import { agentEnforcementWarning } from '@/lib/roe/agentWarning'
+import { announceProjectWrite } from '@/lib/projectVersion'
+import { useToast } from '@/components/ui'
+import { useProject } from '@/providers/ProjectProvider'
+import { RoeUploadButton } from '@/components/roe/RoeUploadButton'
+import { RoeReviewModal } from '@/components/roe/RoeReviewModal'
+import { downloadRoeFile, reviewRemove } from '@/components/roe/roeClient'
+import { clearRoeEntry, setRoeEntry, useRoeEntry, useRoeMounted } from '@/components/roe/roeParseStore'
+import { roeAppliedSummary } from '@/components/roe/roeAppliedSummary'
 import styles from './RoeViewer.module.css'
 
 /**
@@ -103,6 +114,14 @@ const CATEGORY_LABELS: Record<string, string> = {
 }
 
 export function RoeViewer({ projectId, project }: RoeViewerProps) {
+  const queryClient = useQueryClient()
+  const { currentProject, setCurrentProject } = useProject()
+  const toast = useToast()
+  useRoeMounted(projectId)
+  const entry = useRoeEntry(projectId)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
+
   // Derived: a ceiling, an exclusion list or a window. Never a stored flag, so
   // this panel cannot report limits as active while nothing applies them, nor
   // hide a limit somebody set.
@@ -111,6 +130,55 @@ export function RoeViewer({ projectId, project }: RoeViewerProps) {
     project.roeClientName || project.roeDocumentName || project.roeNotes ||
     project.roeEngagementStartDate || project.roeClientContactName
   )
+  const hasDocument = Boolean(project.roeDocumentName)
+  const stored = (project.roeParsedJson && typeof project.roeParsedJson === 'object' ? project.roeParsedJson : {}) as {
+    applied?: Record<string, unknown>; textSha256?: string; appliedAt?: string
+  }
+  const enforcementWarning = agentEnforcementWarning(Object.keys(stored.applied ?? {}), project)
+
+  const applied = (result: Record<string, unknown>) => {
+    const row = (result.project ?? {}) as Record<string, unknown>
+    void queryClient.invalidateQueries({ queryKey: ['project', projectId] })
+    void queryClient.invalidateQueries({ queryKey: ['projects'] })
+    // The toolbar's Limits badge reads the provider, which no query refreshes.
+    if (currentProject && currentProject.id === projectId) {
+      setCurrentProject({
+        ...currentProject,
+        roeGlobalMaxRps: row.roeGlobalMaxRps as number,
+        roeExcludedHosts: row.roeExcludedHosts as string[],
+        roeTimeWindowEnabled: row.roeTimeWindowEnabled as boolean,
+        updatedAt: row.updatedAt as never,
+      })
+    }
+    announceProjectWrite(projectId, row.updatedAt)
+    clearRoeEntry(projectId)
+    toast.success(roeAppliedSummary(result), 'Rules of Engagement saved')
+  }
+
+  const startRemove = async () => {
+    setActionError(null)
+    setRemoving(true)
+    const review = await reviewRemove(projectId)
+    setRemoving(false)
+    if (!review.ok) setActionError(review.error.error)
+    else setRoeEntry(projectId, { status: 'review', review: review.value, file: null, error: null })
+  }
+
+  const handleDownload = async () => {
+    setActionError(await downloadRoeFile(`/api/projects/${projectId}/roe/download`, project.roeDocumentName || 'roe-document'))
+  }
+
+  const reviewModal = entry.status === 'review' && entry.review ? (
+    <RoeReviewModal
+      review={entry.review}
+      target="existing"
+      projectId={projectId}
+      file={entry.file}
+      onClose={() => clearRoeEntry(projectId)}
+      onApplied={applied}
+      onReviewChanged={review => setRoeEntry(projectId, { review })}
+    />
+  ) : null
 
   if (!limitsActive && !hasRecord) {
     // The thing worth saying out loud is NOT "no document": it is that this
@@ -132,17 +200,18 @@ export function RoeViewer({ projectId, project }: RoeViewerProps) {
             </p>
             <p className={styles.hint}>
               Set a ceiling, exclude a host or restrict the window in the project&apos;s
-              Target &amp; Modules settings, or upload a Rules of Engagement document when
-              creating a project.
+              Target &amp; Modules settings, or upload a Rules of Engagement document: it is read
+              into a proposed set of changes you review before anything applies.
             </p>
+            <div className={styles.emptyUpload}>
+              <RoeUploadButton storeKey={projectId} projectId={projectId} hasDocument={false} />
+            </div>
+            {actionError && <p className={styles.actionError} role="alert">{actionError}</p>}
           </div>
         </div>
+        {reviewModal}
       </div>
     )
-  }
-
-  const handleDownload = () => {
-    window.open(`/api/projects/${projectId}/roe/download`, '_blank')
   }
 
   // Time window status
@@ -204,13 +273,29 @@ export function RoeViewer({ projectId, project }: RoeViewerProps) {
               : 'No limits are active: nothing below constrains a scan.'}
           </span>
         </div>
-        {project.roeDocumentName && (
-          <button className={styles.downloadBtn} onClick={handleDownload}>
-            <Download size={14} />
-            {project.roeDocumentName}
-          </button>
-        )}
+        <div className={styles.headerActions}>
+          <RoeUploadButton storeKey={projectId} projectId={projectId} hasDocument={hasDocument} showModelLine={false} compact />
+          {hasDocument && (
+            <button type="button" className="secondaryButton" onClick={startRemove} disabled={removing || entry.status !== 'idle' && entry.status !== 'error'}>
+              <Trash2 size={14} />
+              {removing ? 'Preparing…' : 'Remove'}
+            </button>
+          )}
+          {hasDocument && (
+            <button className={styles.downloadBtn} onClick={handleDownload} title={project.roeDocumentName}>
+              <Download size={14} />
+              <span className={styles.docName}>{project.roeDocumentName}</span>
+            </button>
+          )}
+        </div>
       </div>
+      {actionError && <p className={styles.actionError} role="alert">{actionError}</p>}
+      {enforcementWarning && (
+        <div className={styles.enforcementBanner} role="status">
+          <AlertTriangle size={15} />
+          <span>{enforcementWarning}</span>
+        </div>
+      )}
 
       <div className={styles.grid}>
         {/* Engagement Info */}
@@ -260,6 +345,7 @@ export function RoeViewer({ projectId, project }: RoeViewerProps) {
           <AuthorizationHistory
             projectId={projectId}
             engagementKind={project.engagementKind}
+            currentDocumentSha256={typeof stored.textSha256 === 'string' ? stored.textSha256 : null}
           />
         </Section>
 
@@ -442,6 +528,7 @@ export function RoeViewer({ projectId, project }: RoeViewerProps) {
         )}
       </div>
       </div>
+      {reviewModal}
     </div>
   )
 }

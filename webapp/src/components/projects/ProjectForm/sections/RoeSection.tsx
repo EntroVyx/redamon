@@ -1,13 +1,17 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { ChevronDown, Shield, Upload, Loader2, AlertTriangle, CheckCircle } from 'lucide-react'
-import { WikiInfoButton } from '@/components/ui'
-import { Modal } from '@/components/ui/Modal/Modal'
+import { useState } from 'react'
+import { ChevronDown, Shield } from 'lucide-react'
+import { WikiInfoButton, useToast } from '@/components/ui'
 import type { Project } from '@prisma/client'
-import { currentValuesForDiff, type ParseProposal } from '@/lib/reconSettings/roeParse'
-import { FeatureModelLine, useFeatureModelGate } from '@/components/shared/FeatureModelGate'
-import { featureModelMessage, readFeatureModelCode } from '@/lib/llmFeatures'
+import { currentValuesForDiff, type ParseChange } from '@/lib/reconSettings/roeParse'
+import { announceProjectWrite } from '@/lib/projectVersion'
+import { RoeUploadButton } from '@/components/roe/RoeUploadButton'
+import { RoeReviewModal } from '@/components/roe/RoeReviewModal'
+import { RoeCurrentDocument } from '@/components/roe/RoeCurrentDocument'
+import { reviewRemove } from '@/components/roe/roeClient'
+import { clearRoeEntry, setRoeEntry, useRoeEntry, useRoeMounted } from '@/components/roe/roeParseStore'
+import { roeAppliedSummary } from '@/components/roe/roeAppliedSummary'
 import styles from '../ProjectForm.module.css'
 
 type ProjectFormData = Omit<Project, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'user'>
@@ -18,6 +22,12 @@ interface RoeSectionProps {
   updateMultipleFields: (fields: Partial<ProjectFormData>) => void
   mode: 'create' | 'edit'
   onFileSelected: (file: File | null) => void
+  /** The saved project, in edit mode: a confirmed RoE saves at once through its own route. */
+  projectId?: string
+  /** Merge the row the RoE route returned into the form and its baseline. */
+  onServerRowMerged?: (row: Record<string, unknown>, changedKeys: string[]) => void
+  /** Form fields edited and not yet saved, so a replace that overwrites one says so. */
+  unsavedKeys?: string[]
 }
 
 const ENGAGEMENT_TYPES = [
@@ -40,15 +50,6 @@ const DATA_HANDLING_OPTIONS = [
 
 const COMPLIANCE_OPTIONS = ['PCI-DSS', 'HIPAA', 'SOC2', 'GDPR', 'ISO27001']
 
-/** One proposed value, short enough to read in a diff row. */
-function preview(value: unknown): string {
-  if (value === null || value === undefined) return '—'
-  if (Array.isArray(value)) return value.length === 0 ? '(empty)' : value.join(', ').slice(0, 160)
-  if (typeof value === 'object') return JSON.stringify(value).slice(0, 160)
-  const text = String(value)
-  return text === '' ? '(empty)' : text.slice(0, 160)
-}
-
 /**
  * The engagement RECORD: who the client is, who to call, what the document said.
  *
@@ -63,76 +64,69 @@ function preview(value: unknown): string {
  * nothing in the pipeline enforces it - which is exactly why the MCP surface
  * never touches it and why it carries third-party personal data.
  */
-export function RoeSection({ data, updateField, updateMultipleFields, mode, onFileSelected }: RoeSectionProps) {
+export function RoeSection({
+  data, updateField, updateMultipleFields, mode, onFileSelected, projectId, onServerRowMerged, unsavedKeys,
+}: RoeSectionProps) {
   const [isOpen, setIsOpen] = useState(true)
-  const [isParsing, setIsParsing] = useState(false)
-  const [parseError, setParseError] = useState<string | null>(null)
-  const [proposal, setProposal] = useState<(ParseProposal & { roeRawText?: string }) | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const { ensureFeatureModel, fetchWithFeatureModel } = useFeatureModelGate()
+  const [removing, setRemoving] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const toast = useToast()
 
   const readOnly = mode === 'edit'
+  // A saved project replaces its RoE through the RoE route; a project being
+  // created carries the document with its create request.
+  const existing = mode === 'edit' && Boolean(projectId)
+  const storeKey = existing ? projectId! : 'create'
+  useRoeMounted(storeKey)
+  const entry = useRoeEntry(storeKey)
+  const stored = (data.roeParsedJson && typeof data.roeParsedJson === 'object' ? data.roeParsedJson : {}) as Record<string, unknown>
+  const hasDocument = Boolean(data.roeDocumentName || data.roeRawText)
 
-  const handleFileUpload = async (file: File) => {
-    setParseError(null)
-    // The document is read by the user's own "RoE parsing" model, which the
-    // route looks up itself; picking one here only makes sure there is one.
-    if (!(await ensureFeatureModel('roe_parse'))) return
-    setIsParsing(true)
-    onFileSelected(file)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      // The present values, so what comes back is a DIFF rather than a list of
-      // assignments: a parsed value equal to what is already set is not a
-      // change. Narrowed to the fields a document could propose - the form's
-      // data also holds stored credentials, and a value that does not need to
-      // travel should not travel.
-      formData.append('current', JSON.stringify(currentValuesForDiff(data as never)))
-
-      const response = await fetchWithFeatureModel('roe_parse', () => fetch('/api/roe/parse', {
-        method: 'POST',
-        body: formData,
-      }))
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}))
-        const code = readFeatureModelCode(err)
-        throw new Error(code
-          ? featureModelMessage(code, typeof err.model === 'string' ? err.model : undefined)
-          : err.error || `Parse failed (${response.status})`)
-      }
-
-      // A PROPOSAL, not a write. There is no field map here and there must never
-      // be one again: the route writes whatever the registry marks writable and
-      // validates every value through the same bounds an MCP write goes through,
-      // so field names live in exactly one place. This component copies what it
-      // is handed and shows it to a person first.
-      setProposal(await response.json())
-    } catch (err) {
-      setParseError(err instanceof Error ? err.message : 'Failed to parse document')
-    } finally {
-      setIsParsing(false)
-    }
-  }
-
-  const applyProposal = () => {
-    if (!proposal) return
+  // A project being created: the review fills the form, and the file goes with
+  // the create. The server rebuilds the stored parse from these confirmed keys
+  // and extracts the text itself; nothing here is trusted as sent.
+  const applyProposal = (proposal: { changes: ParseChange[] } & Record<string, unknown>) => {
     const updates: Record<string, unknown> = {}
     for (const change of proposal.changes) updates[change.key] = change.after
-    if (proposal.roeRawText) updates.roeRawText = proposal.roeRawText
-    // What the document actually produced, kept on the record so the report can
-    // say which settings came from it rather than from a person. Stored as the
-    // CONFIRMED set, not the raw model output: a value somebody declined is not
-    // something the document configured.
     updates.roeParsedJson = {
       applied: Object.fromEntries(proposal.changes.map(c => [c.key, c.after])),
+      // The pre-document values, so removing or replacing the document later
+      // can restore them.
+      before: Object.fromEntries(proposal.changes.map(c => [c.key, (data as Record<string, unknown>)[c.key]])),
       rejected: proposal.rejected,
       ignored: proposal.ignored,
+      unknownKeys: proposal.unknownKeys,
+      modelUsed: proposal.modelUsed,
     }
     updateMultipleFields(updates as Partial<ProjectFormData>)
-    setProposal(null)
+    clearRoeEntry(storeKey)
+  }
+
+  const discard = () => {
+    if (!existing) onFileSelected(null)
+    clearRoeEntry(storeKey)
+  }
+
+  const applied = (result: Record<string, unknown>) => {
+    const row = (result.project ?? {}) as Record<string, unknown>
+    const changed = Array.isArray(result.changed) ? result.changed as string[] : []
+    onServerRowMerged?.(row, changed)
+    announceProjectWrite(projectId, row.updatedAt)
+    clearRoeEntry(storeKey)
+    toast.success(roeAppliedSummary(result), 'Rules of Engagement saved')
+  }
+
+  const startRemove = async () => {
+    if (!projectId) return
+    setRemoveError(null)
+    setRemoving(true)
+    const review = await reviewRemove(projectId)
+    setRemoving(false)
+    if (!review.ok) {
+      setRemoveError(review.error.error)
+      return
+    }
+    setRoeEntry(storeKey, { status: 'review', review: review.value, file: null, error: null })
   }
 
   const toggleCompliance = (fw: string) => {
@@ -161,62 +155,36 @@ export function RoeSection({ data, updateField, updateMultipleFields, mode, onFi
 
       {isOpen && (
         <div className={styles.sectionContent}>
-          {/* Document Upload (create mode only) */}
-          {mode === 'create' && (
-            <div className={styles.subSection}>
-              <h3 className={styles.subSectionTitle}>Upload RoE Document</h3>
-              <p className={styles.sectionDescription}>
-                Upload a Rules of Engagement document (.pdf, .txt, .md, .docx). It is read and
-                turned into a <strong>proposed</strong> set of changes across the whole form:
-                this record, the engagement&apos;s limits in Target &amp; Modules, and any tool
-                the document constrains. Nothing is applied until you review the diff.
-              </p>
-              <div className={styles.fieldRow}>
-                <div className={styles.fieldGroup}>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".pdf,.txt,.md,.docx"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      // Cleared so choosing the same file again, after a
-                      // cancelled model prompt or a failed parse, fires again.
-                      e.target.value = ''
-                      if (file) handleFileUpload(file)
-                    }}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="secondaryButton"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isParsing}
-                      style={{ width: 'fit-content' }}
-                    >
-                      {isParsing ? (
-                        <>
-                          <Loader2 size={14} className={styles.spinner} />
-                          Parsing RoE document...
-                        </>
-                      ) : (
-                        <>
-                          <Upload size={14} />
-                          Upload &amp; Parse Document
-                        </>
-                      )}
-                    </button>
-                    <FeatureModelLine featureId="roe_parse" />
-                  </div>
-                  {parseError && (
-                    <span style={{ color: 'var(--color-error)', fontSize: '0.8rem', marginTop: 4 }}>
-                      {parseError}
-                    </span>
-                  )}
-                </div>
+          {/* The document: upload on a new project, replace or remove on a saved one. */}
+          <div className={styles.subSection}>
+            <h3 className={styles.subSectionTitle}>Rules of Engagement document</h3>
+            <p className={styles.sectionDescription}>
+              Upload a Rules of Engagement document. It is read and turned into a{' '}
+              <strong>proposed</strong> set of changes across the whole form: this record, the
+              engagement&apos;s limits in Target &amp; Modules, and any tool the document constrains.
+              Nothing is applied until you review the diff.
+              {existing && ' A new document replaces the current one and undoes what it changed.'}
+            </p>
+            {existing && hasDocument && (
+              <div style={{ marginBottom: 10 }}>
+                <RoeCurrentDocument
+                  projectId={projectId!}
+                  documentName={data.roeDocumentName || 'roe-document'}
+                  appliedAt={typeof stored.appliedAt === 'string' ? stored.appliedAt : null}
+                  onRemove={startRemove}
+                  removing={removing}
+                />
+                {removeError && <span role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8rem' }}>{removeError}</span>}
               </div>
-            </div>
-          )}
+            )}
+            <RoeUploadButton
+              storeKey={storeKey}
+              projectId={existing ? projectId : null}
+              hasDocument={hasDocument}
+              currentForDiff={existing ? undefined : () => currentValuesForDiff(data as never)}
+              onFileSelected={file => { if (!existing) onFileSelected(file) }}
+            />
+          </div>
 
           {/* Engagement kind: who the target belongs to, and therefore what has
               to be true before a scan may start. Create-time only, for the same
@@ -477,105 +445,20 @@ export function RoeSection({ data, updateField, updateMultipleFields, mode, onFi
       )}
     </div>
 
-    {/* The parse result is a PROPOSAL. A document is a third party's text and an
-        LLM reading it is not a sanitiser, so what it produces is a diff a person
-        confirms rather than a write. Values the validators refused are shown
-        here rather than dropped: silently discarding one is how somebody
-        believes a document applied when part of it did not. */}
-    <Modal
-      isOpen={proposal !== null}
-      onClose={() => setProposal(null)}
-      title="Review what this document would change"
-      size="large"
-      footer={
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="secondaryButton" onClick={() => setProposal(null)}>
-            Discard
-          </button>
-          <button
-            type="button"
-            onClick={applyProposal}
-            disabled={!proposal || proposal.changes.length === 0}
-            style={{
-              padding: '8px 24px',
-              background: 'var(--color-accent, #3b82f6)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-            }}
-          >
-            Apply {proposal?.changes.length ?? 0} change{proposal?.changes.length === 1 ? '' : 's'}
-          </button>
-        </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontSize: '0.85rem', lineHeight: 1.5 }}>
-        <p style={{ margin: 0 }}>
-          Nothing has been applied yet. These are the values the document proposes, each one
-          already checked against the same bounds the API enforces. Applying them fills the form;
-          you still have to save.
-        </p>
-
-        {proposal && proposal.changes.length === 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CheckCircle size={18} />
-            <span>The document proposes nothing this project does not already have set.</span>
-          </div>
-        )}
-
-        {proposal && proposal.changes.length > 0 && (
-          <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-            <table className={styles.previewTable} style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <thead>
-                <tr style={{ textAlign: 'left' }}>
-                  <th style={{ padding: '4px 8px' }}>Setting</th>
-                  <th style={{ padding: '4px 8px' }}>Now</th>
-                  <th style={{ padding: '4px 8px' }}>Would become</th>
-                  <th style={{ padding: '4px 8px' }}>Where</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposal.changes.map(c => (
-                  <tr key={c.key}>
-                    <td style={{ padding: '4px 8px', fontFamily: 'monospace' }} title={c.meaning}>{c.key}</td>
-                    <td className={styles.previewTableMuted} style={{ padding: '4px 8px' }}>{preview(c.before)}</td>
-                    <td style={{ padding: '4px 8px', fontWeight: 600 }}>{preview(c.after)}</td>
-                    <td className={styles.previewTableMuted} style={{ padding: '4px 8px' }}>{c.section ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {proposal && proposal.rejected.length > 0 && (
-          <div style={{ padding: '10px 12px', background: 'var(--color-surface-alt, rgba(234,179,8,0.08))', borderRadius: 6, borderLeft: '3px solid var(--color-warning, #eab308)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <AlertTriangle size={16} />
-              <strong>{proposal.rejected.length} value{proposal.rejected.length === 1 ? '' : 's'} refused</strong>
-            </div>
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              {proposal.rejected.map(r => (
-                <li key={r.key}>
-                  <code>{r.key}</code> = {preview(r.value)} &mdash; {r.why}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {proposal && proposal.ignored.length > 0 && (
-          <p style={{ margin: 0, opacity: 0.75 }}>
-            Ignored, because no setting a document may write matches them:{' '}
-            <code>{proposal.ignored.join(', ')}</code>. The engagement&apos;s TARGET is among
-            these by design: a scope document configures this project, it does not re-point it.
-          </p>
-        )}
-      </div>
-    </Modal>
+    {/* The parse result is a PROPOSAL, confirmed all or nothing. */}
+    {entry.status === 'review' && entry.review && (
+      <RoeReviewModal
+        review={entry.review}
+        target={existing ? 'existing' : 'create'}
+        projectId={existing ? projectId : null}
+        file={entry.file}
+        unsavedKeys={unsavedKeys}
+        onClose={discard}
+        onApplyToForm={review => applyProposal(review as { changes: ParseChange[] } & Record<string, unknown>)}
+        onApplied={applied}
+        onReviewChanged={review => setRoeEntry(storeKey, { review })}
+      />
+    )}
     </>
   )
 }

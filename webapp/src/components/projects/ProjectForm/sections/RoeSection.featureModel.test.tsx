@@ -14,6 +14,8 @@ import { GATE_USER, jsonResponse, pickInGate, stubGateFetch, type GateFetchStub 
 vi.mock('@/providers/ProjectProvider', () => ({ useProject: () => ({ userId: GATE_USER }) }))
 
 import { FeatureModelGateProvider } from '@/components/shared/FeatureModelGate'
+import { ToastProvider } from '@/components/ui'
+import { resetRoeStore } from '@/components/roe/roeParseStore'
 import { RoeSection } from './RoeSection'
 
 const PROPOSAL = { changes: [], rejected: [], ignored: [], modelUsed: 'claude-opus-4-6' }
@@ -22,10 +24,13 @@ const REVIEW_TITLE = 'Review what this document would change'
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  // The parse store outlives components by design; tests start from empty.
+  resetRoeStore()
 })
 
 function renderSection(onFileSelected = vi.fn()) {
   const utils = render(
+    <ToastProvider>
     <FeatureModelGateProvider>
       <RoeSection
         data={{} as never}
@@ -34,7 +39,8 @@ function renderSection(onFileSelected = vi.fn()) {
         mode="create"
         onFileSelected={onFileSelected}
       />
-    </FeatureModelGateProvider>,
+    </FeatureModelGateProvider>
+    </ToastProvider>,
   )
   return { ...utils, onFileSelected }
 }

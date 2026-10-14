@@ -64,9 +64,12 @@ function formatWhen(iso: string): string {
 export function AuthorizationHistory({
   projectId,
   engagementKind,
+  currentDocumentSha256,
 }: {
   projectId: string
   engagementKind?: string
+  /** digestScopeDocument of the current RoE text, when the stored parse records it. */
+  currentDocumentSha256?: string | null
 }) {
   const [state, setState] = useState<'loading' | 'error' | 'ready'>('loading')
   const [records, setRecords] = useState<AuthorizationRecord[]>([])
@@ -119,8 +122,21 @@ export function AuthorizationHistory({
     )
   }
 
+  // An authorization records ONE document's digest; after a replace the scans
+  // run under terms nobody authorized, which the start gate (it counts rows)
+  // cannot see.
+  const newestRoe = records.find(r => r.documentKind === 'roe_document')
+  const mismatch = Boolean(currentDocumentSha256 && newestRoe && newestRoe.documentSha256 !== currentDocumentSha256)
+
   return (
     <div className={styles.authList}>
+      {mismatch && (
+        <p className={styles.authWarn} role="status">
+          The current Rules of Engagement document is not the one the newest authorization recorded:
+          it was replaced afterwards. Record an authorization for the current document with
+          {' '}<code>attach_engagement_authorization</code>.
+        </p>
+      )}
       {records.map((record, index) => (
         <div
           key={record.id}

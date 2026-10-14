@@ -54,6 +54,7 @@ interface WorkflowNodeModalProps {
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
   projectId?: string
   mode: 'create' | 'edit'
+  onOpenRoe?: () => void
 }
 
 export function WorkflowNodeModal({
@@ -64,6 +65,7 @@ export function WorkflowNodeModal({
   updateField,
   projectId,
   mode,
+  onOpenRoe,
 }: WorkflowNodeModalProps) {
   const [isSaving, setIsSaving] = useState(false)
 
@@ -131,6 +133,19 @@ export function WorkflowNodeModal({
       case 'Uncover':           return <OsintEnrichmentSection {...baseProps} />
       case 'input':             return (
         <>
+          {mode === 'create' && onOpenRoe && (
+            <p style={{ margin: '0 0 12px', fontSize: '0.85rem' }}>
+              Have a Rules of Engagement document?{' '}
+              <button
+                type="button"
+                onClick={onOpenRoe}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--color-accent, #3b82f6)', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Upload it in RoE
+              </button>{' '}
+              and its limits fill this form for you to review.
+            </p>
+          )}
           <TargetSection {...extendedProps} />
           <AuthenticationSection {...extendedProps} />
         </>
