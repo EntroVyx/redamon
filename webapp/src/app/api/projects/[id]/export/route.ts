@@ -10,6 +10,7 @@ import { requireEffectiveUser, requireProjectAccess } from '@/lib/access'
 import { serializeGraphProperties } from '@/lib/graphSerialize'
 import { projectPresetForRead } from '@/lib/reconPresets/server'
 import { PROJECT_EXPORT_EXCLUDED, PROJECT_EXPORT_EXCLUDED_REASON } from '@/lib/projectExport/pluginExclusion'
+import { exportRevision, REVISIONS_BUNDLE_PATH } from '@/lib/roe/revisionBundle'
 
 const RECON_OUTPUT_PATH = process.env.RECON_OUTPUT_PATH || '/data/recon-output'
 const GVM_OUTPUT_PATH = process.env.GVM_OUTPUT_PATH || '/data/gvm-output'
@@ -88,6 +89,11 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     const engagementAuthorizations = await prisma.engagementAuthorization.findMany({
       where: { projectId: id },
       orderBy: { recordedAt: 'asc' },
+    })
+    // The superseded RoE documents: the terms earlier scans ran under.
+    const roeRevisions = await prisma.roeDocumentRevision.findMany({
+      where: { projectId: id },
+      orderBy: { supersededAt: 'desc' },
     })
 
     // 2c'. Node filters: the rules and the operator's exemptions. Run history
@@ -192,6 +198,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         scanJobs: scanJobs.length,
         scanSchedules: scanSchedules.length,
         engagementAuthorizations: engagementAuthorizations.length,
+        roeRevisions: roeRevisions.length,
         artifacts: 0,
       },
     }
@@ -292,6 +299,12 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       Buffer.from(JSON.stringify(engagementAuthorizations, null, 2)),
       { name: 'engagement/authorizations.json' }
     )
+    if (roeRevisions.length > 0) {
+      archive.append(
+        Buffer.from(JSON.stringify(roeRevisions.map(exportRevision), null, 2)),
+        { name: REVISIONS_BUNDLE_PATH },
+      )
+    }
     archive.append(
       Buffer.from(JSON.stringify(
         scanSchedules.map(s => ({

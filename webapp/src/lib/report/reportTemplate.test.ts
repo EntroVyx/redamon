@@ -818,3 +818,27 @@ describe('Coverage Limitations (circuit breakers)', () => {
     expect(html).toContain('&lt;script&gt;')
   })
 })
+
+describe('RoE provenance', () => {
+  test('the report names the document and when it applied', () => {
+    const data = makeReportData()
+    ;(data.project as Record<string, unknown>).roeClientName = 'Northwind Example'
+    data.roeProvenance = { documentName: 'roe-B.pdf', appliedAt: '2026-10-01T10:00:00.000Z', newestScanAt: '2026-10-02T10:00:00.000Z', appliedAfterNewestScan: false }
+    const html = generateReportHtml(data, null)
+    expect(html).toContain('roe-B.pdf')
+    expect(html).not.toContain('after the newest scan in this report')
+  })
+
+  test('a RoE applied after the newest scan is flagged, because the scans ran under another one', () => {
+    const data = makeReportData()
+    data.roeProvenance = { documentName: 'roe-B.pdf', appliedAt: '2026-10-03T10:00:00.000Z', newestScanAt: '2026-10-02T10:00:00.000Z', appliedAfterNewestScan: true }
+    expect(generateReportHtml(data, null)).toContain('after the newest scan in this report')
+  })
+
+  test('a document name is escaped', () => {
+    const data = makeReportData()
+    data.roeProvenance = { documentName: '<img src=x onerror=1>.pdf', appliedAt: null, newestScanAt: null, appliedAfterNewestScan: false }
+    const html = generateReportHtml(data, null)
+    expect(html).not.toContain('<img src=x')
+  })
+})

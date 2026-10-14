@@ -624,8 +624,12 @@ function renderScope(data: ReportData, narrative?: string): string {
 
   // Rules of Engagement
   let roeTable = ''
-  if (p.roeClientName || p.roeEngagementType) {
+  const provenance = data.roeProvenance
+  if (p.roeClientName || p.roeEngagementType || provenance) {
     const rows: string[] = []
+    if (provenance?.documentName) {
+      rows.push(`<tr><td>Document</td><td>${esc(provenance.documentName)}${provenance.appliedAt ? ` (applied ${esc(formatDate(provenance.appliedAt))})` : ''}</td></tr>`)
+    }
     if (p.roeClientName) rows.push(`<tr><td>Client</td><td>${esc(p.roeClientName)}</td></tr>`)
     if (p.roeClientContactName) rows.push(`<tr><td>Client Contact</td><td>${esc(p.roeClientContactName)} ${p.roeClientContactEmail ? `(${esc(p.roeClientContactEmail)})` : ''}</td></tr>`)
     if (p.roeEngagementType) rows.push(`<tr><td>Engagement Type</td><td>${esc(p.roeEngagementType.replace(/_/g, ' '))}</td></tr>`)
@@ -634,7 +638,12 @@ function renderScope(data: ReportData, narrative?: string): string {
     if (p.roeExcludedHosts?.length) rows.push(`<tr><td>Excluded Hosts</td><td>${esc(p.roeExcludedHosts.join(', '))}</td></tr>`)
     if (p.roeForbiddenCategories?.length) rows.push(`<tr><td>Forbidden Categories</td><td>${esc(p.roeForbiddenCategories.join(', '))}</td></tr>`)
     if (p.roeComplianceFrameworks?.length) rows.push(`<tr><td>Compliance Frameworks</td><td>${esc(p.roeComplianceFrameworks.join(', '))}</td></tr>`)
-    roeTable = `<h3>Rules of Engagement</h3><table class="data-table"><tbody>${rows.join('')}</tbody></table>`
+    // The rows above are the CURRENT terms. A RoE applied after the newest scan
+    // is not the one those scans ran under, and the reader has to be told.
+    const changedAfterScans = provenance?.appliedAfterNewestScan
+      ? `<p style="border-left:3px solid #d97706;padding:6px 10px;background:#fffbeb"><strong>Note:</strong> these Rules of Engagement were applied on ${esc(formatDate(provenance.appliedAt!))}, after the newest scan in this report (${esc(formatDate(provenance.newestScanAt!))}). The scans ran under the previous document, which is kept in the project's RoE history.</p>`
+      : ''
+    roeTable = `<h3>Rules of Engagement</h3><table class="data-table"><tbody>${rows.join('')}</tbody></table>${changedAfterScans}`
   }
 
   // Subdomain Resolution Map (domain mode)

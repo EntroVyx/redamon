@@ -9,7 +9,11 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 
-import { ScanQueuePanel } from './ScanQueuePanel'
+import { ScanQueuePanel as Panel } from './ScanQueuePanel'
+import { AlertProvider } from '@/components/ui'
+
+// Re-confirming an AI attack job asks through the alert modal.
+const ScanQueuePanel = (props: { projectId: string }) => <AlertProvider><Panel {...props} /></AlertProvider>
 
 type Job = {
   id: string; projectId: string; projectName: string; kind: string; status: string
@@ -174,5 +178,28 @@ describe('ScanQueuePanel', () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
     render(<ScanQueuePanel projectId="p1" />)
     await waitFor(() => expect(screen.getByText(/Could not load scan activity/)).toBeTruthy())
+  })
+})
+
+describe('re-confirming an AI attack job after settings changed', () => {
+  test('the RoE is confirmed again before it is re-queued', async () => {
+    const held = job({ id: 'ai1', kind: 'ai_attack', status: 'needs_review', blockedReason: 'scan settings changed' })
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/job-queue/ai1/reconfirm') {
+        const confirmed = init?.body && JSON.parse(String(init.body)).roeConfirmed === true
+        return confirmed
+          ? { ok: true, json: async () => ({ ok: true }) }
+          : { ok: false, json: async () => ({ code: 'roe_confirmation_required', error: 'confirm again' }) }
+      }
+      return { ok: true, json: async () => payload({ needsReview: [held] }) }
+    })
+    render(<ScanQueuePanel projectId="p1" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-confirm' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and re-queue' }))
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(c => c[0] === '/api/job-queue/ai1/reconfirm')
+      expect(calls).toHaveLength(2)
+      expect(JSON.parse(String(calls[1][1].body))).toEqual({ roeConfirmed: true })
+    })
   })
 })

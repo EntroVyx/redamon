@@ -624,11 +624,18 @@ export async function preflightScopeCheck(ctx: McpContext, projectId: string) {
     // domainBatchGroups explicitly: it is `mcp: never`, so it may not be in the
     // settings select, and the derived shape below is read from it. It is never
     // returned raw - only the two sentinel booleans are.
-    select: { ...reconSettingsSelect(), id: true, updatedAt: true, domainBatchGroups: true },
+    // roeParsedJson for its version only: a project whose RoE went through the
+    // replace route carries limits no migration derived. Never returned.
+    select: { ...reconSettingsSelect(), id: true, updatedAt: true, domainBatchGroups: true, roeParsedJson: true },
   })
   if (!project) throw new McpToolError('Project not found', 'not_found')
 
   const row = project as Record<string, unknown>
+  const roeParse = row.roeParsedJson
+  delete row.roeParsedJson
+  const roeAppliedByDocument = Boolean(
+    roeParse && typeof roeParse === 'object' && (roeParse as { version?: unknown }).version === 2
+  )
   const engagement = await loadEngagement(projectId)
   const authorization = await currentAuthorization(projectId)
   const ceiling = engagement.ceilingRps
@@ -683,7 +690,7 @@ export async function preflightScopeCheck(ctx: McpContext, projectId: string) {
       orderBy: { createdAt: 'desc' },
       select: {
         id: true, kind: true, status: true, startedAt: true,
-        settingsHash: true, authorizationId: true, versionId: true,
+        settingsHash: true, authorizationId: true, versionId: true, roeTextSha256: true,
       },
     })
     .catch(() => null)
@@ -755,7 +762,7 @@ export async function preflightScopeCheck(ctx: McpContext, projectId: string) {
       // True when the stored column disagrees with the derivation: the project
       // predates the change and acquires (or loses) limits without anyone
       // having touched it. The migration records an audit row for each.
-      limitsNewlyDerived: Boolean(row.roeEnabled) !== deriveRoeEnabled(row as never),
+      limitsNewlyDerived: !roeAppliedByDocument && Boolean(row.roeEnabled) !== deriveRoeEnabled(row as never),
     },
     resolvedRates: rates,
     ratesExceedingCeiling: exceeds,
@@ -786,6 +793,13 @@ export async function preflightScopeCheck(ctx: McpContext, projectId: string) {
             lastJob.settingsHash === null
               ? null
               : lastJob.settingsHash !== settingsFingerprint(lastJob.kind, row),
+          // The RoE document it ran under, and whether that document has since
+          // been replaced or removed. Null when the run predates the record.
+          roeTextSha256: lastJob.roeTextSha256,
+          roeChangedSince:
+            lastJob.roeTextSha256 === null || lastJob.roeTextSha256 === undefined
+              ? null
+              : lastJob.roeTextSha256 !== engagement.documentTextSha256,
         }
       : null,
     startable: engagement.blockers.length === 0 && exceeds.length === 0,
@@ -802,7 +816,8 @@ export async function preflightScopeCheck(ctx: McpContext, projectId: string) {
       'engagementLimits.active is DERIVED: limits apply when there is a limit to apply - a ' +
         'non-zero roeGlobalMaxRps, a non-empty roeExcludedHosts, or a time window. There is ' +
         'no switch that turns them off while leaving them configured. limitsNewlyDerived true ' +
-        'means this project predates that and its limits changed without anyone touching it.',
+        'means this project predates that and its limits changed without anyone touching it; a ' +
+        'project whose limits came from a Rules of Engagement document is never reported so.',
       'lastRun.settingsChangedSince true means the graph you are looking at was produced by a ' +
         'DIFFERENT configuration than the one above. That is the chain an incident review ' +
         'walks: a graph node, the scan job that wrote it, the settings hash it ran with, and ' +

@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, Activity } from 'lucide-react'
+import { useAlertModal } from '@/components/ui'
 import { usePaged, Pager } from './pagination'
 import styles from './ScanScheduleTable.module.css'
 
@@ -96,13 +97,33 @@ export function ScanQueuePanel({ projectId }: { projectId: string | null }) {
     return () => clearInterval(t)
   }, [refresh])
 
+  const { confirm } = useAlertModal()
   const act = useCallback(async (id: string, action: 'cancel' | 'reconfirm') => {
     setBusyId(id)
     try {
-      const res = await fetch(`/api/job-queue/${id}/${action}`, { method: 'POST' })
+      let res = await fetch(`/api/job-queue/${id}/${action}`, { method: 'POST' })
+      let body = res.ok ? null : await res.json().catch(() => ({}))
+      // An AI attack launch needs the RoE confirmed again once settings changed.
+      if (!res.ok && body?.code === 'roe_confirmation_required') {
+        const ok = await confirm(
+          'The project settings changed since this AI attack scan was queued. Confirm that its targets are ' +
+          'within the current Rules of Engagement and that you authorise the launch.',
+          'Confirm the Rules of Engagement',
+          { confirmLabel: 'Confirm and re-queue' },
+        )
+        if (!ok) {
+          await refresh()
+          return
+        }
+        res = await fetch(`/api/job-queue/${id}/${action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roeConfirmed: true }),
+        })
+        body = res.ok ? null : await res.json().catch(() => ({}))
+      }
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        setError(body.error || `Could not ${action} the job.`)
+        setError(body?.error || `Could not ${action} the job.`)
       } else {
         await refresh()
       }
@@ -111,7 +132,7 @@ export function ScanQueuePanel({ projectId }: { projectId: string | null }) {
     } finally {
       setBusyId(null)
     }
-  }, [refresh])
+  }, [refresh, confirm])
 
   const { here, elsewhere } = useMemo(() => {
     const mine = data?.mine

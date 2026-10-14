@@ -747,6 +747,36 @@ describe('preflight_scope_check reports RESOLVED values', () => {
     expect((await preflightScopeCheck(ctx(), 'p1')).lastRun).toBeNull()
   })
 
+  test('it says whether the RoE document the last run ran under was replaced since', async () => {
+    const { digestScopeDocument } = await import('@/lib/engagement')
+    h.findProject.mockResolvedValue(projectRow({ roeRawText: 'RoE B' }))
+    h.findFirstScanJob.mockResolvedValue({
+      id: 'job1', kind: 'full_recon', status: 'completed', startedAt: new Date(),
+      versionId: null, settingsHash: null, authorizationId: null, roeTextSha256: digestScopeDocument('RoE A'),
+    })
+    const r = await preflightScopeCheck(ctx(), 'p1')
+    expect(r.lastRun?.roeChangedSince).toBe(true)
+    h.findFirstScanJob.mockResolvedValue({
+      id: 'job1', kind: 'full_recon', status: 'completed', startedAt: new Date(),
+      versionId: null, settingsHash: null, authorizationId: null, roeTextSha256: digestScopeDocument('RoE B'),
+    })
+    expect((await preflightScopeCheck(ctx(), 'p1')).lastRun?.roeChangedSince).toBe(false)
+  })
+
+  test('limits a RoE document applied are not reported as legacy drift', async () => {
+    // roeEnabled is a column nothing writes; a replace that sets a ceiling
+    // leaves it false, and every replaced project used to read as drifted.
+    h.findProject.mockResolvedValue(projectRow({
+      roeGlobalMaxRps: 5, roeEnabled: false, roeParsedJson: { version: 2, applied: { roeGlobalMaxRps: 5 } },
+    }))
+    const r = await preflightScopeCheck(ctx(), 'p1')
+    expect(r.engagementLimits.limitsNewlyDerived).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('"applied"')
+
+    h.findProject.mockResolvedValue(projectRow({ roeGlobalMaxRps: 5, roeEnabled: false }))
+    expect((await preflightScopeCheck(ctx(), 'p1')).engagementLimits.limitsNewlyDerived).toBe(true)
+  })
+
   test('a missing project is refused, not reported as an empty one', async () => {
     // assertMcpProjectAccess gets there first and refuses with the same message
     // it uses for another account's project. That is deliberate: distinguishing

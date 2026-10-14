@@ -278,6 +278,11 @@ export interface ReportData {
    *  Rendered as escaped text by the report route. */
   coverageLimitations: { source: string; reason: string }[]
 
+  /** Which RoE document this report describes, and whether it changed after the
+   *  newest scan: the report reads the live row, so a RoE replaced after the
+   *  scans would otherwise be printed as the terms those scans ran under. */
+  roeProvenance?: RoeProvenance | null
+
   // Graph Overview
   graphOverview: {
     totalNodes: number
@@ -588,6 +593,41 @@ async function queryCoverageLimitations(
   }
 }
 
+export interface RoeProvenance {
+  documentName: string | null
+  appliedAt: string | null
+  newestScanAt: string | null
+  appliedAfterNewestScan: boolean
+}
+
+/** Null when the project has no RoE document; never throws. */
+export async function queryRoeProvenance(
+  projectId: string,
+  project: { roeDocumentName?: string | null; roeParsedJson?: unknown },
+): Promise<RoeProvenance | null> {
+  const parsed = (project.roeParsedJson && typeof project.roeParsedJson === 'object' ? project.roeParsedJson : {}) as { appliedAt?: unknown }
+  const documentName = project.roeDocumentName || null
+  const appliedAt = typeof parsed.appliedAt === 'string' && !Number.isNaN(Date.parse(parsed.appliedAt)) ? parsed.appliedAt : null
+  if (!documentName && !appliedAt) return null
+  let newestScanAt: string | null = null
+  try {
+    const newest = await prisma.scanJob.findFirst({
+      where: { projectId, startedAt: { not: null } },
+      orderBy: { startedAt: 'desc' },
+      select: { startedAt: true },
+    })
+    newestScanAt = newest?.startedAt ? newest.startedAt.toISOString() : null
+  } catch (e) {
+    console.warn('[report] could not read the newest scan:', e)
+  }
+  return {
+    documentName,
+    appliedAt,
+    newestScanAt,
+    appliedAfterNewestScan: Boolean(appliedAt && newestScanAt && Date.parse(appliedAt) > Date.parse(newestScanAt)),
+  }
+}
+
 export async function gatherReportData(projectId: string): Promise<ReportData> {
   // Fetch PostgreSQL data
   const [project, remediations] = await Promise.all([
@@ -642,6 +682,8 @@ export async function gatherReportData(projectId: string): Promise<ReportData> {
 
   const coverageLimitations = await withSession(s => queryCoverageLimitations(s, projectId))
     .catch(() => [])
+
+  const roeProvenance = await queryRoeProvenance(projectId, project)
 
   // Compute metrics
     const totalVulns = vulnData.severityDistribution.reduce((s: number, d: { count: number }) => s + d.count, 0)
@@ -881,6 +923,7 @@ export async function gatherReportData(projectId: string): Promise<ReportData> {
       remediations,
       generatedAt: new Date().toISOString(),
       coverageLimitations,
+      roeProvenance,
       graphOverview,
       attackSurface,
       vulnerabilities: vulnData,

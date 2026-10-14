@@ -23,6 +23,7 @@ import {
 import { MUTEABLE_FINDING_LABELS } from '@/lib/mcp/findingLabels'
 import { pickProjectColumns } from '@/lib/projectColumns'
 import { sanitizeImportedRoeParsedJson } from '@/lib/roe/createRoe'
+import { importRevision, MAX_IMPORTED_REVISIONS, REVISIONS_BUNDLE_PATH } from '@/lib/roe/revisionBundle'
 import { jevImportWarnings } from '@/lib/reconSettings/jevEngine'
 import { PROJECT_EXPORT_EXCLUDED, isPluginArchivePath } from '@/lib/projectExport/pluginExclusion'
 import { validateSerializedScanChange } from '@/lib/reconSettings/serializedScanGate'
@@ -320,6 +321,20 @@ export async function POST(request: NextRequest) {
         })
       } catch (e) {
         console.warn('Could not import an engagement authorization record:', e)
+      }
+    }
+
+    // The superseded RoE documents, each held to the upload limits and re-hashed.
+    const revisionsFile = zip.file(REVISIONS_BUNDLE_PATH)
+    if (revisionsFile) {
+      try {
+        const raw = JSON.parse(await revisionsFile.async('text'))
+        for (const entry of (Array.isArray(raw) ? raw : []).slice(0, MAX_IMPORTED_REVISIONS)) {
+          const data = importRevision(entry, { projectId: newProject.id, importerUserId: userId })
+          if (data) await prisma.roeDocumentRevision.create({ data: data as never })
+        }
+      } catch (e) {
+        console.warn('Could not import the RoE revision history:', e)
       }
     }
 
