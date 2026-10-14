@@ -5,41 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **Replace and remove a project's Rules of Engagement after it is created.** The upload is no longer limited to the creation form: an existing project takes a document from its Engagement Record tab or from the graph dashboard's **RoE** tab (**Upload RoE**, then **Replace RoE** and **Remove**). A new document replaces the old one rather than merging with it. The engagement record is replaced as a whole. A setting only the previous document set goes back to its value from before any document, unless someone changed it since, in which case it is kept and the review says so. Remove is a replace with an empty document. The review groups the rows into set, reset, restored and kept, and marks every row that loosens the engagement **Widens**. Confirming saves at once. Guide: the wiki's Rules of Engagement page.
-- **RoE history.** A replaced or removed document is kept, the ten newest per project, with when it was applied and why it was superseded. **History** in the project form lists them and downloads any of them, and they travel with a project export and import.
-- **Scans record the RoE they ran under.** Each scan job stores the SHA-256 of the RoE text it started with. `preflight_scope_check` reports `lastRun.roeChangedSince`, and a pentest report names the current document and warns when it was applied after the newest scan in the report.
-- **A RoE parse survives leaving the page.** The review waits for you when you switch tabs or leave the RoE page while the model reads, and a notification says when it is ready. Closing the browser tab mid-parse asks first.
-
-### Changed
-
-- **The RoE document limit is 9 MB** (was 20 MB), under the 10 MB request limit that silently truncated larger uploads; a PDF may have up to 200 pages. `.pdf`, `.docx`, `.txt` and `.md` are still accepted.
-- **The engagement record is changed only by a document after creation.** Its fields stay read-only in the project form, and replacing or removing the document is how they change.
-- **Load Preset** fetches the preset first, then asks, listing the settings a RoE document set that it would overwrite, and saves against the project's version, so it can no longer silently undo a replace made in another tab.
-- **A widening RoE replace pauses scheduled scans**, all of them, and a narrower window or end date pauses the ones it would make fail. The review lists them before you confirm. Queued jobs whose settings changed are held for re-confirmation as before, and the result says how many.
-- **Re-confirming an AI Gauntlet job held after a settings change asks for RoE confirmation again**, instead of restarting with the confirmation the job carried from before the change.
-- The graph toolbar's **Limits** badge updates right after a replace, and an MCP drift report no longer counts a replaced RoE as legacy drift.
-
-### Fixed
-
-- **A slow RoE parse fails with a clear message.** The agent stops a model call at 270 seconds and answers `agent_timeout`, and the webapp waits for that answer instead of dropping the request first; the agent log says whether the model answered or failed.
-
-### Security
-
-- **A RoE document is untrusted configuration.** A parsed document may never set the target, the agent's system prompts, LHOST/LPORT and other callback hosts, the models, repositories or credentials (`roe_parse: deny`, left out of the parse catalogue). It may set the approval and confirmation gates, the guardrail, tunnels, Kali installs and the post-exploitation phase only to their safe value (`tighten_only`). The server rebuilds the stored parse itself and re-checks a stored or imported one against today's registry, so a planted `applied.targetDomain` is dropped. A replace is recomputed on the server and must equal what the person confirmed.
-- **The document's text never reaches the agent's prompt.** Its terms reach the agent only through validated settings; the notes and incident procedure are quoted at the end of the prompt, capped at 2,000 characters each, as client text that cannot change scope, tools, approvals or phases.
-- **Documents are parsed in isolation.** Text extraction runs in a child process with no secrets in its environment, a 256 MB heap, code generation from strings disabled and a 30-second kill. A DOCX must prove it inflates to at most 50 MB before it is parsed. `pdf-parse` is replaced by a pinned `pdfjs-dist` with eval and font loading off.
-- **RoE downloads are the owner's.** The current document and every superseded one download only for the project's owner (404 for anyone else), with the media type from an allowlist and `nosniff`. Parsing, replacing and removing a RoE require the same origin. Every parse, replace, remove and download is audited (`roe.parse`, `project.roe.replace`, `project.roe.remove`, `project.roe.download`) with digests, never the document's text or contacts.
-- **Changing a RoE fails closed.** A replace or remove is refused while a scan of the project runs (or when that cannot be checked), when the project changed since the review, and on a third-party engagement when it widens the terms without an authorization for the new document or leaves no rate ceiling.
-
-### Upgrade notes
-
-- **Rebuild the webapp and the agent together** (`./redamon.sh update` does). The parse route refuses an agent built from a different settings registry, with `agent_registry_outdated`, because the two must agree on what a document may set. The database gains the `RoeDocumentRevision` table and the `ScanJob.roeTextSha256` column on the webapp's next start.
-- **The agent does not yet enforce forbidden tools, categories, the phase cap or the allow flags unless a rate ceiling, an excluded host or a scanning window is set.** This predates the change; the review and the RoE tab now say so when a document sets those rules alone.
-
 ## [7.0.0] - 2026-10-12
 
 ### Added
@@ -58,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Project → Attack Skills**: search, "Enabled only", "N of 20 enabled", version badges, and a note when two versions of one skill are on together.
 - **Skill versions** has a "Your skills" group: a skill's proposals, its family of saved versions, and **Delete older versions** (keeps the newest, the one the window shows, and any version on in a project).
 - **The agent records which of your skills it followed**: `phase_update.skill_workflow` is `{skillId: "user_skill:<id>", kind: "user", contentSha256}` when your skill's text was in its instructions. A session whose skill was replaced by a newer version in its project follows the newer one from its next message or resume.
+- **Replace and remove a project's Rules of Engagement after it is created.** The upload is no longer limited to the creation form: an existing project takes a document from its Engagement Record tab or from the graph dashboard's **RoE** tab (**Upload RoE**, then **Replace RoE** and **Remove**). A new document replaces the old one rather than merging with it. The engagement record is replaced as a whole. A setting only the previous document set goes back to its value from before any document, unless someone changed it since, in which case it is kept and the review says so. Remove is a replace with an empty document. The review groups the rows into set, reset, restored and kept, and marks every row that loosens the engagement **Widens**. Confirming saves at once. Guide: the wiki's Rules of Engagement page.
+- **RoE history.** A replaced or removed document is kept, the ten newest per project, with when it was applied and why it was superseded. **History** in the project form lists them and downloads any of them, and they travel with a project export and import.
+- **Scans record the RoE they ran under.** Each scan job stores the SHA-256 of the RoE text it started with. `preflight_scope_check` reports `lastRun.roeChangedSince`, and a pentest report names the current document and warns when it was applied after the newest scan in the report.
+- **A RoE parse survives leaving the page.** The review waits for you when you switch tabs or leave the RoE page while the model reads, and a notification says when it is ready. Closing the browser tab mid-parse asks first.
 
 ### Changed
 
@@ -70,11 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The chat drawer's settings windows save **only the fields you changed**, and say when a save fails.
 - **Community import** reports why each skill was skipped (already yours, over the limit, too large, could not be fetched) and checks the name each skill is created with.
 - A plugin's data export (`exportVersion` 2) leaves out the text plugins proposed for people's own skills, and those skills' names.
+- **The RoE document limit is 9 MB** (was 20 MB), under the 10 MB request limit that silently truncated larger uploads; a PDF may have up to 200 pages. `.pdf`, `.docx`, `.txt` and `.md` are still accepted.
+- **The engagement record is changed only by a document after creation.** Its fields stay read-only in the project form, and replacing or removing the document is how they change.
+- **Load Preset** fetches the preset first, then asks, listing the settings a RoE document set that it would overwrite, and saves against the project's version, so it can no longer silently undo a replace made in another tab.
+- **A widening RoE replace pauses scheduled scans**, all of them, and a narrower window or end date pauses the ones it would make fail. The review lists them before you confirm. Queued jobs whose settings changed are held for re-confirmation as before, and the result says how many.
+- **Re-confirming an AI Gauntlet job held after a settings change asks for RoE confirmation again**, instead of restarting with the confirmation the job carried from before the change.
+- The graph toolbar's **Limits** badge updates right after a replace, and an MCP drift report no longer counts a replaced RoE as legacy drift.
 
 ### Fixed
 
 - **Overlay drawers no longer open 0 px tall after leaving `/graph` or the project form** (the `/traffic` drawer, for one): both pages left their drawer offsets behind when they closed. One hook now sets the offsets and removes them on unmount.
 - **Two modals open at once each announce their own title** to screen readers; every modal used to share one title id.
+- **A slow RoE parse fails with a clear message.** The agent stops a model call at 270 seconds and answers `agent_timeout`, and the webapp waits for that answer instead of dropping the request first; the agent log says whether the model answered or failed.
 
 ### Security
 
@@ -87,6 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A plugin reads your own skill only when its session used it**, never another user's, and never one whose name, description or text holds a key or token in a recognised format (a private key, a JWT, an API token); every refusal looks the same, so ids cannot be probed. The proposed text is checked by the agent (no reserved markers, Rules of Engagement headings or hidden characters that the source did not hold), and lines flagged as risky must be acknowledged before saving.
 - **The platform's own record of a proposal** (the plugin version, conversation and job that made it, what it was built on and what it became) can no longer be set by a plugin.
 - **Every write of a user skill is audited** (`user_attack_skill.create|update|delete|import|release|quarantine`, `plugin.override.adopt`), and reject and delete decisions record the user an admin acted for.
+- **A RoE document is untrusted configuration.** A parsed document may never set the target, the agent's system prompts, LHOST/LPORT and other callback hosts, the models, repositories or credentials (`roe_parse: deny`, left out of the parse catalogue). It may set the approval and confirmation gates, the guardrail, tunnels, Kali installs and the post-exploitation phase only to their safe value (`tighten_only`). The server rebuilds the stored parse itself and re-checks a stored or imported one against today's registry, so a planted `applied.targetDomain` is dropped. A replace is recomputed on the server and must equal what the person confirmed.
+- **The document's text never reaches the agent's prompt.** Its terms reach the agent only through validated settings; the notes and incident procedure are quoted at the end of the prompt, capped at 2,000 characters each, as client text that cannot change scope, tools, approvals or phases.
+- **Documents are parsed in isolation.** Text extraction runs in a child process with no secrets in its environment, a 256 MB heap, code generation from strings disabled and a 30-second kill. A DOCX must prove it inflates to at most 50 MB before it is parsed. `pdf-parse` is replaced by a pinned `pdfjs-dist` with eval and font loading off.
+- **RoE downloads are the owner's.** The current document and every superseded one download only for the project's owner (404 for anyone else), with the media type from an allowlist and `nosniff`. Parsing, replacing and removing a RoE require the same origin. Every parse, replace, remove and download is audited (`roe.parse`, `project.roe.replace`, `project.roe.remove`, `project.roe.download`) with digests, never the document's text or contacts.
+- **Changing a RoE fails closed.** A replace or remove is refused while a scan of the project runs (or when that cannot be checked), when the project changed since the review, and on a third-party engagement when it widens the terms without an authorization for the new document or leaves no rate ceiling.
 
 ### Upgrade notes
 
@@ -100,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The memory governor always budgets the plugin runner (a 256 MB floor; set `PLUGIN_RUNNER_MEM` to pin it), so the other services' shares shrink slightly, and `plugin-gateway` has a fixed 128 MB. A host that cannot hold the floor is refused with `Insufficient memory`.
 - The plugin networks take fixed subnets outside Docker's default pools, `10.213.80.0/24` (`plugins-net`) and `10.213.81.0/24` (`plugins-edge`), so they never take a range a RedAmon network needs. If a Docker network on the host already uses one of them, the start is refused with a reason that names the command showing why.
 - Going back to an older RedAmon release drops the plugin tables with their data (installed plugins, plugin data, approved skill versions). Export first: each plugin's Details → **Export data**, or `docker compose exec postgres pg_dump -U redamon -d redamon -t 'plugin_*' > plugins-backup.sql`.
+- **Rebuild the webapp and the agent together** (`./redamon.sh update` does). The parse route refuses an agent built from a different settings registry, with `agent_registry_outdated`, because the two must agree on what a document may set. The database gains the `RoeDocumentRevision` table and the `ScanJob.roeTextSha256` column on the webapp's next start.
+- **The agent does not yet enforce forbidden tools, categories, the phase cap or the allow flags unless a rate ceiling, an excluded host or a scanning window is set.** This predates the change; the review and the RoE tab now say so when a document sets those rules alone.
 
 ### Docs
 
