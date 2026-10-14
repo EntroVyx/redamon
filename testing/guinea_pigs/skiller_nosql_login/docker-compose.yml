@@ -1,0 +1,30 @@
+services:
+  mongo:
+    image: mongo:latest
+    container_name: skiller-nosql-mongo
+    # Only the portal reaches the database: the flaw under test is in the web app,
+    # not an exposed MongoDB.
+    networks:
+      - backend
+    restart: unless-stopped
+
+  portal:
+    build: ./app
+    container_name: skiller-nosql
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      - mongo
+    networks:
+      backend: {}
+      pentest:
+        ipv4_address: 172.28.0.92
+    ports:
+      - "127.0.0.1:9092:3000"
+    restart: unless-stopped
+
+networks:
+  backend: {}
+  pentest:
+    external: true
+    name: redamon_pentest-net

@@ -1,0 +1,17 @@
+services:
+  skiller-sqli:
+    build: .
+    container_name: skiller-sqli
+    # A fixed address on the pentest network: the project targets this IP, and an
+    # auto-assigned one would change on every restart. .91 is above the auto range.
+    networks:
+      pentest:
+        ipv4_address: 172.28.0.91
+    ports:
+      - "127.0.0.1:9091:5000"
+    restart: unless-stopped
+
+networks:
+  pentest:
+    external: true
+    name: redamon_pentest-net
