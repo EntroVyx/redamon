@@ -414,7 +414,8 @@ async def parse_roe_document(body: RoeParseRequest):
             "agent_timeout", requested_model, 504,
             "The model did not finish reading the document in time. Try again, or pick a faster model.",
         )
-    logger.info(f"RoE parse: model answered in {time_mod.monotonic() - started:.1f}s ({len(doc_text)} chars)")
+    outcome = "failed" if failure else "answered"
+    logger.info(f"RoE parse: model {outcome} in {time_mod.monotonic() - started:.1f}s ({len(doc_text)} chars)")
     if failure:
         return failure
 
