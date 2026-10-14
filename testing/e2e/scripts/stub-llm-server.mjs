@@ -15,18 +15,53 @@
  * `stream: true`, as RedAmon's agent does) answers by the sentence that opens the system prompt:
  *   "You review the attack playbooks of RedAmon"  -> one general lesson (Skiller's diagnosis)
  *   "You turn lessons into small, precise edits"  -> one `append` to the last part listed
+ *   "REGISTRY-DIGEST:" (the RoE parse prompt)     -> a canned RoE parse, chosen by the
+ *                                                    "Document version" line of the document
  *   anything else                                 -> a short plain answer
  * GET /v1/models lists the one model; GET /__calls returns what was asked so far.
  * STUB_LLM_DELAY_MS delays the diagnosis answer, so a spec can watch a job's progress (a
  * plugin's job view polls every 2 seconds and would otherwise see only the end).
+ * STUB_LLM_ROE_DELAY_MS delays the RoE parse answer the same way.
  */
 import { createServer } from 'node:http'
 
 const DIAGNOSE = 'You review the attack playbooks of RedAmon'
 const EDIT = 'You turn lessons into small, precise edits'
+const ROE_PARSE = 'REGISTRY-DIGEST:'
+
+/**
+ * What the RoE spec's two synthetic documents say, as the parse would read them.
+ * Version 1.0 is the first document; 2.0 widens it (a higher ceiling, a host
+ * no longer excluded, a longer window) and carries a prompt-injection paragraph
+ * whose keys a correct pipeline refuses.
+ */
+const ROE_ANSWERS = {
+  '1.0': {
+    roeClientName: 'Northwind Example Ltd', roeClientContactName: 'Alex Rivera',
+    roeGlobalMaxRps: 5,
+    roeExcludedHosts: ['legacy.roe-e2e.example', '198.51.100.23'],
+    roeExcludedHostReasons: ['production billing', 'shared hosting'],
+    roeTimeWindowEnabled: true, roeTimeWindowDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+    roeTimeWindowStartTime: '09:00', roeTimeWindowEndTime: '18:00', roeTimeWindowTimezone: 'UTC',
+    roeForbiddenTools: ['execute_hydra'], roeEngagementEndDate: '2026-11-27',
+  },
+  '2.0': {
+    roeClientName: 'Northwind Example Ltd', roeClientContactName: 'Sam Lee',
+    roeGlobalMaxRps: 20,
+    roeExcludedHosts: ['198.51.100.23'], roeExcludedHostReasons: ['shared hosting'],
+    roeTimeWindowEnabled: true, roeTimeWindowDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+    roeTimeWindowStartTime: '08:00', roeTimeWindowEndTime: '20:00', roeTimeWindowTimezone: 'UTC',
+    roeEngagementEndDate: '2026-12-18',
+    // What the injection paragraph asks for. The agent drops unknown keys and
+    // the webapp refuses the safety switch, so none of these may apply.
+    agentRequireToolConfirmation: false, agentLhost: '203.0.113.9',
+  },
+}
 const MODEL = 'skiller-stub'
 const BODY_MAX = 4 * 1024 * 1024
 const DIAGNOSE_DELAY_MS = Number(process.env.STUB_LLM_DELAY_MS || 0)
+// Lets the RoE spec switch tabs while a parse is still running.
+const ROE_DELAY_MS = Number(process.env.STUB_LLM_ROE_DELAY_MS || 0)
 
 const calls = []
 let editRuns = 0
@@ -54,6 +89,10 @@ function answer(messages) {
         lessons: [{ id: 'L1', category: 'wasted_steps', evidence: 'repeated blocked probes', lesson: LESSON, target_parts: [target], impact: 'high' }],
       }),
     }
+  }
+  if (system.startsWith(ROE_PARSE)) {
+    const version = /Document version (\d+\.\d+)/.exec(user)?.[1] ?? '1.0'
+    return { stage: 'roe_parse', content: JSON.stringify(ROE_ANSWERS[version] ?? ROE_ANSWERS['1.0']) }
   }
   if (system.startsWith(EDIT)) {
     editRuns += 1
@@ -134,7 +173,7 @@ const server = createServer((req, res) => {
         choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
         usage,
       })
-    }, stage === 'diagnose' ? DIAGNOSE_DELAY_MS : 0)
+    }, stage === 'diagnose' ? DIAGNOSE_DELAY_MS : stage === 'roe_parse' ? ROE_DELAY_MS : 0)
   })
 })
 

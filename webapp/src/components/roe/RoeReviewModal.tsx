@@ -366,7 +366,10 @@ export function RoeReviewModal({
         )}
 
         <Group title={mode === 'remove' ? 'Set' : 'Set by the new document'} rows={setRows} />
-        <Group title="Reset to default (the new document is silent on them)" rows={resetRows} />
+        <Group
+          title={mode === 'remove' ? 'Reset to default' : 'Reset to default (the new document is silent on them)'}
+          rows={resetRows}
+        />
         <Group title="Restored (only the previous document set them)" rows={restoreRows} />
         {keptRows.length > 0 && (
           <div className={styles.group}>

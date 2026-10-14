@@ -65,7 +65,7 @@
 
 .actionError {
   margin: -1rem 0 1rem;
-  color: var(--color-error, #dc2626);
+  color: var(--status-error);
   font-size: 0.82rem;
 }
 
@@ -76,8 +76,8 @@
   margin: -0.75rem 0 1.25rem;
   padding: 10px 12px;
   border-radius: 6px;
-  border-left: 3px solid var(--color-warning, #eab308);
-  background: var(--color-surface-alt, rgba(234, 179, 8, 0.08));
+  border-left: 3px solid var(--status-warning);
+  background: var(--status-warning-bg);
   font-size: 0.85rem;
 }
 

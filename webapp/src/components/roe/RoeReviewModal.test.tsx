@@ -197,6 +197,12 @@ describe('confirming', () => {
     expect(fetchMock.mock.calls.every(c => c[0] === '/api/projects/p1/roe')).toBe(true)
   })
 
+  test('a remove does not talk about a new document', () => {
+    open({ review: review({ mode: 'remove' }), file: null })
+    expect(screen.getByText(/^Reset to default \(1\)$/)).toBeInTheDocument()
+    expect(screen.queryByText(/the new document is silent/)).toBeNull()
+  })
+
   test('remove sends a DELETE with the confirmed set', async () => {
     fetchMock.mockResolvedValue(json(200, { project: { id: 'p1' }, changed: [] }))
     open({ review: review({ mode: 'remove' }), file: null })
@@ -210,5 +216,15 @@ describe('confirming', () => {
     fireEvent.click(screen.getByRole('button', { name: /Apply 3 changes/ }))
     expect(onApplyToForm).toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('providerOfModel', () => {
+  test('names the provider a model id routes to', async () => {
+    const { providerOfModel } = await import('./roeClient')
+    expect(providerOfModel('deepseek/deepseek-v4-pro')).toBe('deepseek')
+    expect(providerOfModel('custom/cmabc')).toBe('your custom provider')
+    expect(providerOfModel('claude-opus-4-6')).toBe('anthropic')
+    expect(providerOfModel(null)).toBe('the configured provider')
   })
 })

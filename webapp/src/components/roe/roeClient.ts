@@ -126,7 +126,10 @@ export async function downloadRoeFile(url: string, fallbackName: string): Promis
 export function providerOfModel(model: string | null | undefined): string {
   if (!model) return 'the configured provider'
   const slash = model.indexOf('/')
-  if (slash > 0) return model.slice(0, slash)
+  if (slash > 0) {
+    const prefix = model.slice(0, slash)
+    return prefix === 'custom' ? 'your custom provider' : prefix
+  }
   const m = model.toLowerCase()
   if (m.startsWith('claude')) return 'anthropic'
   if (m.startsWith('gpt') || /^o\d/.test(m)) return 'openai'
