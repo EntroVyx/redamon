@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useUserSkillsChanged } from '@/lib/userSkillsChannel'
 
 interface SkillData {
   builtIn: { id: string; name: string }[]
@@ -6,8 +7,14 @@ interface SkillData {
   config: { builtIn: Record<string, boolean>; user: Record<string, boolean> }
 }
 
+/**
+ * The skills and this project's toggles for the chat drawer's tooltip. Refetched when a
+ * skill version is saved anywhere in the browser, and on demand (`refetch`).
+ */
 export function useAttackSkillData(userId: string, projectId: string) {
   const [skillData, setSkillData] = useState<SkillData | null>(null)
+  const [generation, setGeneration] = useState(0)
+  const refetch = useCallback(() => setGeneration(g => g + 1), [])
 
   useEffect(() => {
     if (!userId || !projectId) return
@@ -36,7 +43,11 @@ export function useAttackSkillData(userId: string, projectId: string) {
     }
     fetchSkills()
     return () => { cancelled = true }
-  }, [userId, projectId])
+  }, [userId, projectId, generation])
 
-  return { skillData }
+  useUserSkillsChanged(change => {
+    if (!change.projectId || change.projectId === projectId) refetch()
+  })
+
+  return { skillData, refetch }
 }

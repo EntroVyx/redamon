@@ -24,7 +24,7 @@
 
 <p align="center">
   <a href="https://github.com/samugit83/redamon/stargazers"><img height="24" src="https://img.shields.io/github/stars/samugit83/redamon?style=flat&color=2E8B57&label=Stars" alt="GitHub Stars"/></a>
-  <img height="24" src="https://img.shields.io/badge/v6.26.2-release-2E8B57?style=flat" alt="Version 6.26.2"/>
+  <img height="24" src="https://img.shields.io/badge/v7.0.0-release-2E8B57?style=flat" alt="Version 7.0.0"/>
   <img height="24" src="https://img.shields.io/badge/WARNING-SECURITY%20TOOL-B22222?style=flat" alt="Security Tool Warning"/>
   <img height="24" src="https://img.shields.io/badge/LICENSE-MIT-4169A1?style=flat" alt="MIT License"/>
   <img height="24" src="https://img.shields.io/badge/AI-AUTONOMOUS%20AGENT-6A5ACD?style=flat&logo=openai&logoColor=white" alt="AI Powered"/>
@@ -131,7 +131,7 @@ We maintain a public **[Project Board](https://github.com/users/samugit83/projec
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose v2+
+- [Docker](https://docs.docker.com/get-docker/) Engine 28.0.0 or newer & Docker Compose v2+ (check with `docker version --format '{{.Server.Version}}'`)
   - **macOS:** Docker Desktop, with Memory raised to at least 4 GB (8 GB with `--gvm`) in Settings → Resources. Clone under `~/` so the path is inside the default File Sharing list.
   - **Windows:** Docker Desktop with the WSL2 backend, run from inside the WSL2 filesystem (`~/`), not `/mnt/c/`.
 
@@ -249,7 +249,7 @@ All lifecycle management is handled by a single script:
 | `./redamon.sh up` | Start services (auto-detects GVM and KB mode from install) |
 | `./redamon.sh up dev` | Start in dev mode with hot-reload (auto-detects GVM and KB mode) |
 | `./redamon.sh down` | Stop services (preserves data) |
-| `./redamon.sh status` | Show running services, version, GVM mode, KB state |
+| `./redamon.sh status` | Show running services, version, GVM mode, KB state, plugin platform state (and why it cannot run on this host, when it cannot) |
 | `./redamon.sh clean` | Remove containers + images, keep data |
 | `./redamon.sh create-admin` | Create the admin login (or reset it) -- use if no prompt appeared at install |
 | `./redamon.sh reset-password` | Reset an existing user's password from the terminal |
@@ -482,6 +482,7 @@ Highlights of what is implemented:
 - **Fail-closed by default.** Unset auth tokens reject rather than serve, default database credentials are refused and rotated, WebSockets require a signed ticket plus a server-side same-origin check, and every request is scoped to its authenticated owner (per-user access control with anti-enumeration 404s).
 - **Defense in depth.** SSRF egress guards, secret redaction in logs, append-only audit trails, container-escape hardening, decompression and concurrency caps, and supply-chain pinning (sha256 + commit pins).
 - **A non-disableable hard guardrail** blocks government, military, and intergovernmental targets regardless of configuration.
+- **Third-party plugins are contained, not trusted.** The plugin platform installs only from an Ed25519-signed catalog, runs each plugin under its own UID in a runner with no internet and no database or LLM credentials, reaches the stack only through a two-route proxy that re-authorizes every call, and lets a plugin change the agent's instructions only through text a person approves.
 - **Verified, release-gated remediation.** Fixes ship in sequenced waves, each independently verified with live exploit reproduction before and after the patch. See the [Changelog](CHANGELOG.md) security entries.
 
 Found a vulnerability? See our [Security Policy](SECURITY.md) for private disclosure.
@@ -768,6 +769,14 @@ An **LLM-powered Intent Router** classifies user requests into agent skills: CVE
 
 > **[Wiki: Chat Skills](https://github.com/samugit83/redamon/wiki/Chat-Skills)** | **[Community Chat Skills](agentic/skills/)**
 
+### Plugins: Extend RedAmon Without Forking It
+
+A **plugin platform**, part of every install (which is why RedAmon needs Docker Engine 28+), lets new capabilities ship as plugins from the separate, public **[redamon-plugins](https://github.com/samugit83/redamon-plugins)** repository instead of changes to RedAmon itself. An admin installs a plugin from the **Plugins** page, out of a signed catalog or from files; its actions then appear where it declares them (the chat's gear menu, a project's skills row, its own page), each marked with a plugin badge. The first plugin, **Skiller**, reads one finished chat session and proposes a better, session-agnostic version of a skill the agent used, built-in or one of your own uploaded `.md` skills (you pick which). You review it side by side: a built-in skill's version is approved, rejected, or reset later; a version of your own skill is saved as a new skill, named `<name> vN` by default, and the original is never changed.
+
+Plugin code is treated as untrusted: it runs in a separate runner container, one process and UID per plugin, with no internet and no credentials, and reaches RedAmon only through a Gateway that checks a per-call token, the plugin's granted permissions, and your tenancy on every call. A plugin can read only what it was granted, keep its own data, ask the agent to call your chosen model for it, and propose skill text; nothing it proposes changes the agent until a person approves it.
+
+> **[Wiki: Plugins](https://github.com/samugit83/redamon/wiki/Plugins)** | **[Technical: README.PLUGINS.md](docs/readmes/README.PLUGINS.md)** | **[Plugin SDK: README.PLUGIN_SDK.md](docs/readmes/README.PLUGIN_SDK.md)**
+
 ### GitHub Secret Hunter
 
 Scans GitHub repositories, gists, and commit history for exposed secrets using **40+ regex patterns** and Shannon entropy analysis.
@@ -854,6 +863,7 @@ flowchart TB
     subgraph Backend["⚙️ Backend Layer"]
         Agent[AI Agent Orchestrator<br/>FastAPI + LangGraph<br/>:8090]
         ReconOrch[Recon Orchestrator<br/>FastAPI + Docker SDK<br/>:8010]
+        PluginRunner[Plugin Runner<br/>isolated network, no internet]
     end
 
     subgraph Tools["🔧 MCP Tools Layer"]
@@ -897,6 +907,7 @@ flowchart TB
     CLI --> Recon
     Webapp <-->|WebSocket| Agent
     Webapp -->|REST + SSE| ReconOrch
+    PluginRunner <-->|Gateway, via plugin-gateway proxy| Webapp
     Webapp --> Neo4j
     Webapp --> Postgres
     ReconOrch -->|Docker SDK| Recon
@@ -955,6 +966,7 @@ flowchart TB
 | **Secret Multiscanner** | Deep secret scanning across 14 source kinds (git, GitHub, GitLab, Docker, Hugging Face, S3, GCS, filesystem, Jenkins, Elasticsearch, Postman, CI) with 1060 detectors, live-credential verification, and one hardened container per source running in parallel | [Wiki: Secret Multiscanner](https://github.com/samugit83/redamon/wiki/Secret-Multiscanner) |
 | **Supply-Chain Scanner** | Offline malicious/vulnerable package detection (OSV-Scanner + GuardDog + retire.js) with a hardened DIRTY/CLEAN split; 3 layers (agent tools, standalone SBOM scan, live-target recon) | [README.SUPPLY_CHAIN.md](docs/readmes/README.SUPPLY_CHAIN.md) |
 | **PostgreSQL Database** | Project settings, user accounts, configuration data | [README.POSTGRES.md](docs/readmes/README.POSTGRES.md) |
+| **Plugin Platform** | Installs signed third-party plugins and runs them isolated: the Plugin Manager and Gateway in the webapp, the plugin runner (one worker per plugin version under its own UID) and the plugin-gateway proxy on internal networks with no internet | [README.PLUGINS.md](docs/readmes/README.PLUGINS.md) · [README.PLUGIN_SDK.md](docs/readmes/README.PLUGIN_SDK.md) · [Wiki: Plugins](https://github.com/samugit83/redamon/wiki/Plugins) |
 | **Settings Registry** | The one description of every recon parameter: its unit, bounds, engagement cap, stealth profile and who may write it. Every derived list the pipeline used to keep aligned by hand is a query over it | [README.SETTINGS_REGISTRY.md](docs/readmes/README.SETTINGS_REGISTRY.md) · [Wiki: Project Settings Registry](https://github.com/samugit83/redamon/wiki/Project-Settings-Registry) |
 | **Test Environments** | Intentionally vulnerable Docker containers for safe testing | [README.GPIGS.md](docs/readmes/README.GPIGS.md) |
 
@@ -969,6 +981,8 @@ flowchart TB
 | Server Deployment (single-host) | **[Wiki: Deploying to a Server](https://github.com/samugit83/redamon/wiki/Deploying-to-a-Server)** · [tooling/deploy/single-host/README.md](tooling/deploy/single-host/README.md) |
 | **Security Posture** (defense-in-depth catalog) | **[docs/readmes/README.SECURITY_POSTURE.md](docs/readmes/README.SECURITY_POSTURE.md)** |
 | Supply-Chain / Malicious-Package Detection | [docs/readmes/README.SUPPLY_CHAIN.md](docs/readmes/README.SUPPLY_CHAIN.md) |
+| Plugin Platform | **[Wiki: Plugins](https://github.com/samugit83/redamon/wiki/Plugins)** · [docs/readmes/README.PLUGINS.md](docs/readmes/README.PLUGINS.md) |
+| Writing a Plugin (SDK) | [docs/readmes/README.PLUGIN_SDK.md](docs/readmes/README.PLUGIN_SDK.md) · [redamon-plugins](https://github.com/samugit83/redamon-plugins) |
 | Threat Model (STRIDE) | [docs/readmes/README.TM.SYSTEM_OVERVIEW.md](docs/readmes/README.TM.SYSTEM_OVERVIEW.md) |
 | Security Policy | [SECURITY.md](SECURITY.md) |
 | AI-Assisted Development | **[Wiki: Ship Perfect PRs with AI](https://github.com/samugit83/redamon/wiki/AI-Assisted-Development)** |
@@ -985,7 +999,7 @@ flowchart TB
 
 ## Troubleshooting
 
-RedAmon is fully Dockerized and runs on any OS with Docker Compose v2+. For OS-specific fixes (Linux, Windows, macOS), see **[Troubleshooting Guide](docs/readmes/TROUBLESHOOTING.md)** or the **[Wiki](https://github.com/samugit83/redamon/wiki/Troubleshooting)**.
+RedAmon is fully Dockerized and runs on any OS with Docker Engine 28.0.0 or newer and Docker Compose v2+. For OS-specific fixes (Linux, Windows, macOS), see **[Troubleshooting Guide](docs/readmes/TROUBLESHOOTING.md)** or the **[Wiki](https://github.com/samugit83/redamon/wiki/Troubleshooting)**.
 
 ---
 

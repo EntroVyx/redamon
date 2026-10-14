@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireUserAccess } from '@/lib/session'
+import { getSession, requireUserAccess } from '@/lib/session'
 import prisma from '@/lib/prisma'
-import type { Prisma } from '@prisma/client'
+import {
+  auditActorFor, deleteUserSkill, updateUserSkill, userSkillErrorResponse,
+} from '@/lib/userSkillWrites'
 
 interface RouteParams {
   params: Promise<{ id: string; skillId: string }>
@@ -32,58 +34,29 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 }
 
-// PUT /api/users/[id]/attack-skills/[skillId] - Update name or content
+/**
+ * PUT /api/users/[id]/attack-skills/[skillId] - rename, describe or replace the text.
+ * Only name, description and content are read: lineage, provenance and quarantine are
+ * never writable here.
+ */
 export async function PUT(request: NextRequest, { params }: RouteParams) {
   try {
     const { id, skillId } = await params
     const __denied = await requireUserAccess(request, id)
     if (__denied) return __denied
-    const body = await request.json()
-
-    const existing = await prisma.userAttackSkill.findFirst({
-      where: { id: skillId, userId: id },
-    })
-
-    if (!existing) {
-      return NextResponse.json({ error: 'Skill not found' }, { status: 404 })
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'The body must be a JSON object' }, { status: 400 })
     }
-
-    const data: { name?: string; description?: string | null; content?: string } = {}
-    if (body.name !== undefined) {
-      if (typeof body.name !== 'string' || !body.name.trim()) {
-        return NextResponse.json({ error: 'name must be a non-empty string' }, { status: 400 })
-      }
-      data.name = body.name.trim()
-    }
-    if (body.description !== undefined) {
-      if (body.description === null || body.description === '') {
-        data.description = null
-      } else if (typeof body.description !== 'string') {
-        return NextResponse.json({ error: 'description must be a string' }, { status: 400 })
-      } else if (body.description.length > 500) {
-        return NextResponse.json({ error: 'description must be 500 characters or less' }, { status: 400 })
-      } else {
-        data.description = body.description.trim()
-      }
-    }
-    if (body.content !== undefined) {
-      if (typeof body.content !== 'string') {
-        return NextResponse.json({ error: 'content must be a string' }, { status: 400 })
-      }
-      if (body.content.length > 50 * 1024) {
-        return NextResponse.json({ error: 'content exceeds maximum size of 50KB' }, { status: 400 })
-      }
-      data.content = body.content
-    }
-
-    const updated = await prisma.userAttackSkill.update({
-      where: { id: skillId },
-      data,
-      select: { id: true, name: true, description: true, createdAt: true },
-    })
-
+    const session = await getSession()
+    const updated = await updateUserSkill(
+      { userId: id, skillId, name: body.name, description: body.description, content: body.content },
+      auditActorFor(session?.userId, id),
+    )
     return NextResponse.json(updated)
   } catch (error) {
+    const refused = userSkillErrorResponse(error)
+    if (refused) return refused
     console.error('Failed to update attack skill:', error)
     return NextResponse.json(
       { error: 'Failed to update attack skill' },
@@ -92,46 +65,21 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   }
 }
 
-// DELETE /api/users/[id]/attack-skills/[skillId] - Delete + cascade cleanup
+/**
+ * DELETE /api/users/[id]/attack-skills/[skillId] - the skill, its proposals still waiting
+ * for review, and its toggle in every project of the owner, in one transaction.
+ */
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
     const { id, skillId } = await params
     const __denied = await requireUserAccess(request, id)
     if (__denied) return __denied
-
-    const existing = await prisma.userAttackSkill.findFirst({
-      where: { id: skillId, userId: id },
-    })
-
-    if (!existing) {
-      return NextResponse.json({ error: 'Skill not found' }, { status: 404 })
-    }
-
-    // Delete the skill
-    await prisma.userAttackSkill.delete({ where: { id: skillId } })
-
-    // Cascade: remove this skillId from attackSkillConfig.user in all user's projects
-    const projects = await prisma.project.findMany({
-      where: { userId: id },
-      select: { id: true, attackSkillConfig: true },
-    })
-
-    for (const project of projects) {
-      const config = (project.attackSkillConfig as Prisma.JsonObject) || {}
-      const userConfig = (config.user as Prisma.JsonObject) || {}
-      if (skillId in userConfig) {
-        const { [skillId]: _, ...rest } = userConfig
-        await prisma.project.update({
-          where: { id: project.id },
-          data: {
-            attackSkillConfig: { ...config, user: rest },
-          },
-        })
-      }
-    }
-
-    return NextResponse.json({ success: true })
+    const session = await getSession()
+    const result = await deleteUserSkill({ userId: id, skillId }, auditActorFor(session?.userId, id))
+    return NextResponse.json({ success: true, ...result })
   } catch (error) {
+    const refused = userSkillErrorResponse(error)
+    if (refused) return refused
     console.error('Failed to delete attack skill:', error)
     return NextResponse.json(
       { error: 'Failed to delete attack skill' },

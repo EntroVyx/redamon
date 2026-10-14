@@ -41,12 +41,14 @@ The following are **in scope** for security reports:
 - Authentication/authorization bypasses in the web application
 - Credential leaks (API keys, Neo4j/PostgreSQL passwords exposed unintentionally)
 - Command injection or code execution in user-controlled inputs
+- The plugin platform: the plugin runner's isolation (its networks, per-worker limits, clean environment), the Gateway's authorization of every plugin call, catalog and archive verification, and the core review and approval screens
 
 The following are **out of scope**:
 
 - Vulnerabilities in upstream tools (Metasploit, Nmap, Nuclei, Hydra, etc.) — report those to the respective projects
 - Security issues in test/vulnerable environments (VulnBank, DVWA) — these are intentionally vulnerable
 - Expected behavior of offensive security features when used as designed (e.g., the agent executing exploits against authorized targets)
+- Vulnerabilities in a plugin's own code. Plugins are third-party code installed on demand from the separate [`redamon-plugins`](https://github.com/samugit83/redamon-plugins) repository: report a flaw in a plugin to that repository's maintainers, privately, in the same way as above. If a plugin can escape the runner, call the Gateway beyond the permissions an admin granted, or change agent behaviour without a person's approval, that is a platform vulnerability and in scope here
 
 ## Responsible Disclosure
 

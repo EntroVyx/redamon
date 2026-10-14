@@ -1,0 +1,249 @@
+{
+  "contract": "redamon-plugin-runner",
+  "about": [
+    "The supervisor's HTTP API as the webapp sees it (phase 03 'Supervisor API'). Run against",
+    "the real app by services/plugin_runner/tests/test_supervisor_contract.py and against the",
+    "webapp's fake runner by webapp/src/lib/plugins/runnerClient.contract.test.ts, so the double",
+    "behind runnerClient.ts cannot drift from the real thing. Setup on both sides: runner key",
+    "`runnerKey`, the `echo` fixture plugin running at 1.0.0. `key`: \"valid\" sends the runner",
+    "key, null sends no header, any other string is sent as it is. `expect`: `status`, plus",
+    "`body` (exact), `bodyIncludes` (these top-level fields equal), `keys` (exact top-level key",
+    "set) or `code` (body.code). `jobsComplete` is the body the supervisor posts to the",
+    "Gateway's /api/plugin-gateway/v1/jobs/complete with the job's own bearer token.",
+    "`before`: requests sent first, their answers ignored (a job left running). `runnerState`:",
+    "\"out_of_date\" sets the runner up out of date (the webapp runs another platform version).",
+    "An async 202 carries the runner's `bootId`, which the webapp stores on the job.",
+    "`migrate` runs the rows through echo's migrations/NNNN_{up,down}.py `migrate_row` (TD-28)."
+  ],
+  "runnerKey": "contract-runner-key-0123456789abcdef",
+  "platformVersion": "1.1.0",
+  "cases": [
+    {
+      "name": "health with the key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": "valid" },
+      "expect": { "status": 200, "keys": ["bootId", "platformVersion", "state", "workers"],
+                  "bodyIncludes": { "platformVersion": "1.1.0", "state": "ok" } }
+    },
+    {
+      "name": "health without a key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": null },
+      "expect": { "status": 401, "body": { "error": "Invalid or missing runner key.", "code": "unauthorized" } }
+    },
+    {
+      "name": "health with a wrong key",
+      "request": { "method": "GET", "path": "/runner/v1/health", "key": "not-the-key" },
+      "expect": { "status": 401, "body": { "error": "Invalid or missing runner key.", "code": "unauthorized" } }
+    },
+    {
+      "name": "reload",
+      "request": { "method": "POST", "path": "/runner/v1/reload", "key": "valid" },
+      "expect": { "status": 200, "bodyIncludes": { "ok": true } }
+    },
+    {
+      "name": "a sync action",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": {
+          "token": "call-token",
+          "params": { "hello": "world" },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+          "timeoutSeconds": 30,
+          "async": false
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "result": { "echo": { "hello": "world" }, "plugin": "echo", "version": "1.0.0", "user": "user-1",
+                      "project": null, "session": null, "job": null }
+        }
+      }
+    },
+    {
+      "name": "a sync action that raises a PluginError",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/raise_plugin_error",
+        "key": "valid",
+        "body": {
+          "token": "call-token",
+          "params": { "code": "no_target", "message": "Pick a target first." },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+          "timeoutSeconds": 30,
+          "async": false
+        }
+      },
+      "expect": { "status": 200, "body": { "ok": false, "error": { "code": "no_target", "message": "Pick a target first." } } }
+    },
+    {
+      "name": "an async action",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": {
+          "token": "job-token",
+          "params": { "seconds": 0.1 },
+          "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "contract-job-1" },
+          "timeoutSeconds": 30,
+          "async": true,
+          "jobId": "contract-job-1"
+        }
+      },
+      "expect": { "status": 202, "keys": ["bootId", "jobId"], "bodyIncludes": { "jobId": "contract-job-1" } }
+    },
+    {
+      "name": "an async action without a job id",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": { "token": "job-token", "params": { "seconds": 0.1 },
+                  "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1" },
+                  "timeoutSeconds": 30, "async": true }
+      },
+      "expect": { "status": 400, "code": "bad_request" }
+    },
+    {
+      "name": "an async job that is already running",
+      "before": [
+        { "method": "POST", "path": "/runner/v1/plugins/echo/actions/sleep", "key": "valid",
+          "body": { "token": "job-token", "params": { "seconds": 5 },
+                    "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "dup-job" },
+                    "timeoutSeconds": 30, "async": true, "jobId": "dup-job" } }
+      ],
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/sleep",
+        "key": "valid",
+        "body": { "token": "job-token", "params": { "seconds": 5 },
+                  "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "user-1", "jobId": "dup-job" },
+                  "timeoutSeconds": 30, "async": true, "jobId": "dup-job" }
+      },
+      "expect": { "status": 409, "code": "job_running" }
+    },
+    {
+      "name": "an action the manifest does not declare",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/not_declared",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_action" }
+    },
+    {
+      "name": "a plugin that is not running",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/nobody/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "nobody", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_plugin" }
+    },
+    {
+      "name": "a plugin version that is not running",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "9.9.9", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 404, "code": "unknown_plugin" }
+    },
+    {
+      "name": "an action while the runner is out of date",
+      "runnerState": "out_of_date",
+      "request": {
+        "method": "POST",
+        "path": "/runner/v1/plugins/echo/actions/echo",
+        "key": "valid",
+        "body": { "token": "t", "params": {}, "ctx": { "pluginId": "echo", "version": "1.0.0", "userId": "u" },
+                  "timeoutSeconds": 5, "async": false }
+      },
+      "expect": { "status": 503, "code": "runner_out_of_date" }
+    },
+    {
+      "name": "cancel of a job that is not running",
+      "request": { "method": "POST", "path": "/runner/v1/plugins/echo/jobs/no-such-job/cancel", "key": "valid" },
+      "expect": { "status": 404, "code": "unknown_job" }
+    },
+    {
+      "name": "the plugin log",
+      "request": { "method": "GET", "path": "/runner/v1/plugins/echo/logs?lines=5", "key": "valid" },
+      "expect": { "status": 200, "keys": ["lines"] }
+    },
+    {
+      "name": "a migration batch",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up",
+                  "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 },
+                           { "id": "r1", "collection": "items", "key": "k1", "ownerType": "user", "value": { "delete": true } },
+                           { "id": "r2", "collection": "items", "key": "k2", "ownerType": "user", "value": { "a": 1 } }] }
+      },
+      "expect": { "status": 200, "body": { "results": [
+        { "id": "r0", "value": { "v": 2, "data": 5 } },
+        { "id": "r1", "delete": true },
+        { "id": "r2", "value": { "v": 2, "data": { "a": 1 } } }
+      ] } }
+    },
+    {
+      "name": "a migration down",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "down", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": { "v": 2, "data": 5 } }] }
+      },
+      "expect": { "status": 200, "body": { "results": [{ "id": "r0", "value": 5 }] } }
+    },
+    {
+      "name": "a migration row that raises",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }, { "id": "r1", "collection": "items", "key": "k1", "ownerType": "user", "value": { "raise": true } }] }
+      },
+      "expect": { "status": 422, "code": "migration_failed" }
+    },
+    {
+      "name": "a migration step the plugin does not ship",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 3, "direction": "down", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }] }
+      },
+      "expect": { "status": 422, "code": "migration_missing" }
+    },
+    {
+      "name": "a migration of a version not on the volume",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "9.9.9", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }] }
+      },
+      "expect": { "status": 404, "code": "unknown_version" }
+    },
+    {
+      "name": "a migration request carrying a token",
+      "request": {
+        "method": "POST", "path": "/runner/v1/plugins/echo/migrate", "key": "valid",
+        "body": { "version": "1.0.0", "step": 2, "direction": "up", "rows": [{ "id": "r0", "collection": "items", "key": "k0", "ownerType": "user", "value": 5 }], "token": "call-token" }
+      },
+      "expect": { "status": 400, "code": "bad_request" }
+    }
+  ],
+  "unconfigured": {
+    "name": "a runner with no key configured",
+    "request": { "method": "GET", "path": "/runner/v1/health", "key": "anything" },
+    "expect": { "status": 503, "code": "runner_not_configured" }
+  },
+  "jobsComplete": {
+    "succeeded": { "status": "succeeded", "result": { "slept": 0.1 } },
+    "failed": { "status": "failed", "error": { "code": "action_timeout", "message": "The action did not finish within 30 seconds." } },
+    "cancelled": { "status": "cancelled", "error": { "code": "cancelled", "message": "The action was cancelled." } }
+  }
+}

@@ -23,7 +23,9 @@ import {
 import { MUTEABLE_FINDING_LABELS } from '@/lib/mcp/findingLabels'
 import { pickProjectColumns } from '@/lib/projectColumns'
 import { jevImportWarnings } from '@/lib/reconSettings/jevEngine'
+import { PROJECT_EXPORT_EXCLUDED, isPluginArchivePath } from '@/lib/projectExport/pluginExclusion'
 import { validateSerializedScanChange } from '@/lib/reconSettings/serializedScanGate'
+import { skillToggleWarnings, trimImportedSkillToggles } from '@/lib/userSkills'
 
 const MUTEABLE_LABELS = new Set<string>(MUTEABLE_FINDING_LABELS)
 
@@ -176,10 +178,14 @@ export async function POST(request: NextRequest) {
     // directory (available without decompressing).
     let entryCount = 0
     let declaredUncompressed = 0
-    zip.forEach((_path, entry) => {
+    // Plugin rows are never imported (OQ-18): the import reads only the files it names below,
+    // so these are skipped by construction; they are only noted here to tell the user.
+    const pluginFiles: string[] = []
+    zip.forEach((entryPath, entry) => {
       entryCount += 1
       const sz = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize
       if (typeof sz === 'number' && sz > 0) declaredUncompressed += sz
+      if (!entry.dir && isPluginArchivePath(entryPath)) pluginFiles.push(entryPath)
     })
     if (entryCount > MAX_ENTRIES) {
       return NextResponse.json(
@@ -263,6 +269,16 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         )
       }
+    }
+
+    // The bundle's user-skill toggles name the EXPORTING account's skills: those this
+    // account does not have are dropped, then the rest cut to the enabled bound.
+    const skillToggleNotes: string[] = []
+    if ('attackSkillConfig' in projectFields) {
+      const trimmed = await trimImportedSkillToggles(prisma, userId, projectFields.attackSkillConfig)
+      if (trimmed.value) projectFields.attackSkillConfig = trimmed.value
+      else delete projectFields.attackSkillConfig
+      skillToggleNotes.push(...skillToggleWarnings(trimmed, 'project'))
     }
 
     // Create new project under the specified user
@@ -490,6 +506,13 @@ export async function POST(request: NextRequest) {
             if (!name || !stored.ok) {
               skipped++
               continue
+            }
+            const presetSettings = stored.settings as Record<string, unknown>
+            if ('attackSkillConfig' in presetSettings) {
+              const trimmed = await trimImportedSkillToggles(prisma, userId, presetSettings.attackSkillConfig)
+              if (trimmed.value) presetSettings.attackSkillConfig = trimmed.value
+              else delete presetSettings.attackSkillConfig
+              skillToggleNotes.push(...skillToggleWarnings(trimmed, `preset "${name}"`))
             }
             await prisma.userProjectPreset.create({
               data: {
@@ -764,6 +787,10 @@ export async function POST(request: NextRequest) {
       ...await jevImportWarnings(projectFields, userId),
       // Serialized scan on without the capture proxy: warn, never block (§4.1).
       ...validateSerializedScanChange(null, projectFields),
+      ...(pluginFiles.length
+        ? [`This archive holds plugin files (${pluginFiles.slice(0, 3).join(', ')}${pluginFiles.length > 3 ? ', …' : ''}); plugin skill versions and plugin data are not imported.`]
+        : []),
+      ...skillToggleNotes,
     ]
 
     return NextResponse.json({
@@ -772,6 +799,8 @@ export async function POST(request: NextRequest) {
       projectName: newProject.name,
       stats,
       warnings,
+      excluded: [...PROJECT_EXPORT_EXCLUDED],
+      excludedReason: 'Plugin skill versions and plugin data are not imported.',
     })
   } catch (error) {
     console.error('Import failed:', error)

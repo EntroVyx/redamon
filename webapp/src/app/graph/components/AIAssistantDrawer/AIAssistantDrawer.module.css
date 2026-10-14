@@ -315,7 +315,9 @@
   top: 100%;
   right: 0;
   margin-top: 4px;
-  min-width: 160px;
+  /* Anchored to the small gear button, so its width collapses to this floor. Sized to keep
+     "Improve skill from this session" (~161px at 12px) on one line beside its icon. */
+  min-width: 224px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-default);
@@ -344,6 +346,48 @@
 
 .settingsDropdownItem + .settingsDropdownItem {
   border-top: 1px solid var(--border-default);
+}
+
+.settingsDropdownItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Plugin groups in the gear menu (design §6.7): a divider, a plugin label, then its items.
+   Labelled by the plugin's name with the plugin badge, never the bare word "Plugins" (the
+   same menu already names "MCP Tool Plugins"). */
+.pluginGroup {
+  border-top: 1px solid var(--border-strong, var(--border-default));
+}
+
+.pluginGroupLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 2px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pluginUpdating {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* The global reset makes every svg a block, so an inline icon landed on its own line above
+   the label. A flex row keeps it beside the label; flex-start plus a 2px nudge centres the
+   12px icon on the first 16px line if a long plugin label still wraps. Must follow
+   .settingsDropdownItem so this display wins. */
+.pluginItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 16px;
+}
+
+.pluginItemIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-tertiary);
 }
 
 /* Settings Modal */

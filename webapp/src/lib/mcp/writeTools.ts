@@ -283,10 +283,13 @@ export async function updateReconSettings(
   // The rules over several fields that the project form's save enforces. Judged
   // on the stored row with this change applied, so a rule over two fields sees
   // both even when the caller sent one.
+  const nextRow: Record<string, unknown> = { ...(before as Record<string, unknown>), ...filtered.data }
   const crossField = await validateCrossFieldRules(
-    { ...(before as Record<string, unknown>), ...filtered.data }, Object.keys(filtered.data), ctx.token.userId
+    nextRow, Object.keys(filtered.data), ctx.token.userId, { ownerUserId: before.userId }
   )
   if (crossField) throw new McpToolError(crossField, 'setting_rejected')
+  // The cross-field check normalized the user-skill toggles in nextRow (foreign ids dropped).
+  if ('attackSkillConfig' in filtered.data) filtered.data.attackSkillConfig = nextRow.attackSkillConfig
 
   // A switch onto the Jev engine needs a Jev token on the project OWNER's
   // account (not the token's user): recon resolves credentials from the owner.

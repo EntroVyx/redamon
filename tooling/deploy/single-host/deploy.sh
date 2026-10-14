@@ -492,7 +492,8 @@ cd "\$APP_PATH"
 # rebuild can never silently ship the wrong (localhost:8090) WS URL.
 step "Seed application .env (operator app-config only; secrets are redamon.sh's job)"
 touch .env
-seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || echo "\$k=\$v" >> .env; }
+# A key is appended on a line of its own even when the operator's .env has no final newline.
+seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || { [ -z "\$(tail -c1 .env)" ] || echo >> .env; echo "\$k=\$v" >> .env; }; }
 seed NVD_API_KEY "\${NVD_API_KEY}"
 seed KB_EMBEDDING_USE_API "\${KB_EMBEDDING_USE_API}"
 seed KB_EMBEDDING_API_BASE_URL "\${KB_EMBEDDING_API_BASE_URL}"
@@ -541,6 +542,9 @@ seed MCP_TOKEN_PRUNE_INTERVAL "\${MCP_TOKEN_PRUNE_INTERVAL}"
 # non-default HTTPS_PORT an Origin-sending client would be 403'd against its own
 # origin, so the public origin is passed explicitly.
 seed MCP_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
+# The plugin routes check the request Origin like the MCP route, hence the same
+# derived origin.
+seed PLUGINS_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
 # Behind nginx every request arrives from 127.0.0.1 unless the app is told the
 # edge is trusted. nginx pins X-Forwarded-For to the real peer, so this is safe
 # here and is what makes audit records and the login lockout name a real IP.
@@ -581,6 +585,7 @@ cap_cpus RECON_ORCHESTRATOR_CPUS 4
 cap_cpus AGENT_CPUS 8
 cap_cpus WEBAPP_CPUS 4
 cap_cpus DOCKER_BROKER_CPUS 2
+cap_cpus PLUGIN_RUNNER_CPUS 2
 chmod 600 .env
 success "Checkout ready"
 EOF
@@ -860,6 +865,15 @@ EOF
 cmd_update() {
   hr "UPDATE ${HOST_IP} (pull latest ${REPO_BRANCH} HEAD + apply)"
   ship_assets
+  # Before the pull: redamon.sh refuses an Engine older than 28.0.0, and a server set up
+  # before that requirement would otherwise stop halfway through the update. A no-op on
+  # a current Engine and Compose.
+  hr "Docker Engine + Compose (upgraded only when too old)"
+  remote <<EOF
+${PREAMBLE}
+source modules/host_bootstrap.sh
+bootstrap_docker
+EOF
   hr "Pull --ff-only + diff-driven rebuild via redamon.sh update"
   remote <<EOF
 ${PREAMBLE}
@@ -878,7 +892,8 @@ is_true "\${ENABLE_ZRAM}" && export REDAMON_ENABLE_ZRAM=1
 [ -z "\${REDAMON_VERSION:-}" ] && [ -f VERSION ] && export REDAMON_VERSION="\$(cat VERSION 2>/dev/null || echo)"
 step "Re-seed application .env (operator app-config; init-only before, so update ignored it)"
 touch .env
-seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || echo "\$k=\$v" >> .env; }
+# A key is appended on a line of its own even when the operator's .env has no final newline.
+seed() { local k="\$1" v="\$2"; [ -z "\$v" ] && return 0; grep -q "^\$k=" .env && sed -i "s|^\$k=.*|\$k=\$v|" .env || { [ -z "\$(tail -c1 .env)" ] || echo >> .env; echo "\$k=\$v" >> .env; }; }
 # Inbound MCP server. Seeded BEFORE redamon.sh runs: ensure_auth_secrets appends
 # MCP_SERVER_ENABLED=false when the key is ABSENT, so without this the deployed
 # host actively pins the flag off and the operator's choice is unreachable.
@@ -903,6 +918,9 @@ seed MCP_TOKEN_PRUNE_INTERVAL "\${MCP_TOKEN_PRUNE_INTERVAL}"
 # non-default HTTPS_PORT an Origin-sending client would be 403'd against its own
 # origin, so the public origin is passed explicitly.
 seed MCP_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
+# The plugin routes check the request Origin like the MCP route, hence the same
+# derived origin.
+seed PLUGINS_ALLOWED_ORIGIN "\${MCP_PUBLIC_ORIGIN}"
 # Behind nginx every request arrives from 127.0.0.1 unless the app is told the
 # edge is trusted. nginx pins X-Forwarded-For to the real peer, so this is safe
 # here and is what makes audit records and the login lockout name a real IP.
@@ -913,7 +931,9 @@ sg docker -c "cd \$APP_PATH && ./redamon.sh update"
 # redamon.sh rebuilds only what CHANGED. An .env-only edit changes no image, so
 # the webapp would keep running with its old environment; recreate it explicitly.
 step "Recreate webapp so a changed .env actually takes effect"
-sg docker -c "cd \$APP_PATH && docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml up -d webapp"
+# Explicit -f files ignore COMPOSE_FILE, where redamon.sh adds the plugins overlay; without
+# it here, every update would take the webapp off its plugin network and volume.
+sg docker -c "cd \$APP_PATH && docker compose -f docker-compose.yml -f \$OVERLAY_DIR/docker-compose.prod.yml -f docker-compose.plugins.yml up -d webapp"
 EOF
   run_secrets_gate
   # nginx may have changed; re-render is idempotent + gated

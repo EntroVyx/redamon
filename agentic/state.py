@@ -1116,6 +1116,12 @@ class AgentState(TypedDict):
     # state updates. See FIRETEAM.md §13.3.
     _input_tokens_this_turn: int
     _output_tokens_this_turn: int
+    # What the last think turn rendered, None when nothing: {skillId, revision,
+    # changeSetId} for a built-in playbook (revision 1 = factory text), or
+    # {skillId: "user_skill:<id>", kind: "user", contentSha256} for a user skill's
+    # text (no revision). Carried to phase_update; a ContextVar set while rendering
+    # dies with the node's context.
+    _skill_workflow: Optional[dict]
 
     # Fireteam (multi-agent) deployment state
     _current_fireteam_plan: Optional[dict]       # FireteamPlan.model_dump()

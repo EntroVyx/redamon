@@ -64,6 +64,7 @@ import { resolveEmptyGraphState } from './utils/emptyGraph'
 import { useTheme, useSession, useReconStatus, useReconSSE, useGvmStatus, useGvmSSE, useGithubHuntStatus, useGithubHuntSSE, useTrufflehogRuns, useTrufflehogSSE, useSupplyChainStatus, useSupplyChainSSE, useActiveSessions, useMultiPartialReconStatus, useMultiPartialReconSSE } from '@/hooks'
 import { useProjectById } from '@/hooks/useProjects'
 import { useScanStartFailure } from '@/hooks/useScanStartFailure'
+import { useDrawerOffsets } from '@/hooks/useDrawerOffsets'
 import { useGraphTypeFilterPrefs, useGraphViewPrefs } from '@/hooks/useUserPreferences'
 import { useProject } from '@/providers/ProjectProvider'
 import { PARTIAL_RECON_PHASE_MAP } from '@/lib/recon-types'
@@ -159,21 +160,7 @@ export default function GraphPage() {
     clearSelection()
   }, [projectId, clearSelection])
 
-  // Track .body position for fixed-position log drawers
-  useEffect(() => {
-    const body = bodyRef.current
-    if (!body) return
-    const update = () => {
-      const rect = body.getBoundingClientRect()
-      document.documentElement.style.setProperty('--drawer-top', `${rect.top}px`)
-      document.documentElement.style.setProperty('--drawer-bottom', `${window.innerHeight - rect.bottom}px`)
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(body)
-    window.addEventListener('resize', update)
-    return () => { ro.disconnect(); window.removeEventListener('resize', update) }
-  }, [])
+  useDrawerOffsets(bodyRef)
   // Check if GVM stack is installed
   useEffect(() => {
     fetch('/api/gvm/available')

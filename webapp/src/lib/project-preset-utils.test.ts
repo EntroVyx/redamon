@@ -30,7 +30,7 @@ import {
   presetFingerprint,
   readLoadedPreset,
 } from './project-preset-utils'
-import { getPresetById } from './recon-presets'
+import { RECON_PRESETS, getPresetById } from './recon-presets'
 import { canonicalJson, cyrb53 } from './fingerprint'
 
 /** The half that is listed by name, because it has no registry classification. */
@@ -315,6 +315,70 @@ describe('extractPresetSettings', () => {
 // ============================================================
 // applyPresetSettings
 // ============================================================
+
+// D15: `attackSkillConfig` is half preset, half the person's own. With a missing toggle
+// meaning OFF, resetting `user` to the default `{}` on every apply would silently turn
+// all of the person's skills off, so the project's `user` map is kept unless the preset
+// itself carries one. `builtIn` follows the preset or the default like any field.
+describe('applyPresetSettings: the user-skill toggles (D15)', () => {
+  const DEFAULT_CONFIG = extractPresetSettings({}).attackSkillConfig as {
+    builtIn: Record<string, boolean>; user: Record<string, boolean>
+  }
+  const CUSTOM_BUILT_IN = { ...DEFAULT_CONFIG.builtIn, xss: !DEFAULT_CONFIG.builtIn.xss, rce: !DEFAULT_CONFIG.builtIn.rce }
+  const current = { attackSkillConfig: { builtIn: CUSTOM_BUILT_IN, user: { skillA: true, skillB: false } } }
+
+  test('a preset that does not name it: builtIn resets to the default, the project\'s user map is kept', () => {
+    const next = applyPresetSettings(current, { naabuEnabled: true }, {})
+    expect(next.attackSkillConfig).toEqual({ builtIn: DEFAULT_CONFIG.builtIn, user: { skillA: true, skillB: false } })
+  })
+
+  test('a preset that does not name it: the backend default supplies builtIn, never the user map', () => {
+    const backend = { attackSkillConfig: { builtIn: { xss: true }, user: { fromBackend: true } } }
+    const next = applyPresetSettings(current, {}, backend)
+    expect(next.attackSkillConfig).toEqual({ builtIn: { xss: true }, user: { skillA: true, skillB: false } })
+  })
+
+  test('a preset that names it WITHOUT a user map: its builtIn, the project\'s user map', () => {
+    const next = applyPresetSettings(current, { attackSkillConfig: { builtIn: { sql_injection: false } } }, {})
+    expect(next.attackSkillConfig).toEqual({ builtIn: { sql_injection: false }, user: { skillA: true, skillB: false } })
+  })
+
+  test('a preset that names it WITH a user map: the preset\'s map replaces the project\'s', () => {
+    const preset = { attackSkillConfig: { builtIn: { xss: false }, user: { skillC: true } } }
+    expect(applyPresetSettings(current, preset, {}).attackSkillConfig).toEqual(preset.attackSkillConfig)
+  })
+
+  // An imported preset trimmed of another account's ids, or one saved when a missing toggle
+  // meant ON: replacing with it would turn every one of the person's skills off.
+  test('a preset whose user map is empty says nothing: the project\'s map is kept', () => {
+    const preset = { attackSkillConfig: { builtIn: { xss: false }, user: {} } }
+    expect(applyPresetSettings(current, preset, {}).attackSkillConfig)
+      .toEqual({ builtIn: { xss: false }, user: current.attackSkillConfig.user })
+  })
+
+  test('a current config without a user map yields user: {}', () => {
+    const noUser = { attackSkillConfig: { builtIn: CUSTOM_BUILT_IN } }
+    expect(applyPresetSettings(noUser, {}, {}).attackSkillConfig).toEqual({ builtIn: DEFAULT_CONFIG.builtIn, user: {} })
+    expect(applyPresetSettings(noUser, { attackSkillConfig: { builtIn: { xss: true } } }, {}).attackSkillConfig)
+      .toEqual({ builtIn: { xss: true }, user: {} })
+  })
+
+  test('a form that holds no config at all (the create form) gets the default builtIn and user: {}', () => {
+    expect(applyPresetSettings({}, {}, {}).attackSkillConfig).toEqual({ builtIn: DEFAULT_CONFIG.builtIn, user: {} })
+  })
+
+  test('the kept user map is a copy: editing the result never edits the current form', () => {
+    const cur = { attackSkillConfig: { builtIn: CUSTOM_BUILT_IN, user: { skillA: true } } }
+    const next = applyPresetSettings(cur, {}, {}) as { attackSkillConfig: { user: Record<string, boolean> } }
+    next.attackSkillConfig.user.skillA = false
+    expect(cur.attackSkillConfig.user.skillA).toBe(true)
+  })
+
+  test.each(RECON_PRESETS.map(p => [p.id, p] as const))('built-in %s keeps the project\'s user toggles', (_id, preset) => {
+    const next = applyPresetSettings(current, { ...preset.parameters, reconPresetId: preset.id }, {})
+    expect((next.attackSkillConfig as { user: unknown }).user).toEqual({ skillA: true, skillB: false })
+  })
+})
 
 describe('applyPresetSettings', () => {
   const current = {

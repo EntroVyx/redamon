@@ -55,10 +55,16 @@ alias for `unit`).
 | ai_attack_surface | `redamon-ai-attack-surface` | `scanners/ai_attack_surface_scan/tests` + `adapters/*/tests` |
 | capture_proxy | `redamon-capture-proxy` | `scanners/capture_proxy/tests` |
 | docker_broker | `redamon-docker-broker` | `services/docker_broker/` |
+| plugin_runner | `redamon-plugin-runner` | `services/plugin_runner/tests` |
 | shell | (host bash) | `tests/*_test.sh` |
 | webapp | (node) | `webapp/src/**/*.test.ts(x)` via vitest |
 
-A section whose image is not built is **skipped cleanly**, never failed.
+A section that cannot run (its image is not built, or the shell or webapp suite is
+missing its input) **fails** the `unit`, `all` and `coverage` gates: a suite that never
+ran proves nothing. Other tiers print `SKIP` and go on. The deliberate opt-out for a working
+copy that genuinely lacks an input is `REDAMON_TEST_ALLOW_MISSING=<section>[,<section>...]`
+(or `all`), which prints a `SKIPPED` line so the hole is visible in the log
+(`_test_missing_input` in `redamon.sh`).
 
 ### The `shell` section
 
@@ -74,6 +80,39 @@ must be **hermetic or self-skipping**: one that needs a live stack (e.g.
 `scan_timeline_db_test.sh` without postgres) prints a `SKIP` line and exits 0.
 Smoke/live shell suites are named `*_smoke.sh` / `*_live.sh` and are deliberately
 not matched.
+
+### The plugin platform
+
+The plugin platform ([README.PLUGINS.md](README.PLUGINS.md)) is tested at every level:
+
+| Layer | Where | Tier |
+|---|---|---|
+| Runner, worker, proxy, SDK | `services/plugin_runner/tests/` (the `plugin_runner` section; build the image first: `docker compose --profile plugins build plugin-runner`) | unit / integration |
+| Webapp platform (catalog, archives, Manager, Gateway, overrides, UI host) | `webapp/src/lib/plugins/**/*.test.ts`, `src/app/api/plugin*/**`, `src/components/plugins/**`, `src/app/plugins/**` | vitest |
+| Agent seam and endpoints | `agentic/tests/test_skill_parts_*.py`, `test_skill_workflow_golden.py` (the factory prompt pinned byte for byte), `test_plugin_llm_endpoint.py` (and `test_plugin_llm_live.py`, live tier, which skips without a configured provider) | unit |
+| `redamon.sh` and compose | `tests/redamon_plugins_env_test.sh`, `redamon_plugins_lifecycle_test.sh` (install, update, up, old clones, refused hosts, all with a stubbed `docker`), `redamon_plugins_profile_test.sh`, `plugins_db_test.sh` | shell |
+| Single-host deploy | `tests/deploy_plugins_env_chain_test.sh`, `deploy_plugins_nginx_test.sh` (the three plugin-internal prefixes denied at nginx) | shell |
+| Isolation, live | `tests/plugins_isolation_live.sh`: runs a probe inside the runner and the proxy and fails on any leak (internet, stack services, host through the bridge, `/plugins` writes, worker environments). Needs a stack started with `./redamon.sh up`; not in the gate | live |
+| Official catalog, live | `webapp/src/lib/plugins/catalog.live.test.ts`: opt-in with `PLUGINS_LIVE=1` (network), optionally `PLUGINS_LIVE_EXPECT=<id>@<version>`; skipped otherwise | live |
+| Real Postgres | `webapp/src/lib/plugins/{stores,lifecycle,jobs,userSkillAdoption}.pg.integration.test.ts`, `webapp/src/lib/userSkillNames.pg.integration.test.ts`, `webapp/scripts/backfill-user-skill-toggles.pg.integration.test.ts`: the SQL name key, the advisory locks, the CHECK constraints and the toggle backfill, on a DISPOSABLE database after `prisma db push` and `scripts/apply-plugin-constraints.mjs`. Opt-in with `PLUGINS_PG_TEST_URL`; skipped otherwise, so **not in the gate**: run them after changing any of that | integration |
+| End to end | `testing/e2e/tests/pluginsPage.spec.ts` (install and uninstall the `echo` test plugin) and `pluginsSkiller.spec.ts` (Skiller: analyse a seeded session, review, approve, versions, reset) | Playwright |
+
+Hermetic doubles, all in `webapp/src/lib/plugins/__testing__/` (no production module may import
+them; `noProductionImports.test.ts` checks): an in-process fake catalog and archive server on
+`127.0.0.1` ephemeral ports (`fakeHttpServer.ts`, `catalogBuilder.ts`), a fake runner, a fake
+Prisma, and a throwaway Ed25519 key per test. Time comes only from `src/lib/plugins/clock.ts`,
+so tests pin it. On the Python side the SDK ships `FakeSdk`, `ScriptedLlm` and `make_context`
+for plugin tests, and a contract suite (`sdk/contract_cases.json`) runs against both the fake
+and the real Gateway.
+
+The e2e specs need a stack started with `./redamon.sh up`. `pluginsPage.spec.ts` builds its fixtures with
+`testing/e2e/scripts/make-plugin-fixtures.mjs`, which signs them with a throwaway key and prints
+the `PLUGINS_EXTRA_TRUSTED_KEYS` value to set before `./redamon.sh up`. `pluginsSkiller.spec.ts`
+installs Skiller from `SKILLER_DIST` (default `../../redamon-plugins/dist`, packed and signed with
+a development key) or, with `SKILLER_FROM_CATALOG=1`, from the official catalog. It drives the model
+through `testing/e2e/scripts/stub-llm-server.mjs`, registered as an OpenAI-compatible provider for
+the run and removed at the end, and analyses `testing/e2e/fixtures/skiller-session.json`. Each
+spec skips itself when its files are missing.
 
 ### Two oracles, and only one of them runs in CI
 

@@ -11,11 +11,13 @@ import {
   featureModelMessage,
   getLlmFeature,
   isFeatureId,
+  isPluginFeatureId,
   modelAllowedForFeature,
   readFeatureModelCode,
   type FeatureId,
   type FeatureModelCode,
   type FeatureModelErrorBody,
+  type PluginFeatureId,
 } from '@/lib/llmFeatures'
 
 /** A stored `featureModels` value as a plain map; anything malformed reads as empty. */
@@ -28,8 +30,8 @@ export function featureModelsMap(raw: unknown): Record<string, string> {
   return out
 }
 
-/** The model `userId` saved for `featureId`, or '' when none is. */
-export async function readFeatureModel(userId: string, featureId: FeatureId): Promise<string> {
+/** The model `userId` saved for `featureId` (a core feature or a plugin's), or '' when none is. */
+export async function readFeatureModel(userId: string, featureId: FeatureId | PluginFeatureId): Promise<string> {
   const row = await prisma.userSettings.findUnique({
     where: { userId },
     select: { featureModels: true },
@@ -49,27 +51,37 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 /**
  * Validate a PUT's `featureModels` object. Every entry must pass before any is
  * applied, so one bad key refuses the whole change. '' removes the key.
+ *
+ * A plugin's key (`plugin:<id>`) is accepted with a model only when it is in
+ * `pluginFeatureIds` (the plugins that qualify now, a database read the caller makes),
+ * and cleared always, so a key an uninstalled plugin left behind can be removed. Plugin
+ * keys never reach getLlmFeature or modelAllowedForFeature: they know only core features.
  */
-export function parseFeatureModelsPatch(raw: unknown): FeatureModelsPatch | { error: string } {
+export function parseFeatureModelsPatch(
+  raw: unknown,
+  opts: { pluginFeatureIds?: ReadonlySet<string> } = {},
+): FeatureModelsPatch | { error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { error: 'featureModels must be an object of feature id to model id' }
   }
   const set: Record<string, string> = {}
   const removed: string[] = []
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isFeatureId(key)) return { error: `Unknown feature: ${key}` }
+    const plugin = isPluginFeatureId(key)
+    if (!plugin && !isFeatureId(key)) return { error: `Unknown feature: ${key}` }
     if (typeof value !== 'string') return { error: `The model for ${key} must be a string` }
     const model = value.trim()
     if (!model) {
       removed.push(key)
       continue
     }
+    if (plugin && !opts.pluginFeatureIds?.has(key)) return { error: `Unknown feature: ${key}` }
     if (model.length > FEATURE_MODEL_MAX_LEN) {
       return { error: `The model for ${key} is longer than ${FEATURE_MODEL_MAX_LEN} characters` }
     }
     if (CONTROL_CHARS.test(model)) return { error: `The model for ${key} contains a control character` }
-    if (!modelAllowedForFeature(key, model)) {
-      return { error: `${getLlmFeature(key).label} cannot run on ${model}` }
+    if (!plugin && !modelAllowedForFeature(key as FeatureId, model)) {
+      return { error: `${getLlmFeature(key as FeatureId).label} cannot run on ${model}` }
     }
     set[key] = model
   }
@@ -78,7 +90,7 @@ export function parseFeatureModelsPatch(raw: unknown): FeatureModelsPatch | { er
 
 export function featureModelErrorResponse(
   code: FeatureModelCode,
-  featureId: FeatureId,
+  featureId: FeatureId | PluginFeatureId,
   opts: { model?: string; error?: string } = {},
 ): NextResponse {
   const body: FeatureModelErrorBody = {
@@ -125,7 +137,7 @@ const AGENT_PASSTHROUGH_CODES = new Set<FeatureModelCode>(['model_unavailable', 
 export function agentCodedError(
   status: number,
   body: unknown,
-  featureId: FeatureId,
+  featureId: FeatureId | PluginFeatureId,
   sentModel: string,
 ): NextResponse | null {
   if (status >= 200 && status < 300) return null

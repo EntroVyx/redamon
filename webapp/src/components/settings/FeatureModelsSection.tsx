@@ -8,10 +8,11 @@ import {
   fetchModelOptions,
   fetchSavedFeatureModels,
   saveFeatureModel,
+  type GateFeatureId,
   type ModelsByProvider,
 } from '@/components/shared/FeatureModelGate'
 import { getDisplayName } from '@/app/graph/components/AIAssistantDrawer/modelUtils'
-import { LLM_FEATURES, modelAllowedForFeature, type FeatureId, type LlmFeature } from '@/lib/llmFeatures'
+import { LLM_FEATURES, isPluginFeatureId, modelAllowedForFeature, type PluginFeatureId } from '@/lib/llmFeatures'
 import styles from './FeatureModelsSection.module.css'
 
 interface FeatureModelsSectionProps {
@@ -23,6 +24,41 @@ interface FeatureModelsSectionProps {
 type LoadState = 'loading' | 'ready' | 'error'
 type TileStatus = 'set' | 'unset' | 'removed'
 
+/** A plugin the user can choose a model for (GET /api/plugins/llm-features). */
+interface PluginFeature {
+  featureId: PluginFeatureId
+  label: string
+  description: string
+}
+
+// A failed list means no plugin tile and nothing else changes; the core features never
+// wait on it.
+async function fetchPluginFeatures(): Promise<PluginFeature[]> {
+  try {
+    const res = await fetch('/api/plugins/llm-features', { cache: 'no-store' })
+    if (!res.ok) return []
+    const data: unknown = await res.json()
+    if (!Array.isArray(data)) return []
+    return data.filter(
+      (f): f is PluginFeature =>
+        !!f && isPluginFeatureId(f.featureId) && typeof f.label === 'string' && typeof f.description === 'string',
+    )
+  } catch {
+    return []
+  }
+}
+
+interface TileFeature {
+  id: GateFeatureId
+  label: string
+  description: string
+  hint?: string
+  alsoEditedIn?: string[]
+  /** Model ids this feature may use; a plugin feature may use any. */
+  allowed?: (modelId: string) => boolean
+  plugin?: boolean
+}
+
 const STATUS_LABEL: Record<TileStatus, string> = {
   set: 'Set',
   unset: 'Not set',
@@ -31,8 +67,9 @@ const STATUS_LABEL: Record<TileStatus, string> = {
 
 /**
  * Global Settings → LLM Providers → "Models by feature": one tile per AI
- * feature, each saving that feature's model for the user. The whole grid
- * shares ONE /api/models call, handed to every picker.
+ * feature, each saving that feature's model for the user, then one per plugin
+ * that may call a model (badged "plugin"). The whole grid shares ONE
+ * /api/models call, handed to every picker.
  */
 export function FeatureModelsSection({ userId, providersCount, providersLoading }: FeatureModelsSectionProps) {
   const toast = useToast()
@@ -40,8 +77,16 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
   const [savedState, setSavedState] = useState<LoadState>('loading')
   const [models, setModels] = useState<ModelsByProvider>({})
   const [modelsState, setModelsState] = useState<LoadState>('loading')
-  const [savingId, setSavingId] = useState<FeatureId | null>(null)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [plugins, setPlugins] = useState<PluginFeature[]>([])
   const noProviders = !providersLoading && providersCount === 0
+
+  useEffect(() => {
+    if (!userId) return
+    let live = true
+    void fetchPluginFeatures().then(list => { if (live) setPlugins(list) })
+    return () => { live = false }
+  }, [userId])
 
   useEffect(() => {
     if (!userId) return
@@ -80,7 +125,7 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
     return 'set'
   }
 
-  const save = async (feature: LlmFeature, model: string) => {
+  const save = async (feature: TileFeature, model: string) => {
     if (!userId || savingId) return
     if (model === (saved[feature.id] ?? '')) return
     setSavingId(feature.id)
@@ -98,6 +143,11 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
   }
 
   const loading = !noProviders && (providersLoading || savedState === 'loading' || modelsState === 'loading')
+
+  const tiles: TileFeature[] = [
+    ...LLM_FEATURES.map(f => ({ ...f, allowed: (id: string) => modelAllowedForFeature(f.id, id) })),
+    ...plugins.map(p => ({ id: p.featureId, label: p.label, description: p.description, plugin: true })),
+  ]
 
   return (
     <section className={styles.section} aria-labelledby="feature-models-title">
@@ -126,7 +176,7 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
             <div className={styles.notice} role="alert">Couldn&apos;t read your saved models. Reload the page to try again.</div>
           )}
           <div className={styles.grid}>
-            {LLM_FEATURES.map(feature => {
+            {tiles.map(feature => {
               const model = saved[feature.id] ?? ''
               const status = statusOf(model)
               // Every tile waits while one saves: `save` takes one at a time,
@@ -135,7 +185,12 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
               return (
                 <div key={feature.id} className={styles.tile} data-feature={feature.id}>
                   <div className={styles.tileHead}>
-                    <span className={styles.tileLabel}>{feature.label}</span>
+                    <span className={styles.tileName}>
+                      <span className={styles.tileLabel}>{feature.label}</span>
+                      {feature.plugin && (
+                        <span className={styles.pluginBadge} title="A RedAmon plugin, not a built-in feature">plugin</span>
+                      )}
+                    </span>
                     <span className={`${styles.chip} ${styles[`chip_${status}`]}`}>{STATUS_LABEL[status]}</span>
                   </div>
                   <p className={styles.tileDesc}>{feature.description}</p>
@@ -156,7 +211,7 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
                           onChange={id => void save(feature, id)}
                           models={models}
                           hideManualFallback
-                          filter={id => modelAllowedForFeature(feature.id, id)}
+                          filter={feature.allowed}
                           disabled={busy || savedState !== 'ready'}
                           emptyLabel="Choose a model"
                         />
@@ -176,8 +231,8 @@ export function FeatureModelsSection({ userId, providersCount, providersLoading 
                     </div>
                   )}
 
-                  <p className={styles.tileHint}>{feature.hint}</p>
-                  {feature.alsoEditedIn.length > 0 && (
+                  {feature.hint && <p className={styles.tileHint}>{feature.hint}</p>}
+                  {feature.alsoEditedIn && feature.alsoEditedIn.length > 0 && (
                     <p className={styles.tileAlso}>Also in: {feature.alsoEditedIn.join(', ')}</p>
                   )}
                 </div>

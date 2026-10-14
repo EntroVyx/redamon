@@ -6,6 +6,9 @@ import json
 import logging
 import os
 import socket
+import time
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -382,6 +385,30 @@ MCP_TOKEN_PRUNE_INTERVAL_S = int(os.environ.get("MCP_TOKEN_PRUNE_INTERVAL", "864
 _last_mcp_token_prune = 0.0
 
 
+def _interval_from_env(name: str, default: int) -> int:
+    """A positive whole number of seconds from the environment, else `default`: an empty
+    or bad value must not crash the orchestrator at import (int('') would)."""
+    raw = (os.environ.get(name) or "").strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else default
+
+
+# Plugin reconciliation (README.PLUGINS.md §9.7, TD-20): crash recovery, heals, revocations
+# and clean-up run in the webapp, which has no scheduler, so this loop asks for them.
+PLUGIN_RECONCILE_INTERVAL_S = _interval_from_env("PLUGIN_RECONCILE_INTERVAL", 300)
+_last_plugin_reconcile = 0.0
+_plugin_reconcile_task: Optional[asyncio.Task] = None
+# Set by a 404: the webapp has no such route (an image older than the orchestrator, or
+# the switch off in the webapp only). One log line, then quiet until a restart.
+_plugin_reconcile_gone = False
+
+
+def _reset_plugin_reconcile_state() -> None:
+    global _last_plugin_reconcile, _plugin_reconcile_task, _plugin_reconcile_gone
+    _last_plugin_reconcile = 0.0
+    _plugin_reconcile_task = None
+    _plugin_reconcile_gone = False
+
+
 async def _post_job_queue_reconcile(cm) -> None:
     """Post the set of projects with a live scan so the webapp can close finished
     'running' JobQueue rows (Scan Queue C-6). Best-effort; never raises."""
@@ -433,6 +460,53 @@ async def _maybe_prune_mcp_tokens() -> None:
     )
 
 
+def _post_status(url: str, key: str, timeout: float) -> Optional[int]:
+    """Blocking POST with the internal key; the HTTP status, or None when unreachable.
+    request_json cannot tell a 404 from an outage, which the reconcile tick must."""
+    req = urllib.request.Request(url, data=b"{}", method="POST",
+                                 headers={"x-internal-key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read()
+            return getattr(r, "status", 200)
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:  # noqa: BLE001 - a worker must never die on I/O
+        return None
+
+
+async def _post_plugin_reconcile(key: str) -> None:
+    global _plugin_reconcile_gone
+    url = f"{_webapp_base()}/api/internal/plugins/reconcile"
+    status = await asyncio.to_thread(_post_status, url, key, 60.0)
+    if status == 404:
+        if not _plugin_reconcile_gone:
+            logger.warning("[plugins] reconcile: the webapp has no reconcile route (an older image); "
+                           "not asking again until the orchestrator restarts")
+        _plugin_reconcile_gone = True
+    elif status is None or status >= 300 and status != 202:
+        logger.debug("[plugins] reconcile: the webapp answered %s; retried at the next interval", status)
+
+
+async def _maybe_reconcile_plugins() -> None:
+    """Starts POST /api/internal/plugins/reconcile at most once per interval, as a background
+    task never awaited here: the reaper awaits each step, and the same loop releases governor
+    reservations and dispatches scans (RV-16)."""
+    global _last_plugin_reconcile, _plugin_reconcile_task
+    if _plugin_reconcile_gone:
+        return
+    if _plugin_reconcile_task is not None and not _plugin_reconcile_task.done():
+        return
+    now = time.monotonic()
+    if _last_plugin_reconcile and now - _last_plugin_reconcile < PLUGIN_RECONCILE_INTERVAL_S:
+        return
+    _last_plugin_reconcile = now
+    key = _webapp_internal_key()
+    if not key:
+        return
+    _plugin_reconcile_task = asyncio.create_task(_post_plugin_reconcile(key))
+
+
 async def _ai_attack_reaper():
     """Periodically release Ollama leases from finished-but-unpolled runs."""
     try:
@@ -476,6 +550,10 @@ async def _ai_attack_reaper():
                     await _maybe_prune_mcp_tokens()
                 except Exception as e:
                     logger.warning(f"mcp token prune failed: {e}")
+                try:
+                    await _maybe_reconcile_plugins()
+                except Exception as e:
+                    logger.warning(f"[plugins] reconcile tick failed: {e}")
     except asyncio.CancelledError:
         pass
 

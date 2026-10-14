@@ -21,6 +21,9 @@ import { STALE_SAVE_MESSAGE } from '@/lib/projectVersion'
 import { validateCrossFieldRules, writeFireteamAudit } from '@/lib/reconSettings/crossField'
 import { JEV_ENGINE_SELECT, validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
 import { seedProjectDomains } from '@/lib/graphSeedDomains'
+import { computeSkillTextOverrides } from '@/lib/plugins/overrideDelivery'
+import { userSkillsForAgent } from '@/lib/userSkillAgentPayload'
+import type { ResolvedPart } from '@/lib/plugins/overrides'
 
 // Path to output directories (fallback for local deletion)
 const RECON_OUTPUT_PATH = process.env.RECON_OUTPUT_PATH || '/home/samuele/Progetti didattici/RedAmon/recon/output'
@@ -136,26 +139,26 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         : {}),
     }
 
-    // If ?includeSkillContent=true, fetch enabled user skill contents for agent consumption
-    // Skills default to ON when not present in config.user (matching frontend behaviour).
+    // Approved plugin overrides of built-in skill text go to the agent's own settings
+    // fetch only: its separate flag on the MASTER key. includeSkillContent alone is also
+    // sent by text-to-cypher and accepted from the scanner key, which must not get them.
+    // Kept out of projectWithoutBinary, and a failure leaves the payload as it was.
+    let skillOverridesField: { skillTextOverrides?: Record<string, ResolvedPart> } = {}
+    if (request.nextUrl.searchParams.get('includeSkillOverrides') === 'true' && isInternalRequest(request)) {
+      try {
+        const overrides = await computeSkillTextOverrides(id)
+        if (Object.keys(overrides).length) skillOverridesField = { skillTextOverrides: overrides }
+      } catch (err) {
+        console.warn('[plugins] skill overrides omitted:', err)
+      }
+    }
+
+    // If ?includeSkillContent=true, the enabled user skills' texts for agent consumption:
+    // only those set to true (a missing toggle is OFF, as the form shows it), at most 20,
+    // never a quarantined one (lib/userSkillAgentPayload.ts).
     const includeSkillContent = request.nextUrl.searchParams.get('includeSkillContent') === 'true'
     if (includeSkillContent && project.userId) {
-      const config = (project.attackSkillConfig as Prisma.JsonObject) || {}
-      const userToggles = (config.user as Prisma.JsonObject) || {}
-
-      // IDs explicitly disabled (set to false)
-      const disabledIds = Object.entries(userToggles)
-        .filter(([, v]) => v === false)
-        .map(([id]) => id)
-
-      // Fetch all user skills EXCEPT explicitly disabled ones
-      const skills = await prisma.userAttackSkill.findMany({
-        where: {
-          userId: project.userId,
-          ...(disabledIds.length > 0 ? { id: { notIn: disabledIds } } : {}),
-        },
-        select: { id: true, name: true, description: true, content: true },
-      })
+      const skills = await userSkillsForAgent(prisma, project.userId, project.attackSkillConfig)
 
       // User-managed MCP servers (UI-driven via /settings/mcp). Read raw
       // from UserSettings.mcpServers; the agent validates and merges them
@@ -170,10 +173,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         ...projectWithoutBinary,
         userAttackSkills: skills,
         userMcpServers,
+        ...skillOverridesField,
       })
     }
 
-    return NextResponse.json(projectWithoutBinary)
+    return NextResponse.json({ ...projectWithoutBinary, ...skillOverridesField })
   } catch (error) {
     console.error('Failed to fetch project:', error)
     return NextResponse.json(
@@ -262,10 +266,17 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       where: { id },
       select: {
         domainBatchMode: true, domainBatchGroups: true,
-        userId: true, targetGuardrailEnabled: true,
+        userId: true, targetGuardrailEnabled: true, attackSkillConfig: true,
         ...JEV_ENGINE_SELECT,
       },
     })
+    // The form sends the toggles with every whole-row save. Unchanged, they are neither
+    // validated nor written: a stored value the rules now refuse (a config saved without
+    // builtIn, a quarantined skill left on by a race) must not block an unrelated edit.
+    if ('attackSkillConfig' in updateData && existing &&
+        comparable(updateData.attackSkillConfig) === comparable(existing.attackSkillConfig)) {
+      delete updateData.attackSkillConfig
+    }
     const willBeBatch = 'domainBatchMode' in updateData
       ? updateData.domainBatchMode === true
       : existing?.domainBatchMode === true
@@ -383,7 +394,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     // Supply-chain input becomes a `git clone` argument in the scan container and
     // fireteam carries a rule over two fields, so both are validated server-side:
     // a direct PUT bypasses the form's own checks. Shared with the MCP writers.
-    const crossFieldError = await validateCrossFieldRules(updateData, Object.keys(updateData), eff.userId)
+    const crossFieldError = await validateCrossFieldRules(updateData, Object.keys(updateData), eff.userId, {
+      ownerUserId: existing ? existing.userId : undefined,
+    })
     if (crossFieldError) {
       return NextResponse.json({ error: crossFieldError }, { status: 400 })
     }

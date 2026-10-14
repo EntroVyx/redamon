@@ -159,6 +159,7 @@
         "free_text",
         "identifier",
         "json_object",
+        "attack_skill_config",
         "github_name",
         "github_repo_list"
       ]

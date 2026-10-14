@@ -17,6 +17,24 @@ export type FeatureId =
   | 'report_narratives'
   | 'multi_mute'
 
+/**
+ * A plugin's own entry in Models by feature: `plugin:<pluginId>` (README.PLUGINS.md §7.3,
+ * TD-10). A separate type, because FeatureId is the closed list of core features and the
+ * agent pins its declaration's text (agentic/tests/test_feature_models.py). Plugin ids
+ * never reach getLlmFeature or modelAllowedForFeature, which know only core features.
+ */
+export type PluginFeatureId = `plugin:${string}`
+
+const PLUGIN_FEATURE_RE = /^plugin:[a-z][a-z0-9-]{1,39}$/
+
+export function isPluginFeatureId(x: unknown): x is PluginFeatureId {
+  return typeof x === 'string' && PLUGIN_FEATURE_RE.test(x)
+}
+
+export function pluginFeatureId(pluginId: string): PluginFeatureId {
+  return `plugin:${pluginId}`
+}
+
 export interface LlmFeature {
   id: FeatureId
   label: string
@@ -147,7 +165,7 @@ export const GATE_CODES: readonly FeatureModelCode[] = ['model_required', 'model
 export interface FeatureModelErrorBody {
   error: string
   code: FeatureModelCode
-  featureId: FeatureId
+  featureId: FeatureId | PluginFeatureId
   model?: string
 }
 

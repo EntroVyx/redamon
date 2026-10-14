@@ -58,6 +58,7 @@ import { filterReconSettings, reconSettingsSelect } from '@/lib/reconSettings/fi
 import { fieldsWhere, field, loadRegistry } from '@/lib/reconSettings/registry'
 import { checkHeader, isInsideProjectFileRoot } from '@/lib/reconSettings/validators'
 import { validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
+import { normalizeUserSkillToggles, UserSkillError } from '@/lib/userSkills'
 
 // --- create_project -----------------------------------------------------------------
 
@@ -310,6 +311,16 @@ export async function createProject(ctx: McpContext, args: CreateProjectArgs) {
   }
 
   if (args.settings) Object.assign(data, filterSettingsAtCreate(args.settings))
+
+  // The user-skill toggles may name only the creator's own skills, at most 20 of them on.
+  if ('attackSkillConfig' in data) {
+    try {
+      data.attackSkillConfig = await normalizeUserSkillToggles(prisma, ctx.token.userId, data.attackSkillConfig)
+    } catch (e) {
+      if (e instanceof UserSkillError) throw new McpToolError(e.message, 'setting_rejected', { rejectedKey: 'attackSkillConfig' })
+      throw e
+    }
+  }
 
   // A new project starts with every engine on the LLM, so a Jev flag in the
   // settings is a switch-on and needs a Jev token on the creating account.

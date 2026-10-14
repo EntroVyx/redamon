@@ -22,6 +22,7 @@ export const PAGE_WIKI: Record<string, { page: string; anchor?: string }> = {
   settings:     { page: 'Global-Settings' },
   settingsUsers:{ page: 'User-Management' },
   cypherfix:    { page: 'CypherFix-Automated-Remediation' },
+  plugins:      { page: 'Plugins' },
   login:        { page: 'Getting-Started' },
 }
 

@@ -5,6 +5,8 @@ System prompts for the ReAct agent orchestrator.
 Includes phase-aware reasoning, tool descriptions, and structured output formats.
 """
 
+import logging
+
 # Re-export from base
 from .base import (
     TOOL_REGISTRY,
@@ -149,6 +151,44 @@ from .stealth_rules import STEALTH_MODE_RULES
 from utils import get_session_config_prompt
 from project_settings import get_setting, get_allowed_tools_for_phase, get_hydra_flags_from_settings, get_dos_settings_dict
 
+# Called as _seam.resolve_skill_part(...) so one patch of the module reaches every site.
+from . import skill_part_seam as _seam
+
+logger = logging.getLogger(__name__)
+
+USER_SKILL_PREFIX = "user_skill:"
+
+
+def resolve_user_skill(attack_path_type) -> dict | None:
+    """The enabled user skill whose text a `user_skill:<id>` label renders, or None.
+
+    The skill itself while it is enabled. Otherwise the enabled skill whose `supersedes`
+    lists the id: the webapp marks, per project, which turned-off versions of a skill
+    each enabled version replaces, so a session labelled with an older version (an
+    approval, answer or tool-confirmation resume keeps its label) renders the version
+    the person switched to. Only the rendered text follows the successor: the label,
+    the chain graph and the phase stay as they are. Never raises.
+    """
+    try:
+        if not isinstance(attack_path_type, str) or not attack_path_type.startswith(USER_SKILL_PREFIX):
+            return None
+        skill_id = attack_path_type[len(USER_SKILL_PREFIX):]
+        if not skill_id:
+            return None
+        from project_settings import get_enabled_user_skills
+        enabled = get_enabled_user_skills()
+        skill = next((s for s in enabled if s["id"] == skill_id), None)
+        if skill is None:
+            # The webapp gives each superseded id to one enabled version only; when two
+            # claim it anyway, the first in the enabled order wins.
+            skill = next((s for s in enabled
+                          if isinstance(s.get("supersedes"), list) and skill_id in s["supersedes"]),
+                         None)
+        return skill
+    except Exception as exc:  # noqa: BLE001 - a lookup failure renders no user skill
+        logger.warning("user skill for %r not resolved: %s", attack_path_type, exc)
+        return None
+
 
 def _msf_search_failed(execution_trace: list) -> bool:
     """Check if a Metasploit `search` command returned no results in the trace."""
@@ -182,7 +222,22 @@ def build_builtin_skill_workflow(
     an empty list otherwise. Single source of truth shared by get_phase_tools
     (full think-node prompt) and LATS expand (grounded probe proposal), so the
     two never drift on which technique playbook a class gets.
+
+    Each static part goes through the skill.text seam, which may substitute an
+    approved plugin override; the version rendered is recorded for phase_update.
     """
+    parts = _build_builtin_skill_workflow_parts(
+        attack_path_type, allowed_tools, is_statefull, execution_trace)
+    _seam.record_applied(attack_path_type if parts else None)
+    return parts
+
+
+def _build_builtin_skill_workflow_parts(
+    attack_path_type: str,
+    allowed_tools,
+    is_statefull: bool = False,
+    execution_trace: list = None,
+) -> list:
     parts = []
     from project_settings import get_enabled_builtin_skills
     enabled_builtins = get_enabled_builtin_skills()
@@ -195,18 +250,22 @@ def build_builtin_skill_workflow(
         hydra_flags = get_hydra_flags_from_settings()
         import re as _re
         hydra_flags_no_t = _re.sub(r'-t\s+\d+\s*', '', hydra_flags).strip()
-        parts.append(HYDRA_BRUTE_FORCE_TOOLS.format(
-            hydra_max_attempts=get_setting('HYDRA_MAX_WORDLIST_ATTEMPTS', 3),
-            hydra_flags=hydra_flags,
-            hydra_flags_no_t=hydra_flags_no_t
-        ))
-        parts.append(HYDRA_WORDLIST_GUIDANCE)
+        parts.append(_seam.resolve_skill_part(
+            "brute_force_credential_guess", "tools", HYDRA_BRUTE_FORCE_TOOLS, dict(
+                hydra_max_attempts=get_setting('HYDRA_MAX_WORDLIST_ATTEMPTS', 3),
+                hydra_flags=hydra_flags,
+                hydra_flags_no_t=hydra_flags_no_t,
+            )))
+        parts.append(_seam.resolve_skill_part(
+            "brute_force_credential_guess", "wordlist_guidance", HYDRA_WORDLIST_GUIDANCE))
         return parts
     elif (attack_path_type == "phishing_social_engineering"
             and "phishing_social_engineering" in enabled_builtins
             and not (get_setting('ROE_ENABLED', False) and not get_setting('ROE_ALLOW_SOCIAL_ENGINEERING', False))):
-        parts.append(PHISHING_SOCIAL_ENGINEERING_TOOLS)
-        parts.append(PHISHING_PAYLOAD_FORMAT_GUIDANCE)
+        parts.append(_seam.resolve_skill_part(
+            "phishing_social_engineering", "tools", PHISHING_SOCIAL_ENGINEERING_TOOLS))
+        parts.append(_seam.resolve_skill_part(
+            "phishing_social_engineering", "payload_format", PHISHING_PAYLOAD_FORMAT_GUIDANCE))
         smtp_config = get_setting('PHISHING_SMTP_CONFIG', '')
         if smtp_config:
             parts.append(
@@ -229,12 +288,13 @@ def build_builtin_skill_workflow(
             "- Research known DoS CVEs for detected service versions\n"
             '- Report findings with action="complete"\n'
         ) if assessment_only else ""
-        parts.append(DOS_TOOLS.format(
-            **dos_settings,
-            dos_assessment_only_block=dos_assessment_block,
-        ))
-        parts.append(DOS_VECTOR_SELECTION.format(**dos_settings))
-        parts.append(DOS_VERIFICATION_GUIDE)
+        parts.append(_seam.resolve_skill_part(
+            "denial_of_service", "tools", DOS_TOOLS,
+            {**dos_settings, "dos_assessment_only_block": dos_assessment_block}))
+        parts.append(_seam.resolve_skill_part(
+            "denial_of_service", "vector_selection", DOS_VECTOR_SELECTION, dict(dos_settings)))
+        parts.append(_seam.resolve_skill_part(
+            "denial_of_service", "verification_guide", DOS_VERIFICATION_GUIDE))
         return parts
     elif (attack_path_type == "sql_injection"
             and "sql_injection" in enabled_builtins
@@ -244,9 +304,10 @@ def build_builtin_skill_workflow(
             'sqli_risk': get_setting('SQLI_RISK', 1),
             'sqli_tamper_scripts': get_setting('SQLI_TAMPER_SCRIPTS', '') or 'none configured',
         }
-        parts.append(SQLI_TOOLS.format(**sqli_settings))
-        parts.append(SQLI_OOB_WORKFLOW)
-        parts.append(SQLI_PAYLOAD_REFERENCE)
+        parts.append(_seam.resolve_skill_part("sql_injection", "tools", SQLI_TOOLS, sqli_settings))
+        parts.append(_seam.resolve_skill_part("sql_injection", "oob_workflow", SQLI_OOB_WORKFLOW))
+        parts.append(_seam.resolve_skill_part(
+            "sql_injection", "payload_reference", SQLI_PAYLOAD_REFERENCE))
         return parts
     elif (attack_path_type == "xss"
             and "xss" in enabled_builtins
@@ -256,10 +317,10 @@ def build_builtin_skill_workflow(
             'xss_blind_callback_enabled': get_setting('XSS_BLIND_CALLBACK_ENABLED', False),
             'xss_csp_bypass_enabled': get_setting('XSS_CSP_BYPASS_ENABLED', True),
         }
-        parts.append(XSS_TOOLS.format(**xss_settings))
+        parts.append(_seam.resolve_skill_part("xss", "tools", XSS_TOOLS, xss_settings))
         if xss_settings['xss_blind_callback_enabled'] and "kali_shell" in allowed_tools:
-            parts.append(XSS_BLIND_WORKFLOW)
-        parts.append(XSS_PAYLOAD_REFERENCE)
+            parts.append(_seam.resolve_skill_part("xss", "blind_workflow", XSS_BLIND_WORKFLOW))
+        parts.append(_seam.resolve_skill_part("xss", "payload_reference", XSS_PAYLOAD_REFERENCE))
         return parts
     elif (attack_path_type == "ssrf"
             and "ssrf" in enabled_builtins
@@ -309,15 +370,15 @@ def build_builtin_skill_workflow(
             'ssrf_cloud_section': ssrf_cloud_section,
             'ssrf_custom_targets_section': ssrf_custom_targets_section,
         }
-        parts.append(SSRF_TOOLS.format(**ssrf_settings))
+        parts.append(_seam.resolve_skill_part("ssrf", "tools", SSRF_TOOLS, ssrf_settings))
         if ssrf_oob_enabled and "kali_shell" in allowed_tools:
-            parts.append(SSRF_OOB_WORKFLOW)
+            parts.append(_seam.resolve_skill_part("ssrf", "oob_workflow", SSRF_OOB_WORKFLOW))
         if ssrf_gopher_enabled:
-            parts.append(SSRF_GOPHER_CHAINS)
+            parts.append(_seam.resolve_skill_part("ssrf", "gopher_chains", SSRF_GOPHER_CHAINS))
         if ssrf_rebind_enabled:
-            parts.append(SSRF_DNS_REBINDING)
+            parts.append(_seam.resolve_skill_part("ssrf", "dns_rebinding", SSRF_DNS_REBINDING))
         if ssrf_payref_enabled:
-            parts.append(SSRF_PAYLOAD_REFERENCE)
+            parts.append(_seam.resolve_skill_part("ssrf", "payload_reference", SSRF_PAYLOAD_REFERENCE))
         return parts
     elif (attack_path_type == "path_traversal"
             and "path_traversal" in enabled_builtins
@@ -334,15 +395,20 @@ def build_builtin_skill_workflow(
             'path_traversal_request_timeout': get_setting('PATH_TRAVERSAL_REQUEST_TIMEOUT', 10),
             'path_traversal_oob_provider': get_setting('PATH_TRAVERSAL_OOB_PROVIDER', 'oast.fun'),
         }
-        parts.append(PATH_TRAVERSAL_TOOLS.format(**pt_settings))
+        parts.append(_seam.resolve_skill_part(
+            "path_traversal", "tools", PATH_TRAVERSAL_TOOLS, pt_settings))
         if pt_php_enabled:
-            parts.append(PATH_TRAVERSAL_PHP_WRAPPERS)
+            parts.append(_seam.resolve_skill_part(
+                "path_traversal", "php_wrappers", PATH_TRAVERSAL_PHP_WRAPPERS))
         if pt_oob_enabled and "kali_shell" in allowed_tools:
-            parts.append(PATH_TRAVERSAL_OOB_WORKFLOW)
+            parts.append(_seam.resolve_skill_part(
+                "path_traversal", "oob_workflow", PATH_TRAVERSAL_OOB_WORKFLOW))
         if pt_archive_enabled and "execute_code" in allowed_tools:
-            parts.append(PATH_TRAVERSAL_ARCHIVE_EXTRACTION)
+            parts.append(_seam.resolve_skill_part(
+                "path_traversal", "archive_extraction", PATH_TRAVERSAL_ARCHIVE_EXTRACTION))
         if pt_payref_enabled:
-            parts.append(PATH_TRAVERSAL_PAYLOAD_REFERENCE)
+            parts.append(_seam.resolve_skill_part(
+                "path_traversal", "payload_reference", PATH_TRAVERSAL_PAYLOAD_REFERENCE))
         return parts
     elif (attack_path_type == "deserialization"
             and "deserialization" in enabled_builtins
@@ -362,65 +428,95 @@ def build_builtin_skill_workflow(
             'rce_aggressive_payloads': rce_aggressive,
             'rce_aggressive_block': rce_aggressive_block,
         }
-        parts.append(RCE_TOOLS.format(**rce_settings))
+        parts.append(_seam.resolve_skill_part("rce", "tools", RCE_TOOLS, rce_settings))
         if rce_oob_enabled:
-            parts.append(RCE_OOB_WORKFLOW)
+            parts.append(_seam.resolve_skill_part("rce", "oob_workflow", RCE_OOB_WORKFLOW))
         if rce_deser_enabled:
-            parts.append(RCE_DESERIALIZATION_WORKFLOW)
-        parts.append(RCE_PAYLOAD_REFERENCE)
+            parts.append(_seam.resolve_skill_part(
+                "rce", "deserialization_workflow", RCE_DESERIALIZATION_WORKFLOW))
+        parts.append(_seam.resolve_skill_part("rce", "payload_reference", RCE_PAYLOAD_REFERENCE))
         return parts
     elif ("cve_exploit" == attack_path_type
             and "cve_exploit" in enabled_builtins
             and "metasploit_console" in allowed_tools):
-        parts.append(CVE_EXPLOIT_TOOLS)
-        payload_guidance = CVE_PAYLOAD_GUIDANCE_STATEFULL if is_statefull else CVE_PAYLOAD_GUIDANCE_STATELESS
-        parts.append(payload_guidance)
+        parts.append(_seam.resolve_skill_part("cve_exploit", "tools", CVE_EXPLOIT_TOOLS))
+        if is_statefull:
+            parts.append(_seam.resolve_skill_part(
+                "cve_exploit", "payload_guidance_statefull", CVE_PAYLOAD_GUIDANCE_STATEFULL))
+        else:
+            parts.append(_seam.resolve_skill_part(
+                "cve_exploit", "payload_guidance_stateless", CVE_PAYLOAD_GUIDANCE_STATELESS))
         if _msf_search_failed(execution_trace or []):
             if is_statefull:
-                parts.append(NO_MODULE_FALLBACK_STATEFULL)
+                parts.append(_seam.resolve_skill_part(
+                    "cve_exploit", "no_module_fallback_statefull", NO_MODULE_FALLBACK_STATEFULL))
             else:
-                parts.append(NO_MODULE_FALLBACK_STATELESS)
+                parts.append(_seam.resolve_skill_part(
+                    "cve_exploit", "no_module_fallback_stateless", NO_MODULE_FALLBACK_STATELESS))
         return parts
     elif (attack_path_type == "access_control"
             and "access_control" in enabled_builtins
             and "execute_curl" in allowed_tools):
-        parts.append(ACCESS_CONTROL_TOOLS)
+        parts.append(_seam.resolve_skill_part("access_control", "tools", ACCESS_CONTROL_TOOLS))
         return parts
     elif (attack_path_type == "http_request_smuggling"
             and "http_request_smuggling" in enabled_builtins
             and "execute_code" in allowed_tools):
-        parts.append(HTTP_SMUGGLING_TOOLS)
+        parts.append(_seam.resolve_skill_part("http_request_smuggling", "tools", HTTP_SMUGGLING_TOOLS))
         # CL.0 / 0.CL is the 2025 desync shape with no TE header to probe; it rides
         # the same raw-socket execute_code path, so append it unconditionally here.
-        parts.append(HTTP_SMUGGLING_ZERO_CL_STEP)
+        parts.append(_seam.resolve_skill_part(
+            "http_request_smuggling", "zero_cl_step", HTTP_SMUGGLING_ZERO_CL_STEP))
         # Expect/100-continue is observed with the CL.0 oracle; the mutation-fuzzing
         # loop generalises Step 2's obfuscation list. Both ride the same execute_code
         # raw-socket path.
-        parts.append(HTTP_SMUGGLING_EXPECT_STEP)
-        parts.append(HTTP_SMUGGLING_MUTATION_FUZZING_STEP)
+        parts.append(_seam.resolve_skill_part(
+            "http_request_smuggling", "expect_step", HTTP_SMUGGLING_EXPECT_STEP))
+        parts.append(_seam.resolve_skill_part(
+            "http_request_smuggling", "mutation_fuzzing_step", HTTP_SMUGGLING_MUTATION_FUZZING_STEP))
         # H2 downgrade: gated by a prompt runtime-capability note, NOT an injection
         # check -- the prompt renders in the agent image but h2 installs in
         # kali-sandbox, so the agent process cannot see kali's h2 (plan 9.2/10.2 c3).
-        parts.append(HTTP_SMUGGLING_H2_STEP)
+        parts.append(_seam.resolve_skill_part(
+            "http_request_smuggling", "h2_step", HTTP_SMUGGLING_H2_STEP))
         # Client-side desync is browser-driven and REQUIRES capture off (the capture
         # proxy re-originates connections and destroys the reuse the attack is). Gate
         # in-branch on execute_playwright + capture disabled (get_setting resolves per
         # run via ContextVar; CAPTURE_PROXY_ENABLED defaults False).
         if ("execute_playwright" in allowed_tools
                 and get_setting('CAPTURE_PROXY_ENABLED', True) is False):
-            parts.append(HTTP_SMUGGLING_CLIENT_SIDE_STEP)
+            parts.append(_seam.resolve_skill_part(
+                "http_request_smuggling", "client_side_step", HTTP_SMUGGLING_CLIENT_SIDE_STEP))
         return parts
     elif (attack_path_type == "xxe"
             and "xxe" in enabled_builtins
             and "execute_curl" in allowed_tools):
-        parts.append(XXE_TOOLS)
+        parts.append(_seam.resolve_skill_part("xxe", "tools", XXE_TOOLS))
         return parts
     elif (attack_path_type == "crypto_attack"
             and "crypto_attack" in enabled_builtins
             and "execute_code" in allowed_tools):
-        parts.append(CRYPTO_ATTACK_TOOLS)
+        parts.append(_seam.resolve_skill_part("crypto_attack", "tools", CRYPTO_ATTACK_TOOLS))
         return parts
     return parts
+
+
+def session_config_needed(phase: str, is_statefull: bool, attack_path_type: str) -> bool:
+    """Whether the LHOST/LPORT/tunnel payload-settings block applies.
+
+    Shared by get_phase_tools (which renders it inline when
+    include_session_config=True) and think_node (which renders it in the
+    uncached suffix). Keeping the gate in one place prevents the two call sites
+    from drifting. Conditions:
+      1. exploitation phase + statefull mode (CVE exploit, brute force)
+      2. phishing attack path in ANY phase — payloads are generated before the
+         exploitation phase (msfvenom during informational; the "exploitation"
+         in phishing is when the target opens the file)
+    """
+    return (
+        (phase == "exploitation" and is_statefull)
+        or attack_path_type == "phishing_social_engineering"
+    )
 
 
 def get_phase_tools(
@@ -430,6 +526,7 @@ def get_phase_tools(
     attack_path_type: str = "",
     execution_trace: list = None,
     tool_filter: set = None,
+    include_session_config: bool = True,
 ) -> str:
     """Get tool descriptions for the current phase with attack path-specific guidance.
 
@@ -453,6 +550,8 @@ def get_phase_tools(
     """
     parts = []
     is_statefull = post_expl_type == "statefull"
+    # Phases and paths that never reach the workflow builder render no playbook.
+    _seam.applied_skill_workflow.set(None)
 
     # Stealth mode header — reminds LLM that stealth constraints apply to all tools below
     if get_setting('STEALTH_MODE', False):
@@ -521,31 +620,24 @@ def get_phase_tools(
             post_expl_note=post_expl_note
         ))
 
-    # Pre-configured payload settings (LHOST/LPORT/tunnel: ngrok or chisel) — injected BEFORE attack
-    # chain so the agent knows the payload direction regardless of attack path type.
-    #
-    # Injection conditions:
-    #   1. exploitation phase + statefull mode (CVE exploit, brute force)
-    #   2. phishing attack path in ANY phase — payloads are generated before
-    #      exploitation (agent runs msfvenom during informational phase,
-    #      and the "exploitation" in phishing IS when the target opens the file)
-    needs_session_config = (
-        (phase == "exploitation" and is_statefull)
-        or attack_path_type == "phishing_social_engineering"
-    )
-    if needs_session_config:
+    # Pre-configured payload settings (LHOST/LPORT/tunnel: ngrok or chisel).
+    # The gate lives in session_config_needed() so think_node can reuse it. The
+    # tunnel config is queried live, so the think node renders it in the uncached
+    # suffix (include_session_config=False) to keep it out of the cached tools
+    # block; other callers (e.g. fireteam members) keep the default and get it
+    # inline here.
+    if include_session_config and session_config_needed(phase, is_statefull, attack_path_type):
         session_config = get_session_config_prompt()
         if session_config:
             parts.append(session_config)
 
-    # Helper: resolve user skill content (used across all phases)
-    def _resolve_user_skill() -> str | None:
-        if not attack_path_type.startswith("user_skill:"):
-            return None
-        from project_settings import get_enabled_user_skills
-        skill_id = attack_path_type.split(":", 1)[1]
-        skill = next((s for s in get_enabled_user_skills() if s['id'] == skill_id), None)
-        return f"## User Attack Skill: {skill['name']}\n\n{skill['content']}" if skill else None
+    # The same skill in every phase: the label's own, or the version that supersedes it.
+    user_skill = resolve_user_skill(attack_path_type)
+    user_skill_block = (f"## User Attack Skill: {user_skill['name']}\n\n{user_skill['content']}"
+                        if user_skill else None)
+
+    def _record_user_skill() -> None:
+        _seam.record_applied_user(user_skill["id"], user_skill["content"])
 
     # Helper: inject built-in skill workflow prompts (used in both informational and exploitation).
     # Delegates to the module-level build_builtin_skill_workflow so LATS expand shares the same playbook.
@@ -566,13 +658,13 @@ def get_phase_tools(
     # replacements. The descriptions teach the LLM what each tool does;
     # the skill workflow tells it the playbook for the current attack.
     if phase == "informational":
-        user_skill_content = _resolve_user_skill()
-        if user_skill_content:
+        if user_skill_block:
             parts.append(
-                user_skill_content + "\n\n"
+                user_skill_block + "\n\n"
                 "**Current phase is informational.** Follow the skill's reconnaissance "
                 "steps to gather target info, then request transition to exploitation."
             )
+            _record_user_skill()
         else:
             _inject_builtin_skill_workflow()
 
@@ -581,10 +673,11 @@ def get_phase_tools(
         # attack paths (CVE exploit, brute force, etc.). They append to
         # — not replace — the generic tool descriptions above.
         if not _inject_builtin_skill_workflow():
-            if attack_path_type.startswith("user_skill:"):
-                user_skill_content = _resolve_user_skill()
-                if user_skill_content:
-                    parts.append(user_skill_content)
+            if attack_path_type.startswith(USER_SKILL_PREFIX):
+                if user_skill_block:
+                    parts.append(user_skill_block)
+                    # After the built-in attempt, which recorded None for this label.
+                    _record_user_skill()
                 else:
                     parts.append(UNCLASSIFIED_EXPLOIT_TOOLS)
             elif attack_path_type.endswith("-unclassified"):
@@ -595,13 +688,13 @@ def get_phase_tools(
             parts.append("\n**NOTE:** Post-exploitation phase is DISABLED. Complete exploitation and use action='complete'.\n")
 
     elif phase == "post_exploitation":
-        user_skill_content = _resolve_user_skill()
-        if user_skill_content:
+        if user_skill_block:
             parts.append(
-                user_skill_content + "\n\n"
+                user_skill_block + "\n\n"
                 "**Current phase is post-exploitation.** Follow the skill's "
                 "post-exploitation steps if defined, or use available tools."
             )
+            _record_user_skill()
         elif "metasploit_console" in allowed_tools:
             if is_statefull:
                 parts.append(POST_EXPLOITATION_TOOLS_STATEFULL)
@@ -713,4 +806,5 @@ __all__ = [
     "DEEP_THINK_SELF_REQUEST_INSTRUCTION",
     # Function
     "get_phase_tools",
+    "resolve_user_skill",
 ]

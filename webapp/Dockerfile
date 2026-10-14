@@ -74,6 +74,10 @@ RUN mkdir -p /data/js-recon-custom && chown nextjs:nodejs /data/js-recon-custom
 #   EACCES: permission denied, mkdir '/data/supply-chain-uploads/<project>'
 # surfaced to the operator only as "Failed to upload file".
 RUN mkdir -p /data/supply-chain-uploads && chown nextjs:nodejs /data/supply-chain-uploads
+# Installed plugins (docker-compose.plugins.yml mounts the `plugins` volume here). The
+# runner image pre-creates its /plugins for uid 1001 too: Docker copies the first mounting
+# image's ownership onto an empty volume, and either service may mount it first.
+RUN mkdir -p /data/plugins && chown nextjs:nodejs /data/plugins
 
 # Leverage output traces to reduce image size
 # https://nextjs.org/docs/advanced-features/output-file-tracing
@@ -109,12 +113,15 @@ RUN PRISMA_VER=$(node -p "require('/tmp/prisma-pkg.json').version") && \
 #             engagement append-only trigger, so those are re-applied
 #             immediately afterwards (§6.3). The trigger is what makes "an
 #             authorization record cannot be rewritten" enforcement rather than
-#             a model comment. Row fix-ups that need the pushed columns
-#             (clamp-triage-review-budget) run here too.
+#             a model comment. The plugin tables' one-active index and CHECK
+#             constraints are re-checked here too (never fatal: the stores
+#             enforce the same rules). Row fix-ups that need the pushed columns
+#             (clamp-triage-review-budget, the one-time user-skill toggle
+#             backfill) run here too.
 # The push itself is fatal: a webapp serving without the columns its code
 # expects fails on every request that touches them, which is worse than a
 # restart. compose restarts it (unless-stopped) once Postgres answers.
-RUN printf '#!/bin/sh\nnode scripts/migrate-trufflehog-profiles.mjs 2>&1 || exit 1\necho "Syncing Prisma schema..."\nnode node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss --schema ./prisma/schema.prisma 2>&1 || exit 1\nnode scripts/apply-ingest-role.mjs 2>&1\nnode scripts/apply-traffic-fts.mjs 2>&1\nnode scripts/apply-engagement-immutability.mjs 2>&1\nnode scripts/clamp-triage-review-budget.mjs 2>&1\nexec node server.js\n' > /app/entrypoint.sh \
+RUN printf '#!/bin/sh\nnode scripts/migrate-trufflehog-profiles.mjs 2>&1 || exit 1\necho "Syncing Prisma schema..."\nnode node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss --schema ./prisma/schema.prisma 2>&1 || exit 1\nnode scripts/apply-ingest-role.mjs 2>&1\nnode scripts/apply-traffic-fts.mjs 2>&1\nnode scripts/apply-engagement-immutability.mjs 2>&1\nnode scripts/apply-plugin-constraints.mjs 2>&1 || echo "[plugins] constraint script failed"\nnode scripts/clamp-triage-review-budget.mjs 2>&1\nnode scripts/backfill-user-skill-toggles.mjs 2>&1\nexec node server.js\n' > /app/entrypoint.sh \
     && chmod +x /app/entrypoint.sh
 
 USER nextjs

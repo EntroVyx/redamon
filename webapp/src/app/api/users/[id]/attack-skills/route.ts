@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireUserAccess } from '@/lib/session'
+import { getSession, requireUserAccess } from '@/lib/session'
 import prisma from '@/lib/prisma'
+import { nameKeys } from '@/lib/userSkillNames'
+import { USER_SKILL_POINT } from '@/lib/plugins/overrides'
+import {
+  USER_SKILL_SELECT, auditActorFor, createUserSkill, userSkillErrorResponse,
+} from '@/lib/userSkillWrites'
 
 interface RouteParams {
   params: Promise<{ id: string }>
 }
 
-// GET /api/users/[id]/attack-skills - List skills (id, name, createdAt; exclude content)
+/**
+ * GET /api/users/[id]/attack-skills - the user's skills, newest first, without their text.
+ *
+ * Each carries its version and lineage, the source it was saved from, its quarantine, the
+ * proposals waiting for review (`pendingChangeSetIds`), and `duplicateName` when another of
+ * the user's skills has the same name by the uniqueness rule (a name taken before the rule
+ * existed; rename one).
+ */
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params
@@ -15,11 +27,31 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const skills = await prisma.userAttackSkill.findMany({
       where: { userId: id },
-      select: { id: true, name: true, description: true, createdAt: true },
+      select: { ...USER_SKILL_SELECT, derivedFrom: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
     })
+    const pending = await prisma.pluginOverride.findMany({
+      where: { extensionPoint: USER_SKILL_POINT, scopeType: 'user', scopeId: id, status: 'proposed' },
+      select: { changeSetId: true, targetGroup: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+    const pendingBySkill = new Map<string, string[]>()
+    for (const p of pending) {
+      const list = pendingBySkill.get(p.targetGroup) ?? []
+      if (!list.includes(p.changeSetId)) list.push(p.changeSetId)
+      pendingBySkill.set(p.targetGroup, list)
+    }
+    const keys = await nameKeys(prisma, skills.map((s) => s.name))
+    const keyCount = new Map<string, number>()
+    for (const k of keys) keyCount.set(k, (keyCount.get(k) ?? 0) + 1)
 
-    return NextResponse.json(skills)
+    return NextResponse.json(skills.map((s, i) => ({
+      ...s,
+      derivedFromName: s.derivedFrom?.name ?? null,
+      derivedFrom: undefined,
+      pendingChangeSetIds: pendingBySkill.get(s.id) ?? [],
+      duplicateName: (keyCount.get(keys[i]) ?? 0) > 1,
+    })))
   } catch (error) {
     console.error('Failed to fetch attack skills:', error)
     return NextResponse.json(
@@ -29,72 +61,25 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 }
 
-const MAX_CONTENT_SIZE = 50 * 1024 // 50KB
-const MAX_SKILLS_PER_USER = 20
-
-// POST /api/users/[id]/attack-skills - Create skill { name, content }
+// POST /api/users/[id]/attack-skills - Create skill { name, description?, content }
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params
     const __denied = await requireUserAccess(request, id)
     if (__denied) return __denied
-    const body = await request.json()
-
-    const { name, description, content } = body
-    if (!name || typeof name !== 'string' || !name.trim()) {
-      return NextResponse.json(
-        { error: 'name is required' },
-        { status: 400 }
-      )
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'The body must be a JSON object' }, { status: 400 })
     }
-    if (description !== undefined && description !== null) {
-      if (typeof description !== 'string') {
-        return NextResponse.json(
-          { error: 'description must be a string' },
-          { status: 400 }
-        )
-      }
-      if (description.length > 500) {
-        return NextResponse.json(
-          { error: 'description must be 500 characters or less' },
-          { status: 400 }
-        )
-      }
-    }
-    if (!content || typeof content !== 'string') {
-      return NextResponse.json(
-        { error: 'content is required' },
-        { status: 400 }
-      )
-    }
-    if (content.length > MAX_CONTENT_SIZE) {
-      return NextResponse.json(
-        { error: `content exceeds maximum size of ${MAX_CONTENT_SIZE / 1024}KB` },
-        { status: 400 }
-      )
-    }
-
-    // Check skill count limit
-    const count = await prisma.userAttackSkill.count({ where: { userId: id } })
-    if (count >= MAX_SKILLS_PER_USER) {
-      return NextResponse.json(
-        { error: `Maximum of ${MAX_SKILLS_PER_USER} skills per user reached` },
-        { status: 400 }
-      )
-    }
-
-    const skill = await prisma.userAttackSkill.create({
-      data: {
-        userId: id,
-        name: name.trim(),
-        description: description?.trim() || null,
-        content,
-      },
-      select: { id: true, name: true, description: true, createdAt: true },
-    })
-
+    const session = await getSession()
+    const skill = await createUserSkill(
+      { userId: id, name: body.name, description: body.description, content: body.content },
+      auditActorFor(session?.userId, id),
+    )
     return NextResponse.json(skill, { status: 201 })
   } catch (error) {
+    const refused = userSkillErrorResponse(error)
+    if (refused) return refused
     console.error('Failed to create attack skill:', error)
     return NextResponse.json(
       { error: 'Failed to create attack skill' },

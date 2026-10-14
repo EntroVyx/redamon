@@ -5,6 +5,11 @@ import { Wrench, Swords, Check, Settings, Server } from 'lucide-react'
 import { StealthIcon } from '@/components/icons/StealthIcon'
 import { Tooltip } from '@/components/ui/Tooltip/Tooltip'
 import { useProject } from '@/providers/ProjectProvider'
+import { PluginBadge } from '@/components/plugins/PluginBadge'
+import { PluginIcon } from '@/components/plugins/pluginIcons'
+import { usePluginContributions } from '@/hooks/usePluginContributions'
+import type { ChatSessionActionContribution } from '@/lib/plugins/contributions'
+import type { ActionContext } from '@/components/plugins/host/actionClient'
 import { PHASE_CONFIG, getAttackPathConfig, formatModelDisplay } from './phaseConfig'
 import type { Phase } from './types'
 import styles from './AIAssistantDrawer.module.css'
@@ -39,6 +44,16 @@ interface PhaseIndicatorBarProps {
   setSettingsModal: (v: 'agent' | 'toolmatrix' | 'attack' | null) => void
   modelName?: string
   setShowModelModal: (v: boolean) => void
+  // Plugin chat-session actions (design §6.7). Nullable until the first message creates the
+  // conversation; the items are disabled until then.
+  projectId?: string | null
+  sessionId?: string | null
+  conversationId?: string | null
+  onRunPluginAction?: (
+    plugin: { pluginId: string; displayName: string },
+    item: ChatSessionActionContribution,
+    context: ActionContext,
+  ) => void
 }
 
 export function PhaseIndicatorBar({
@@ -55,10 +70,17 @@ export function PhaseIndicatorBar({
   setSettingsModal,
   modelName,
   setShowModelModal,
+  projectId,
+  sessionId,
+  conversationId,
+  onRunPluginAction,
 }: PhaseIndicatorBarProps) {
   const PhaseIcon = PHASE_CONFIG[currentPhase].icon
   const { userId } = useProject()
   const [userMcpServers, setUserMcpServers] = useState<UserMcpServer[]>([])
+  const { data: contributions } = usePluginContributions()
+  // Only plugins with a gear-menu action; a nav-only plugin adds nothing here.
+  const pluginGroups = (contributions ?? []).filter((c) => c.chatSessionActions.length > 0)
 
   // Pull the user's saved MCP servers from the DB so MCP tools always
   // appear in the wrench tooltip - even when the user hasn't explicitly
@@ -166,7 +188,8 @@ export function PhaseIndicatorBar({
                   <div className={styles.skillTooltipGroup}>
                     <div className={styles.skillTooltipGroupLabel}>Built-in</div>
                     {skillData.builtIn.map(s => {
-                      const enabled = skillData.config.builtIn[s.id] !== false
+                      // The agent's rule: a built-in skill is on only when its key says so.
+                      const enabled = skillData.config.builtIn[s.id] === true
                       const isActive = attackPathType === s.id
                       return (
                         <div key={s.id} className={`${styles.skillTooltipItem} ${!enabled ? styles.skillTooltipItemDisabled : ''} ${isActive ? styles.skillTooltipItemActive : ''}`}>
@@ -177,17 +200,17 @@ export function PhaseIndicatorBar({
                       )
                     })}
                   </div>
-                  {skillData.user.length > 0 && (
+                  {/* Only the skills this project turned on (a missing toggle is off, as the
+                      agent reads it): a user may have hundreds. */}
+                  {skillData.user.some(s => skillData.config.user[s.id] === true) && (
                     <div className={styles.skillTooltipGroup}>
                       <div className={styles.skillTooltipGroupLabel}>User Skills</div>
-                      {skillData.user.map(s => {
-                        const enabled = skillData.config.user[s.id] !== false
+                      {skillData.user.filter(s => skillData.config.user[s.id] === true).map(s => {
                         const isActive = attackPathType === `user_skill:${s.id}`
                         return (
-                          <div key={s.id} className={`${styles.skillTooltipItem} ${!enabled ? styles.skillTooltipItemDisabled : ''} ${isActive ? styles.skillTooltipItemActive : ''}`}>
+                          <div key={s.id} className={`${styles.skillTooltipItem} ${isActive ? styles.skillTooltipItemActive : ''}`}>
                             <span className={styles.skillTooltipName}>{s.name}</span>
                             {isActive && <Check size={11} className={styles.skillTooltipCheck} />}
-                            {!enabled && <span className={styles.skillTooltipOff}>OFF</span>}
                           </div>
                         )
                       })}
@@ -261,6 +284,34 @@ export function PhaseIndicatorBar({
             >
               Agent Skills
             </button>
+
+            {pluginGroups.map((plugin) => (
+              <div key={plugin.pluginId} className={styles.pluginGroup}>
+                <div className={styles.pluginGroupLabel}>
+                  <PluginBadge label={plugin.displayName} />
+                  {plugin.updating && <span className={styles.pluginUpdating}>updating</span>}
+                </div>
+                {plugin.chatSessionActions.map((item) => (
+                  <button
+                    key={item.key}
+                    className={`${styles.settingsDropdownItem} ${styles.pluginItem}`}
+                    disabled={!conversationId}
+                    title={conversationId ? undefined : 'Send a message first'}
+                    onClick={() => {
+                      onRunPluginAction?.(
+                        { pluginId: plugin.pluginId, displayName: plugin.displayName },
+                        item,
+                        { projectId: projectId ?? null, sessionId: sessionId ?? null },
+                      )
+                      setShowSettingsDropdown(false)
+                    }}
+                  >
+                    <PluginIcon name={item.icon} size={12} aria-hidden className={styles.pluginItemIcon} />
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
         )}
       </div>

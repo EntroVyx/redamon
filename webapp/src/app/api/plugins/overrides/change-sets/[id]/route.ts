@@ -1,0 +1,66 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { getEffectiveUser, getSession } from '@/lib/session'
+import { auditPlugin } from '@/lib/plugins/audit'
+import { ownsScope } from '@/lib/plugins/changeSetAccess'
+import * as ov from '@/lib/plugins/overrides'
+import { buildReviewModel } from '@/lib/plugins/reviewModel'
+import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
+
+/**
+ * GET /api/plugins/overrides/change-sets/[id]: the review model (lib/plugins/reviewModel.ts).
+ * DELETE /api/plugins/overrides/change-sets/[id]: deletes a non-active version.
+ * Only the scope owner (or an admin acting as them) may read or delete; another user's set is
+ * a 404, even under ACCESS_ENFORCE=0, because the check is the strict owner check (X9).
+ */
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const notFound = () => NextResponse.json({ error: 'Not found', code: 'not_found' }, { status: 404 })
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const eff = await getEffectiveUser()
+  if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
+  const set = await ov.getChangeSet(id)
+  if (!set || !(await ownsScope(set.scope, eff.userId))) return notFound()
+  // A project the scope owner owns only (the model reads it with that owner): the review of
+  // a user-skill proposal opened from a project shows that project's toggles.
+  const model = await buildReviewModel(id, { projectId: new URL(request.url).searchParams.get('projectId') })
+  if (!model) return notFound()
+  return NextResponse.json(model, { headers: { 'Cache-Control': 'no-store' } })
+}
+
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  if (!sameOrigin(request)) return crossOriginResponse()
+  const eff = await getEffectiveUser()
+  if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
+  const set = await ov.getChangeSet(id)
+  if (!set || !(await ownsScope(set.scope, eff.userId))) return notFound()
+  try {
+    await ov.deleteChangeSet(id)
+  } catch (e) {
+    if (e instanceof ov.PluginOverrideError && e.code === 'active_not_deletable') {
+      return NextResponse.json({ error: e.message, code: e.code }, { status: 409 })
+    }
+    if (e instanceof ov.PluginOverrideError && e.code === 'not_found') return notFound()
+    throw e
+  }
+  const session = await getSession()
+  await auditPlugin('plugin.override.delete', {
+    actorId: session?.userId ?? eff.userId,
+    pluginId: set.pluginId,
+    targetType: 'plugin_change_set',
+    targetId: id,
+    after: {
+      point: set.point,
+      targetGroup: set.targetGroup,
+      scope: set.scope.type,
+      scopeId: set.scope.id,
+      revision: set.revision,
+      ...(session && session.userId !== eff.userId ? { onBehalfOf: eff.userId } : {}),
+    },
+    source: 'ui',
+  })
+  return NextResponse.json({ deleted: true })
+}

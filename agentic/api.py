@@ -36,6 +36,7 @@ from llm_guard import (master_key_is_weak, require_internal_auth,
 from logging_config import setup_logging
 from orchestrator import AgentOrchestrator
 from orchestrator_helpers import normalize_content
+from plugin_api import router as plugin_router
 from prompt_safety import wrap_untrusted, UNTRUSTED_OUTPUT_GUIDANCE
 from startup_guard import check_single_worker
 from utils import get_session_count
@@ -166,6 +167,10 @@ async def _request_validation_error(request, exc: RequestValidationError):
     # input, and a lone surrogate in it (a target string recon passed through)
     # fails the UTF-8 render, which turned a 422 into a 500.
     return _AsciiJSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+
+# Plugin platform: the overridable built-in skill parts and their validator.
+app.include_router(plugin_router)
 
 
 # =============================================================================
@@ -2062,7 +2067,8 @@ async def get_defaults():
     # (e.g. HYDRA_ENABLED -> hydraEnabled, not agentHydraEnabled)
     NO_PREFIX_KEYS = {k for k in DEFAULT_AGENT_SETTINGS if k.startswith(('HYDRA_', 'PHISHING_', 'ROE_', 'ATTACK_SKILL_', 'SHODAN_', 'DOS_', 'FIRETEAM_'))}
     # Exclude internal-only fireteam keys that the frontend should not see.
-    SKIP_KEYS = SKIP_KEYS | {'PERSISTENT_CHECKPOINTER'}
+    # SKILL_TEXT_OVERRIDES is runtime data from the plugin platform, not a project field.
+    SKIP_KEYS = SKIP_KEYS | {'PERSISTENT_CHECKPOINTER', 'SKILL_TEXT_OVERRIDES'}
 
     camel_case_defaults = {}
     for k, v in DEFAULT_AGENT_SETTINGS.items():
@@ -3002,7 +3008,7 @@ async def _build_cypher_manager(user_id: str, project_id: str):
     model_name = DEFAULT_AGENT_SETTINGS['OPENAI_MODEL']
     try:
         webapp_url = os.environ.get('WEBAPP_API_URL', 'http://webapp:3000')
-        settings = fetch_agent_settings(project_id, webapp_url)
+        settings = fetch_agent_settings(project_id, webapp_url, include_skill_overrides=False)
         if settings and settings.get('OPENAI_MODEL'):
             model_name = settings['OPENAI_MODEL']
     except Exception as e:

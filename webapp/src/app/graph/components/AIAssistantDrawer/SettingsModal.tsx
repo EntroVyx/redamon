@@ -14,6 +14,8 @@ interface SettingsModalProps {
   setSettingsModal: (v: 'agent' | 'toolmatrix' | 'attack' | null) => void
   projectFormData: ProjectFormData | null
   updateProjectField: (field: any, value: any) => void
+  /** The chat is always for a saved project; passed so Agent Skills shows plugin version controls. */
+  projectId?: string | null
 }
 
 export function SettingsModal({
@@ -21,6 +23,7 @@ export function SettingsModal({
   setSettingsModal,
   projectFormData,
   updateProjectField,
+  projectId,
 }: SettingsModalProps) {
   // Suggested LHOST for the Agent Behaviour form (issue #180). Fetch only while the
   // agent modal is open; refetches each open so it tracks the last `redamon.sh up`.
@@ -45,7 +48,7 @@ export function SettingsModal({
             ) : settingsModal === 'toolmatrix' ? (
               <ToolMatrixSection data={projectFormData} updateField={updateProjectField} />
             ) : (
-              <AttackSkillsSection data={projectFormData} updateField={updateProjectField} />
+              <AttackSkillsSection data={projectFormData} updateField={updateProjectField} projectId={projectId} />
             )
           ) : (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>

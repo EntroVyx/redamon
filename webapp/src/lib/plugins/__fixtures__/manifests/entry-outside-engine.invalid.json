@@ -1,0 +1,10 @@
+{
+  "id": "echo",
+  "version": "1.0.0",
+  "displayName": "Echo",
+  "description": "An action entry outside engine/.",
+  "platform": ">=1.0.0 <2.0.0",
+  "dataVersion": 1,
+  "permissions": [],
+  "actions": [{ "id": "run", "entry": "../engine/main.py:run", "timeoutSeconds": 10 }]
+}

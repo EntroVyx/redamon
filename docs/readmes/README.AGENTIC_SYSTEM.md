@@ -948,6 +948,10 @@ Members of an in-flight fireteam wave keep their deploy-time `attack_path_type` 
 
 Each block is a Python string template with placeholders that `prompts/__init__.py` fills via `get_phase_tools()`.
 
+### Plugin Overrides of Built-In Skill Text
+
+Through the plugin platform (see [README.PLUGINS.md](README.PLUGINS.md)), a person can approve a plugin's rewrite of a built-in skill's static workflow parts. The webapp delivers the approved versions in the project settings payload (`skillTextOverrides`, only to the agent's master-key settings fetch), and `fetch_agent_settings` maps them to `SKILL_TEXT_OVERRIDES`. Every static part listed in [prompts/skill_parts.py](../../agentic/prompts/skill_parts.py) (47 parts across the 14 skills; blocks built from operator data are not listed) is appended through `resolve_skill_part` in [prompts/skill_part_seam.py](../../agentic/prompts/skill_part_seam.py), which renders the approved text only when every part of that skill's version still matches the factory text's SHA-256 and passes validation, and the factory text otherwise; the skill's gates still decide whether a part is rendered at all. It reads the session's own settings only and never raises, so without an approved override the prompt is byte-for-byte the factory prompt (pinned by `tests/test_skill_workflow_golden.py`). Each `phase_update` event carries `skill_workflow: {skillId, revision, changeSetId}` (revision 1 and `changeSetId` `null` = factory text; the whole record `null` when the turn rendered no skill text). Revision numbers restart per scope, so `changeSetId` is what identifies a version. A turn that rendered a user attack skill records `{skillId: "user_skill:<id>", kind: "user", contentSha256}` instead: the first 16 hex characters of the SHA-256 of the skill's UTF-8 content, and no `revision` key (a new version of a user skill is a new skill), so readers take `revision` with a default. `skillId` names the skill actually rendered: when the label's skill is off and an enabled version `supersedes` it, that version's text is rendered and recorded, while the label, the chain graph and the phase stay as they are. The validator judges what the model will read: invisible and control characters, and the headings of the sections placed after the skill text (also when split around a placeholder or disguised with look-alike letters), are refused, and the seam checks the rendered text again. The webapp reads the parts and validates proposals through the master-key endpoints `GET /plugins/skill-parts` and `POST /plugins/skill-parts/validate` ([plugin_api.py](../../agentic/plugin_api.py)).
+
 ### Skill Settings
 
 | Setting | Default | Purpose |
@@ -955,6 +959,7 @@ Each block is a Python string template with placeholders that `prompts/__init__.
 | `ATTACK_SKILL_CONFIG.builtIn` | all enabled | Per-skill on/off toggle for built-ins |
 | `USER_ATTACK_SKILLS` | `[]` | List of user-skill ids (`vulnerabilities/ssrf`, etc.) the project has activated; populated from DB |
 | `MAX_SKILLS` | `5` | Hard cap on simultaneous skills injected |
+| `SKILL_TEXT_OVERRIDES` | `{}` | Approved plugin versions of built-in skill parts, keyed `<skill>/<part>`; runtime data from the plugin platform, never a project field (excluded from `/defaults`) |
 | `XSS_DALFOX_ENABLED` | `true` | Enable dalfox WAF evasion in the XSS skill |
 | `XSS_BLIND_CALLBACK_ENABLED` | `false` | Allow interactsh OOB blind XSS callbacks |
 | `XSS_CSP_BYPASS_ENABLED` | `true` | Include CSP bypass guidance in the XSS prompt |
@@ -4188,6 +4193,12 @@ Two agent endpoints WRITE the graph on the webapp's behalf and take the stricter
 
 - `POST /graph/node-filters/preview` counts what draft Mute Rules would do and writes nothing. It runs in the request's worker thread, at most two at once and one per project, and stops at a 20 s deadline with its counts marked partial.
 - `POST /graph/node-filters/apply` starts an "apply to current graph" in a background thread (`agentic/node_filter_runs.py`) and answers 202. It receives only a run id: it fetches the rules the webapp snapshotted into that `NodeFilterRun` over `/api/internal/node-filter-runs/[runId]`, heartbeats every 30 s, stops when the webapp says so (Stop, a project delete, a version activation) or after two failed heartbeats, and always reports how it ended to `.../finish`. Preview and apply call the same sweep (`apply_node_filters` in `graph_db/mixins/node_filter_mixin.py`), so a preview's counts are what an apply writes.
+
+The plugin platform's router ([plugin_api.py](../../agentic/plugin_api.py)) takes `require_master_internal_auth` on all four of its endpoints, and only the webapp's Gateway calls them; plugin code cannot reach the agent's network at all.
+
+- `GET /plugins/skill-parts` and `POST /plugins/skill-parts/validate` serve the overridable built-in skill parts and judge a proposed value with the same rules the seam applies at use (see "Plugin Overrides of Built-In Skill Text" above).
+- `POST /plugins/text/validate` judges a proposed replacement for a whole plain text, such as a user's own skill: `{text, baseText, maxChars}` → `{ok, errors}`. It refuses an empty or unchanged text, a NUL, more than `maxChars` UTF-16 code units (JavaScript's `.length`; `maxChars` is 1 to 1,000,000), and the reserved markers, prompt-section headings and invisible characters of the part validator, except those `baseText` already holds.
+- `POST /plugins/llm/invoke` runs one model call for a plugin, on the model the user chose for that plugin and with that user's own provider key, so no key ever reaches plugin code. It validates the messages (`system`/`user`/`assistant` only), `max_tokens` (1 to 16,000) and `temperature` (0 to 2), and echoes `model_used`. It deliberately skips `require_internal_auth`'s shared per-user cap: plugin calls have their own daily cap in the webapp (`PLUGIN_LLM_DAILY_CALL_CAP`), so a plugin cannot exhaust the user's other LLM features. No endpoint here reads a project's settings; a model call outside a session task would otherwise read another tenant's last-loaded settings.
 
 ### Phase-Based Access Control
 

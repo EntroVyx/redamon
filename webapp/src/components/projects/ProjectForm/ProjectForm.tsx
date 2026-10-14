@@ -18,11 +18,14 @@ import { ScanActions } from '@/components/scans/ScanActions'
 import { OtherScansModal } from '@/app/graph/components/OtherScansModal/OtherScansModal'
 import { useMultiPartialReconStatus } from '@/hooks/useMultiPartialReconStatus'
 import { useScanStartFailure } from '@/hooks/useScanStartFailure'
+import { useDrawerOffsets } from '@/hooks/useDrawerOffsets'
 import { useMultiPartialReconSSE } from '@/hooks/useMultiPartialReconSSE'
 import { useDirtyState } from '@/hooks/useDirtyState'
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import { useDetectedHostIp } from '@/hooks/useDetectedHostIp'
 import { useAlertModal, useToast, WikiInfoButton } from '@/components/ui'
+import { deepEqual } from '@/lib/deepEqual'
+import { postUserSkillsChanged, useUserSkillsChanged } from '@/lib/userSkillsChannel'
 import type { PartialReconParams, PartialReconState } from '@/lib/recon-types'
 import { PARTIAL_RECON_PHASE_MAP } from '@/lib/recon-types'
 import type { ReconStatus } from '@/lib/recon-types'
@@ -261,6 +264,19 @@ async function fetchDefaults(): Promise<Partial<ProjectFormData>> {
  *
  * TargetSection computes the value for display from the limits themselves.
  */
+// Moved by every write, or the toggles a skills-changed event is about.
+const SKILL_EVENT_IGNORED = new Set(['attackSkillConfig', 'updatedAt', 'updatedById'])
+
+/**
+ * Whether `fetched` differs from the row this form last saw from the server only in its skill
+ * toggles. Only then may the form take the fetched updatedAt: taking it while another field had
+ * changed would let the next whole-row save pass the stale check and revert that field.
+ */
+export function onlySkillTogglesChanged(known: Record<string, unknown> | null, fetched: Record<string, unknown>): boolean {
+  if (!known) return false
+  return Object.keys(fetched).every((k) => SKILL_EVENT_IGNORED.has(k) || deepEqual(fetched[k], known[k]))
+}
+
 function withoutDerived<T extends Record<string, unknown>>(row: T | undefined): T {
   if (!row) return {} as T
   const clone = { ...row }
@@ -405,15 +421,72 @@ export function ProjectForm({
   const savedVersionRef = useRef<string | null>(
     versionOf((initialData as { updatedAt?: unknown } | undefined)?.updatedAt)
   )
+  // The row as the server last answered it (load, then each save's answer merged in: a PUT
+  // answers without the relations a GET carries).
+  const serverRowRef = useRef<Record<string, unknown> | null>(
+    initialData ? { ...(initialData as Record<string, unknown>) } : null
+  )
   const adoptSavedVersion = useCallback((row: unknown) => {
     const version = versionOf((row as { updatedAt?: unknown } | null | undefined)?.updatedAt)
     if (version) savedVersionRef.current = version
+    if (row && typeof row === 'object' && !Array.isArray(row)) {
+      serverRowRef.current = { ...(serverRowRef.current ?? {}), ...(row as Record<string, unknown>) }
+    }
   }, [])
-  // The upload sections write the row through their own endpoints.
+  // The upload sections write the row through their own endpoints. The row is read back so a
+  // later skills event does not take the uploaded column for another writer's change; only
+  // when it is still at the announced version, so no one else's write is taken as known.
   useEffect(() => {
     if (!projectId || mode !== 'edit') return
-    return onProjectWrite(projectId, version => { savedVersionRef.current = version })
+    return onProjectWrite(projectId, version => {
+      savedVersionRef.current = version
+      void fetch(`/api/projects/${projectId}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(row => {
+          if (row && versionOf(row.updatedAt) === version) {
+            serverRowRef.current = { ...(serverRowRef.current ?? {}), ...(row as Record<string, unknown>) }
+          }
+        })
+        .catch(() => {})
+    })
   }, [projectId, mode])
+  const formDataRef = useRef(formData)
+  formDataRef.current = formData
+  // Saving a skill version from a review window (here or in another tab) can switch the
+  // project's user-skill toggles and moves its updatedAt. When nothing but the toggles changed
+  // on the server and there is no unsaved toggle change here, the form takes both, so its next
+  // save neither 409s nor reverts the switch. Otherwise it keeps the version it had, and says
+  // so: the next save is refused as stale instead of overwriting another writer.
+  useUserSkillsChanged(async (change) => {
+    if (!projectId || mode !== 'edit' || (change.projectId && change.projectId !== projectId)) return
+    const dirtyToggles = !deepEqual(formData.attackSkillConfig, baseline.attackSkillConfig)
+    try {
+      const res = await fetch(`/api/projects/${projectId}`)
+      if (!res.ok) return
+      const row = await res.json()
+      if (!onlySkillTogglesChanged(serverRowRef.current, row)) {
+        toast.warning('This project was changed in another window; reload it before saving')
+        return
+      }
+      // The server's toggles did not move (a save elsewhere touched another project), or they
+      // already are the form's: nothing to take, nothing to warn about.
+      const local = formDataRef.current.attackSkillConfig
+      if (deepEqual(row.attackSkillConfig, serverRowRef.current?.attackSkillConfig) || deepEqual(row.attackSkillConfig, local)) {
+        adoptSavedVersion(row)
+        return
+      }
+      // A toggle changed here, before the event or while the row was read, is not overwritten.
+      if (dirtyToggles || !deepEqual(local, formData.attackSkillConfig)) {
+        toast.warning('Your skill toggles were changed by a save elsewhere; reload before saving')
+        return
+      }
+      setFormData(prev => ({ ...prev, attackSkillConfig: row.attackSkillConfig }))
+      setBaseline(prev => ({ ...prev, attackSkillConfig: row.attackSkillConfig }))
+      adoptSavedVersion(row)
+    } catch {
+      // The next full save's stale check still guards the row.
+    }
+  })
   // Scan Queue (Phase 3): a temporary partial-recon start refusal offers Cancel /
   // Add to queue instead of a dead-end toast.
   const { handleStartFailure: handlePartialStartFailure } = useScanStartFailure(projectId ?? null)
@@ -528,26 +601,8 @@ export function ProjectForm({
       .catch(() => { setProviderChecked(true) /* network error: don't hard-block, model gate still applies */ })
   }, [mode, userId])
 
-  // Track body wrapper position so fixed-position log drawers pin to the main content area
-  useEffect(() => {
-    const body = bodyRef.current
-    if (!body) return
-    const update = () => {
-      const rect = body.getBoundingClientRect()
-      document.documentElement.style.setProperty('--drawer-top', `${rect.top}px`)
-      document.documentElement.style.setProperty('--drawer-bottom', `${window.innerHeight - rect.bottom}px`)
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(body)
-    window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-    }
-  }, [])
+  // Log drawers pin to the body wrapper, which moves as the form scrolls.
+  useDrawerOffsets(bodyRef, { trackScroll: true })
 
   const updateField = <K extends keyof ProjectFormData>(
     field: K,
@@ -756,7 +811,10 @@ export function ProjectForm({
         ...(mode === 'create' && projectId ? { id: projectId } : {}),
         ...(mode === 'edit' && savedVersionRef.current ? { updatedAt: savedVersionRef.current } : {}),
       }
+      const togglesChanged = !deepEqual(formData.attackSkillConfig, baseline.attackSkillConfig)
       adoptSavedVersion(await onSubmit(submitData))
+      // Other open windows of this project (the chat drawer) take the new toggles.
+      if (togglesChanged) postUserSkillsChanged({ projectId })
       // Adopt the just-saved state as the new baseline so the form reads clean
       // (create mode usually navigates away, but this keeps state correct if not).
       setBaseline(formData)
@@ -826,7 +884,9 @@ export function ProjectForm({
         ...(mode === 'create' && projectId ? { id: projectId } : {}),
         ...(mode === 'edit' && savedVersionRef.current ? { updatedAt: savedVersionRef.current } : {}),
       }
+      const togglesChanged = !deepEqual(formData.attackSkillConfig, baseline.attackSkillConfig)
       adoptSavedVersion(await onSaveAndStay(submitData))
+      if (togglesChanged) postUserSkillsChanged({ projectId })
       setBaseline(formData)
       toast.success('Project saved')
       after?.()
@@ -1281,7 +1341,7 @@ export function ProjectForm({
         )}
 
         {activeTab === 'attack' && (
-          <AttackSkillsSection data={formData} updateField={updateField} />
+          <AttackSkillsSection data={formData} updateField={updateField} projectId={mode === 'edit' ? projectId : null} />
         )}
 
         {activeTab === 'cypherfix' && (

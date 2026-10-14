@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback, useRef, ReactNode, KeyboardEvent } from 'react'
+import { useEffect, useCallback, useId, useRef, ReactNode, KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import styles from './Modal.module.css'
@@ -17,7 +17,7 @@ interface ModalProps {
   /** Footer content (typically buttons) */
   footer?: ReactNode
   /** Size variant */
-  size?: 'small' | 'default' | 'large' | 'full'
+  size?: 'small' | 'default' | 'large' | 'xlarge' | 'full'
   /** Whether clicking overlay closes the modal */
   closeOnOverlayClick?: boolean
   /** Whether pressing Escape closes the modal */
@@ -43,6 +43,9 @@ export function Modal({
   headerActions,
   className,
 }: ModalProps) {
+  // Per instance: modals can be open together (an alert over a dialog), and a shared id
+  // would name every one of them after the first title in the page.
+  const titleId = useId()
   const modalRef = useRef<HTMLDivElement>(null)
   const previousActiveElement = useRef<HTMLElement | null>(null)
   const pressStartedOnOverlay = useRef(false)
@@ -108,6 +111,7 @@ export function Modal({
     small: styles.modalSmall,
     default: '',
     large: styles.modalLarge,
+    xlarge: styles.modalXLarge,
     full: styles.modalFull,
   }[size]
 
@@ -124,13 +128,13 @@ export function Modal({
         className={`${styles.modal} ${sizeClass}${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={title ? 'modal-title' : undefined}
+        aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
       >
         {(title || showCloseButton) && (
           <div className={styles.header}>
             {title && (
-              <h2 id="modal-title" className={styles.title}>
+              <h2 id={titleId} className={styles.title}>
                 {title}
               </h2>
             )}

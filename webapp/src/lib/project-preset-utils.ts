@@ -181,6 +181,11 @@ export function applyPresetSettings(
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...current }
   for (const key of PRESET_FIELD_KEYS) {
+    if (key === 'attackSkillConfig') {
+      const fromPreset: Lookup = hasOwn(presetSettings, key) ? { found: true, value: presetSettings[key] } : defaultFor(key, backendDefaults)
+      if (fromPreset.found) next[key] = withOwnSkillToggles(fromPreset.value, current[key], hasOwn(presetSettings, key))
+      continue
+    }
     if (hasOwn(presetSettings, key)) {
       next[key] = presetSettings[key]
       continue
@@ -190,6 +195,25 @@ export function applyPresetSettings(
     if (d.found) next[key] = d.value
   }
   return next
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * `attackSkillConfig` is half preset, half the person's own. `builtIn` follows the preset
+ * (or the default) like any field; `user`, the toggles of their own skills, is kept as the
+ * project has it unless the preset itself carries a non-empty `user` map. A preset cannot
+ * know the person's skills, and with a missing toggle meaning OFF, resetting `user` to the
+ * default `{}` would silently turn every one of them off on each apply. An empty map says
+ * nothing either: an imported preset trimmed of another account's ids, or one saved when a
+ * missing toggle meant ON.
+ */
+function withOwnSkillToggles(presetValue: unknown, currentValue: unknown, named: boolean): unknown {
+  if (!isPlainObject(presetValue)) return presetValue
+  if (named && isPlainObject(presetValue.user) && Object.keys(presetValue.user).length > 0) return presetValue
+  const currentUser = isPlainObject(currentValue) && isPlainObject(currentValue.user) ? currentValue.user : {}
+  return { ...presetValue, user: { ...currentUser } }
 }
 
 /** The preset fields of `data`: the body a preset load saves. */

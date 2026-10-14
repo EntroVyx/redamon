@@ -34,6 +34,8 @@ vi.mock('@/lib/prisma', () => ({
       upsert: (...a: unknown[]) => mockUpsert(...a),
     },
     apiKeyRotationConfig: { findMany: (...a: unknown[]) => mockRotationFindMany(...a) },
+    // No plugin installed: featureModels.plugins.test.ts owns the plugin keys.
+    pluginInstall: { findMany: async () => [] },
     $executeRaw: (...a: unknown[]) => mockExecuteRaw(...a),
     $executeRawUnsafe: (...a: unknown[]) => mockExecuteRawUnsafe(...a),
   },

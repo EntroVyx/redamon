@@ -1,0 +1,184 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.vLine {
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.scope {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.warn,
+.block {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-default);
+}
+
+.warn {
+  color: var(--status-warning, #f59e0b);
+  background: color-mix(in srgb, var(--status-warning, #f59e0b) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-warning, #f59e0b) 30%, transparent);
+}
+
+.block {
+  color: var(--status-error, #ef4444);
+  background: color-mix(in srgb, var(--status-error, #ef4444) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-error, #ef4444) 30%, transparent);
+}
+
+/* The summary + changelog: a padded block so the bullets never sit on the modal's edge. */
+.note {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default, #334155);
+  border-radius: var(--radius-default);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.note :first-child {
+  margin-top: 0;
+}
+
+.note :last-child {
+  margin-bottom: 0;
+}
+
+.note ul {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+}
+
+.note li {
+  margin: var(--space-1) 0;
+}
+
+.note p {
+  margin: 0 0 var(--space-2);
+}
+
+.risks {
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--status-warning, #f59e0b) 30%, transparent);
+  border-radius: var(--radius-default);
+  background: color-mix(in srgb, var(--status-warning, #f59e0b) 5%, transparent);
+}
+
+.risksTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--status-warning, #f59e0b);
+  margin-bottom: var(--space-2);
+}
+
+.risks ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.risks code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.riskWhy {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary, #3b82f6);
+}
+
+.revert {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.tabFlag {
+  color: var(--status-warning, #f59e0b);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A phone: the buttons wrap instead of overflowing, and stay in view below the body. */
+@media (max-width: 640px) {
+  .footer {
+    flex-wrap: wrap;
+  }
+
+  .footer > button {
+    flex: 1 1 auto;
+  }
+}

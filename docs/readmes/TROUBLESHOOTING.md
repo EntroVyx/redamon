@@ -4,7 +4,7 @@
 
 ## Operating System Compatibility
 
-RedAmon is fully Dockerized and runs on **any OS** that supports Docker and Docker Compose v2+. Below are common OS-specific issues and their fixes.
+RedAmon is fully Dockerized and runs on **any OS** that supports Docker Engine 28.0.0 or newer and Docker Compose v2+. Below are common OS-specific issues and their fixes.
 
 ### Linux
 
@@ -44,6 +44,17 @@ RedAmon is fully Dockerized and runs on **any OS** that supports Docker and Dock
 | SYN scans (naabu, masscan) miss hosts on the local LAN | `network_mode: host` joins Docker Desktop's LinuxKit VM, not the Mac's network | Expected on Docker Desktop. Internet targets work normally; for LAN scans, run RedAmon on a Linux host |
 | Login fails after install with no error in logs | Non-interactive shell (CI, agents, some multiplexers) injected a `\u0001` SOH byte into the admin email/password prompt | Run `./redamon.sh create-admin` to (re)create the admin cleanly (`reset-password` only works once an admin already exists) |
 | No admin prompt appeared at install / can't log in | Webapp was slow to come up on first boot (common with `--gvm` or a small VM), so the automatic admin prompt was skipped | Run `./redamon.sh create-admin` once the stack is up (`./redamon.sh status`); it waits for the webapp, then prompts. Safe to re-run |
+
+---
+
+## `install`, `update` or `up` stops before starting anything
+
+Both checks run before any core service is (re)created, so a stack that was running keeps running.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `RedAmon needs Docker Engine 28.0.0 or newer; this host runs <version>.` (or `Could not read the Docker Engine version`) | The plugin platform's networks use `gateway_mode_ipv4: isolated`, which older engines reject. `install`, `update` (before its `git pull`) and `up` check the engine before building anything. An unreadable version means the Docker daemon is not running | Upgrade Docker ([Docker Engine](https://docs.docker.com/engine/install/), or the latest Docker Desktop), confirm with `docker version --format '{{.Server.Version}}'`, then rerun the command. An update that already pulled says the code is updated but not rebuilt: run `./redamon.sh update` again and it finishes that update (`.update-pending` records where it started). Until then `./redamon.sh up` warns that some images may be older than the code |
+| `The plugin platform cannot run on this host: <reason>.` | The plugin preflight found the named problem: `INTERNAL_API_KEY` unset or `changeme`; `PLUGIN_RUNNER_KEY` or `PLUGIN_CALL_TOKEN_SECRET` empty, `changeme`, too short or equal to another secret; the runner image does not build; or Docker refuses the plugin networks, volume or containers (for example another network already uses `10.213.80.0/24` or `10.213.81.0/24`) | Follow the hint after the reason. For a secret, delete its line from `.env` and rerun: `install`, `update` and `up` generate a new one. For the image, `docker compose build plugin-runner` shows the error; for the networks, `docker compose --profile plugins up --no-start plugin-runner plugin-gateway`. `./redamon.sh status` repeats the reason. An update that stopped here finishes when you run `./redamon.sh update` again |
 
 ---
 
@@ -133,6 +144,20 @@ by hand, set `REDAMON_NO_AUTO_RESET=1`.
 | The rules are active on new scans, but a scan left passive CVEs, OSV advisories or malicious packages unmuted | A scan's end-of-run sweep covers only recon's own finding sources; these come from Shodan, Netlas, CriminalIP and the supply-chain scanner | **Apply… → Current graph** after the scan |
 | A stopped scan left noise the rules should have muted | A stopped scan exits without its end-of-run sweep | **Apply… → Current graph**, or let the next scan finish |
 | A rule-muted finding vanished from Muted Nodes after a scan | The scan no longer reported it, and a rule mute is pruned like any other finding (a person's mute is kept and marked stale) | Nothing to fix. Mute it by hand if it must stay on record |
+
+## Saving a plugin's proposal for one of your own skills is refused
+
+A plugin such as Skiller can propose a new version of one of your own Agent Skills; **Save as new
+skill** in the review window creates it. These are the refusals you may meet there.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `503 platform_not_ready`: "The database does not accept saved proposals yet" | The plugin tables' status check still predates the `adopted` status: the constraint script did not run at start (dev mode never runs it), or it failed. The webapp log has `ERROR [plugins] plugin_overrides has no status check listing every status` or `[plugins] constraint script failed` | Restart the webapp container (`docker compose restart webapp`): its entrypoint re-applies the constraints (`plugin_overrides_status_ck2`). In dev mode run `docker compose exec webapp node scripts/apply-plugin-constraints.mjs` once |
+| `409 proposer_unavailable` ("… is not available at the version that made this proposal") | The plugin that made the proposal is disabled, uninstalled, revoked, no longer allowed to propose versions of your skills, or was updated since | Run the plugin again on the session to get a proposal from the version installed now, or delete this proposal |
+| `409 risk_not_acknowledged` | The new text adds lines flagged for review (they send data out, name a host or URL, or drop a guard) | Read them and tick "I have read the flagged lines" |
+| `409 too_many_enabled_skills` | The project already uses 20 of your skills | Keep "instead of <source>" checked, untick "Use it in project", or turn a skill off in the project |
+| `409 name_taken` / `409 skill_limit` | Another of your skills has that name (case and spacing ignored) / you have 1,000 skills | Take the suggested name, or type another / delete a skill in Global Settings |
+| A skill is "Quarantined" in Global Settings and its toggle is disabled | The plugin catalog revoked the plugin version that proposed it, so it was turned off in every project | Read it (Download), then **Release** it to use it again, or delete it. Only its owner can release it |
 
 ## Host and Docker gotchas
 

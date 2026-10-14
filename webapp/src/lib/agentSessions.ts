@@ -70,6 +70,33 @@ export async function checkAgentSessions(projectId: string): Promise<AgentSessio
   return cleared === flagged.length ? 'idle' : 'running'
 }
 
+/**
+ * Whether the agent is running ONE session: true or false, or 'unverified' when the agent
+ * could not be asked. The agent's answer decides, not the flag: a live session whose flag
+ * was never set (its PATCH lost) is running, and a set flag the agent does not hold is
+ * stale and cleared, conditionally, as checkAgentSessions does. A flag that changed
+ * between the read and the clear may be a run that just started: it counts as running.
+ */
+export async function sessionRunningState(conversation: {
+  id: string
+  projectId: string
+  sessionId: string
+  agentRunning: boolean
+  updatedAt: Date
+}): Promise<boolean | 'unverified'> {
+  const live = await liveSessionIds(conversation.projectId)
+  if (!live) return 'unverified'
+  if (live.has(conversation.sessionId)) return true
+  if (!conversation.agentRunning) return false
+  const res = await prisma.conversation.updateMany({
+    where: { id: conversation.id, agentRunning: true, updatedAt: conversation.updatedAt },
+    data: { agentRunning: false },
+  })
+  if (res.count === 0) return true
+  console.warn(`[agentSessions] cleared a stale agentRunning flag on session ${conversation.sessionId}`)
+  return false
+}
+
 /** The phrase describeLiveGraphWriters and the MCP busy messages use, or null when idle. */
 export function describeAgentSessionState(state: AgentSessionState): string | null {
   if (state === 'running') return 'an agent session is running'

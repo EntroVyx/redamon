@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { SETTINGS_SKILLS_HREF } from '@/lib/settingsLinks'
-import { ChevronDown, Bug, KeyRound, Mail, Swords, Loader2, Settings, Zap, Database, Code2, Globe, Terminal, FolderTree, Download, ShieldAlert, FileCode2, Binary, Split } from 'lucide-react'
+import { ChevronDown, Bug, KeyRound, Mail, Swords, Loader2, Settings, Zap, Database, Code2, Globe, Terminal, FolderTree, Download, ShieldAlert, FileCode2, Binary, Split, Search, GitBranch, ShieldOff, AlertTriangle } from 'lucide-react'
 import type { Project } from '@prisma/client'
 import { useProject } from '@/providers/ProjectProvider'
 import { Toggle } from '@/components/ui/Toggle/Toggle'
@@ -17,6 +17,13 @@ import { SsrfSection } from './SsrfSection'
 import { RceSection } from './RceSection'
 import { PathTraversalSection } from './PathTraversalSection'
 import { DeserializationSection } from './DeserializationSection'
+import { PluginSkillRow } from '@/components/plugins/skills/PluginSkillRow'
+import { usePluginSkillOverrides } from '@/components/plugins/skills/usePluginSkillOverrides'
+import { SkillVersionsModal } from '@/components/plugins/review/SkillVersionsModal'
+import { OverrideReviewModal } from '@/components/plugins/review/OverrideReviewModal'
+import { importSummary } from '@/components/settings/AgentSkillsTab'
+import { MAX_ENABLED_USER_SKILLS_PER_PROJECT } from '@/lib/userSkills'
+import { postUserSkillsChanged, useUserSkillsChanged } from '@/lib/userSkillsChannel'
 import styles from '../ProjectForm.module.css'
 
 type FormData = Omit<Project, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'user'>
@@ -24,6 +31,12 @@ type FormData = Omit<Project, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'use
 interface AttackSkillsSectionProps {
   data: FormData
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
+  /**
+   * The saved project's id. Plugin version controls render only when it is set: the section
+   * also renders in create mode (no project yet) and inside the chat SettingsModal, whose
+   * debounced whole-row PUT swallows errors, so Reset/Delete are their own API calls (X23).
+   */
+  projectId?: string | null
 }
 
 interface BuiltInSkillDef {
@@ -38,7 +51,13 @@ interface UserSkillDef {
   name: string
   description?: string | null
   createdAt: string
+  version?: number | null
+  lineageRootId?: string | null
+  derivedFromName?: string | null
+  quarantinedAt?: string | null
 }
+
+const LIMIT_TOOLTIP = `A project can use at most ${MAX_ENABLED_USER_SKILLS_PER_PROJECT} of your skills; turn one off first`
 
 const BUILT_IN_SKILLS: BuiltInSkillDef[] = [
   {
@@ -155,12 +174,14 @@ const DEFAULT_CONFIG: AttackSkillConfig = {
 function getConfig(data: FormData): AttackSkillConfig {
   const raw = data.attackSkillConfig as unknown
   if (raw && typeof raw === 'object' && 'builtIn' in (raw as Record<string, unknown>)) {
-    return raw as AttackSkillConfig
+    const config = raw as Partial<AttackSkillConfig> & { builtIn: Record<string, boolean> }
+    // A stored config may lack `user`; every reader below indexes it.
+    return config.user && typeof config.user === 'object' ? (config as AttackSkillConfig) : { ...config, user: {} }
   }
   return DEFAULT_CONFIG
 }
 
-export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionProps) {
+export function AttackSkillsSection({ data, updateField, projectId }: AttackSkillsSectionProps) {
   const { userId } = useProject()
   const { alertError, alert: showAlert } = useAlertModal()
   const [builtInOpen, setBuiltInOpen] = useState(true)
@@ -168,6 +189,14 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
   const [userSkills, setUserSkills] = useState<UserSkillDef[]>([])
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [enabledOnly, setEnabledOnly] = useState(false)
+
+  // Plugin skill-version controls, only for a saved project (X23).
+  const savedProjectId = projectId ?? null
+  const { bySkill, rowActions, reload: reloadOverrides } = usePluginSkillOverrides(savedProjectId)
+  const [versionsSkill, setVersionsSkill] = useState<string | null>(null)
+  const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
 
   const config = getConfig(data)
 
@@ -185,6 +214,9 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
   }, [userId])
 
   useEffect(() => { fetchUserSkills() }, [fetchUserSkills])
+  // A version saved in another window (a review in the chat drawer) appears here at once;
+  // the form's own copy of the toggles is refreshed by ProjectForm.
+  useUserSkillsChanged(() => { fetchUserSkills() })
 
   const isBuiltInEnabled = (skillId: string) => {
     if (skillId in config.builtIn) {
@@ -203,6 +235,19 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
     return config.user[skillId] === true
   }
 
+  // Only the owner's existing skills count, as on the server: a stale id in the map does not.
+  const enabledCount = userSkills.filter(s => isUserEnabled(s.id)).length
+  const atEnabledLimit = enabledCount >= MAX_ENABLED_USER_SKILLS_PER_PROJECT
+  // Two members of one family on at once: the agent sees two versions of the same skill.
+  const familyOn = new Map<string, UserSkillDef[]>()
+  for (const s of userSkills) {
+    if (s.lineageRootId && isUserEnabled(s.id)) familyOn.set(s.lineageRootId, [...(familyOn.get(s.lineageRootId) ?? []), s])
+  }
+  const q = skillQuery.trim().toLowerCase()
+  const shownUserSkills = userSkills.filter(s =>
+    (!enabledOnly || isUserEnabled(s.id)) &&
+    (!q || s.name.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q)))
+
   const toggleBuiltIn = (skillId: string, enabled: boolean) => {
     const newConfig: AttackSkillConfig = {
       ...config,
@@ -216,6 +261,7 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
   }
 
   const toggleUser = (skillId: string, enabled: boolean) => {
+    if (enabled && !isUserEnabled(skillId) && atEnabledLimit) return
     const newConfig: AttackSkillConfig = {
       ...config,
       user: { ...config.user, [skillId]: enabled },
@@ -261,20 +307,27 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
       }
       const fresh: UserSkillDef[] = await refreshResp.json()
       setUserSkills(fresh)
+      // Global Settings and other project windows list the new skills.
+      postUserSkillsChanged({})
 
-      // Enable newly imported skills in THIS project's config (existing ones untouched).
+      // Enable newly imported skills in THIS project's config (existing ones untouched),
+      // up to the per-project limit.
       const newlyImported = fresh.filter(s => !previousIds.has(s.id))
+      let room = MAX_ENABLED_USER_SKILLS_PER_PROJECT - fresh.filter(s => config.user[s.id] === true).length
+      let leftOff = 0
       if (newlyImported.length > 0) {
         const updatedUser = { ...config.user }
-        for (const s of newlyImported) updatedUser[s.id] = true
+        for (const s of newlyImported) {
+          if (room > 0) { updatedUser[s.id] = true; room-- } else { leftOff++ }
+        }
         const newConfig: AttackSkillConfig = { ...config, user: updatedUser }
         updateField('attackSkillConfig', newConfig as unknown as FormData['attackSkillConfig'])
       }
 
       showAlert(
-        `Imported ${result.imported ?? 0} community skill(s)` +
-        (result.skipped ? `, skipped ${result.skipped} duplicate(s)` : '') +
-        '. New skills are enabled for this project.'
+        importSummary(result) +
+        (newlyImported.length - leftOff > 0 ? ` ${newlyImported.length - leftOff} new skill(s) are enabled for this project.` : '') +
+        (leftOff ? ` ${leftOff} were left off: a project can use at most ${MAX_ENABLED_USER_SKILLS_PER_PROJECT} of your skills.` : '')
       )
     } catch (err) {
       console.error('Failed to import community skills:', err)
@@ -382,6 +435,19 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
                   {enabled && skill.id === 'deserialization' && (
                     <DeserializationSection data={data} updateField={updateField} />
                   )}
+
+                  {savedProjectId && (
+                    <PluginSkillRow
+                      skillId={skill.id}
+                      projectId={savedProjectId}
+                      scopeOwnerId={userId}
+                      summary={bySkill.get(skill.id)}
+                      rowActions={rowActions}
+                      onVersions={setVersionsSkill}
+                      onPending={setVersionsSkill}
+                      onReset={reloadOverrides}
+                    />
+                  )}
                 </div>
               )
             })}
@@ -421,10 +487,34 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
           <div className={styles.sectionContent}>
             <p className={styles.sectionDescription}>
               Custom agent skills uploaded from Global Settings. Enable a skill to let the agent
-              classify requests into it and use its workflow. Newly imported skills default to off
-              for new projects; use the Import shortcut above to bulk-import community templates and
+              classify requests into it and use its workflow. A skill is off until you turn it on
+              here; use the Import shortcut above to bulk-import community templates and
               auto-enable them for this project.
             </p>
+
+            {userSkills.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', flex: '1 1 220px', color: 'var(--text-tertiary)' }}>
+                  <Search size={14} aria-hidden />
+                  <input
+                    className="textInput"
+                    type="search"
+                    placeholder="Search your skills"
+                    aria-label="Search your skills"
+                    value={skillQuery}
+                    onChange={e => setSkillQuery(e.target.value)}
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1-5)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                  <input type="checkbox" checked={enabledOnly} onChange={e => setEnabledOnly(e.target.checked)} />
+                  Enabled only
+                </label>
+                <span data-testid="user-skill-enabled-count" style={{ fontSize: 'var(--text-xs)', color: atEnabledLimit ? 'var(--status-warning)' : 'var(--text-tertiary)' }}>
+                  {enabledCount} of {MAX_ENABLED_USER_SKILLS_PER_PROJECT} enabled
+                </span>
+              </div>
+            )}
 
             {loading ? (
               <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--text-tertiary)' }}>
@@ -461,9 +551,18 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
                   Go to Global Settings
                 </Link>
               </div>
+            ) : shownUserSkills.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--text-tertiary)', fontSize: 'var(--text-sm)' }}>
+                No skill matches.
+              </div>
             ) : (
-              userSkills.map(skill => {
+              shownUserSkills.map(skill => {
                 const enabled = isUserEnabled(skill.id)
+                const quarantined = !!skill.quarantinedAt
+                const blockedByLimit = !enabled && atEnabledLimit
+                const sibling = enabled && skill.lineageRootId
+                  ? (familyOn.get(skill.lineageRootId) ?? []).find(o => o.id !== skill.id)
+                  : undefined
                 return (
                   <div
                     key={skill.id}
@@ -480,23 +579,45 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
                       transition: 'opacity 0.2s ease',
                     }}
                   >
-                    <Toggle
-                      checked={enabled}
-                      onChange={(v) => toggleUser(skill.id, v)}
-                      size="large"
-                    />
+                    <span
+                      title={quarantined ? 'Quarantined: release it in Global Settings to turn it on' : blockedByLimit ? LIMIT_TOOLTIP : undefined}
+                      data-testid={`user-skill-toggle-${skill.id}`}
+                    >
+                      <Toggle
+                        checked={enabled}
+                        onChange={(v) => toggleUser(skill.id, v)}
+                        size="large"
+                        disabled={(quarantined && !enabled) || blockedByLimit}
+                      />
+                    </span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{
                         display: 'flex',
                         alignItems: 'center',
+                        flexWrap: 'wrap',
                         gap: 'var(--space-1-5)',
                         fontSize: 'var(--text-sm)',
                         fontWeight: 'var(--font-semibold)',
                         color: 'var(--text-primary)',
                       }}>
                         <Swords size={14} />
-                        {skill.name}
+                        <span style={{ overflowWrap: 'anywhere' }}>{skill.name}</span>
+                        {skill.version != null && (
+                          <span className={styles.badgeActive} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            <GitBranch size={10} aria-hidden /> v{skill.version}{skill.derivedFromName ? ` · from ${skill.derivedFromName}` : ''}
+                          </span>
+                        )}
+                        {quarantined && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--text-xs)', color: 'var(--status-error, #ef4444)' }}>
+                            <ShieldOff size={11} aria-hidden /> Quarantined
+                          </span>
+                        )}
                       </div>
+                      {sibling && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--status-warning)', marginTop: 2 }}>
+                          <AlertTriangle size={11} aria-hidden /> {sibling.name} is also on: the agent sees two versions of the same skill.
+                        </div>
+                      )}
                       <div style={{
                         fontSize: 'var(--text-xs)',
                         color: 'var(--text-tertiary)',
@@ -529,6 +650,27 @@ export function AttackSkillsSection({ data, updateField }: AttackSkillsSectionPr
           </div>
         )}
       </div>
+
+      {savedProjectId && versionsSkill && (
+        <SkillVersionsModal
+          projectId={savedProjectId}
+          initialSkill={versionsSkill}
+          scopeOwnerId={userId}
+          onClose={() => { setVersionsSkill(null); reloadOverrides() }}
+          onOpenReview={(changeSetId) => { setVersionsSkill(null); setReviewChangeSetId(changeSetId) }}
+          onReviewAgain={(changeSetId) => { setVersionsSkill(null); setReviewChangeSetId(changeSetId) }}
+        />
+      )}
+
+      {savedProjectId && reviewChangeSetId && (
+        <OverrideReviewModal
+          changeSetId={reviewChangeSetId}
+          scopeOwnerId={userId}
+          projectId={savedProjectId}
+          onClose={() => setReviewChangeSetId(null)}
+          onDecided={() => { setReviewChangeSetId(null); reloadOverrides(); fetchUserSkills() }}
+        />
+      )}
     </>
   )
 }

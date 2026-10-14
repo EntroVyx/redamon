@@ -1,0 +1,66 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { readJsonBody } from '@/lib/jsonBody'
+import { getEffectiveUser, getSession } from '@/lib/session'
+import { auditPlugin } from '@/lib/plugins/audit'
+import { isBuiltinSkill } from '@/lib/plugins/builtinSkills'
+import { bodyOwnerMatches, ownsScope } from '@/lib/plugins/changeSetAccess'
+import * as ov from '@/lib/plugins/overrides'
+import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
+
+/**
+ * POST /api/plugins/overrides/reset: the scope's active version of a skill becomes `cleared`,
+ * so factory text (or, for a project, the owner's user-scope version) runs again (design §6;
+ * TD-18, OQ-23). Core UI, so it works whatever state the plugin is in — disabled, uninstalled
+ * with data kept — because it never touches the plugin. Only the scope owner, or an admin
+ * acting as them; a user-scope reset carries the scope owner id (X9).
+ */
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+export async function POST(request: NextRequest) {
+  if (!sameOrigin(request)) return crossOriginResponse()
+  const parsed = await readJsonBody(request)
+  if (parsed instanceof NextResponse) return parsed
+  const eff = await getEffectiveUser()
+  if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = parsed.body
+  const group = body.group
+  const scopeType = body.scopeType
+  if (body.point !== 'skill.text' || !isBuiltinSkill(group)) {
+    return NextResponse.json({ error: 'A skill.text reset names a built-in skill.', code: 'bad_request' }, { status: 400 })
+  }
+  let scope: ov.OverrideScope
+  if (scopeType === 'user') {
+    scope = { type: 'user', id: typeof body.scopeOwnerId === 'string' ? body.scopeOwnerId : eff.userId }
+  } else if (scopeType === 'project') {
+    if (typeof body.projectId !== 'string' || !body.projectId) {
+      return NextResponse.json({ error: 'A project reset needs projectId.', code: 'bad_request' }, { status: 400 })
+    }
+    scope = { type: 'project', id: body.projectId }
+  } else {
+    return NextResponse.json({ error: 'scopeType is user or project.', code: 'bad_request' }, { status: 400 })
+  }
+
+  if (!(await ownsScope(scope, eff.userId)) || !bodyOwnerMatches(scope, eff.userId, isObj(body) ? body.scopeOwnerId : undefined)) {
+    return NextResponse.json({ error: 'Not found', code: 'not_found' }, { status: 404 })
+  }
+
+  const session = await getSession()
+  const actor = session?.userId ?? eff.userId
+  const result = await ov.reset(scope, 'skill.text', group, actor)
+  if (result) {
+    const cleared = await ov.getChangeSet(result.changeSetId)
+    await auditPlugin('plugin.override.reset', {
+      actorId: actor,
+      pluginId: cleared?.pluginId ?? 'unknown',
+      targetType: 'plugin_change_set',
+      targetId: result.changeSetId,
+      after: { point: 'skill.text', targetGroup: group, scope: scope.type, scopeId: scope.id, clearedRevision: result.revision },
+      source: 'ui',
+    })
+  }
+  return NextResponse.json({ cleared: !!result, revision: result?.revision ?? null })
+}

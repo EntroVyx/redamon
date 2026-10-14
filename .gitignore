@@ -245,6 +245,8 @@ docs/readmes/agent_prompts/
 
 # DevergoLabs (separate local project kept at repo root, untracked)
 /DevergoLabs/
+# redamon-plugins (the plugin monorepo: its own git repository, kept at repo root, untracked)
+/redamon-plugins/
 
 # RedAmon local config (created by redamon.sh)
 .gvm-enabled
@@ -254,6 +256,7 @@ docs/readmes/agent_prompts/
 .gpu-enabled
 .gpu-disabled
 .torch-variant
+.update-pending
 
 # Claude Code config
 .claude/

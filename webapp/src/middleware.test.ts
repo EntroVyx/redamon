@@ -251,3 +251,59 @@ describe('MCP path separation (plan 9.1/9.2)', () => {
     expect((await middleware(makeRequest('/api/mcpserver'))).status).toBe(401)
   })
 })
+
+describe('plugin token-auth prefixes (RV-33)', () => {
+  // Plugin code calls the Gateway with a call token and the runner calls the run list
+  // with its key; neither has a session cookie. The handlers authenticate themselves
+  // and never honour the cookie, X-Internal-Key or getEffectiveUser.
+  test.each([
+    '/api/plugin-gateway/v1/data/get',
+    '/api/plugin-gateway/v1/session/read',
+    '/api/plugin-runner/v1/run-list',
+  ])('%s passes the middleware with no cookie', async (path) => {
+    const res = await middleware(makeRequest(path))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('location')).toBeNull()
+  })
+
+  test.each([
+    '/api/plugin-gateway/v10/data/get',
+    '/api/plugin-gateway/v1',
+    '/api/plugin-gateway',
+    '/api/plugin-gatewayx/v1/data/get',
+    '/api/plugin-runner/v2/run-list',
+    '/api/plugin-runnerx/v1/run-list',
+    '/api/plugins/status',
+    '/api/plugins',
+    '/api/internal/plugins/reconcile',
+  ])('%s still needs a session', async (path) => {
+    const res = await middleware(makeRequest(path))
+    expect(res.status).toBe(401)
+  })
+
+  test.each(['/api/plugin-gateway/v1/data/get', '/api/plugin-runner/v1/run-list'])(
+    '%s never carries user headers, not even ones the caller sent', async (path) => {
+      const res = await middleware(makeRequest(path, {
+        headers: { 'x-user-id': 'admin-user', 'x-user-role': 'admin', authorization: 'Bearer t' },
+      }))
+      expect(res.status).toBe(200)
+      // The headers the handler receives are exactly this list (Next.js request override).
+      const forwarded = (res.headers.get('x-middleware-override-headers') ?? '').split(',')
+      expect(forwarded).toContain('authorization')
+      expect(forwarded).not.toContain('x-user-id')
+      expect(forwarded).not.toContain('x-user-role')
+      expect(res.headers.get('x-middleware-request-x-user-id')).toBeNull()
+    })
+})
+
+describe('the /plugins page', () => {
+  test('signed in: the page itself', async () => {
+    const res = await middleware(makeRequest('/plugins', { cookie: await createTestToken('user-1', 'admin') }))
+    expect(res.headers.get('x-middleware-rewrite')).toBeNull()
+  })
+
+  test('signed out: the login redirect as for any page', async () => {
+    const res = await middleware(makeRequest('/plugins'))
+    expect(res.headers.get('location')).toContain('/login')
+  })
+})

@@ -1,0 +1,144 @@
+import type { PluginInstall } from '@prisma/client'
+import prisma from '@/lib/prisma'
+import { contributionsUpdating, showsContributions } from './registry'
+import type { CoreScreen } from './extensionPoints'
+
+/**
+ * The UI a plugin contributes, as the host reads it on a page load (design §6, F-10/F-11).
+ * Read from the stored manifest only, never the volume, and only for plugins that
+ * `showsContributions` (enabled, ready or updating, not revoked). `llm` and `async` come from
+ * the matching entry in the manifest's `actions`, so the gear menu knows to open the model
+ * gate first and to expect a job; a `coreScreen` item has no action and is neither.
+ */
+export interface NavContribution {
+  label: string
+  icon: string
+  screen: string
+}
+
+export interface ChatSessionActionContribution {
+  /** Stable within a plugin: the action id, or the core screen name for a screen item. */
+  key: string
+  label: string
+  icon?: string
+  action?: string
+  coreScreen?: CoreScreen
+  /** What the core asks the person to pick first (the session's skills), platform 1.1.0. */
+  pick?: 'session.skill'
+  llm: boolean
+  async: boolean
+}
+
+export interface ProjectSkillsRowContribution {
+  key: string
+  label: string
+  action: string
+}
+
+export interface PluginContributions {
+  pluginId: string
+  displayName: string
+  /** True while the plugin is being updated: its buttons stay, flagged, until it is ready. */
+  updating: boolean
+  nav?: NavContribution
+  chatSessionActions: ChatSessionActionContribution[]
+  projectSkillsRow: ProjectSkillsRowContribution[]
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+
+type Db = Pick<typeof prisma, 'pluginInstall'>
+
+function actionFlags(manifest: Record<string, unknown>): Map<string, { llm: boolean; async: boolean }> {
+  const out = new Map<string, { llm: boolean; async: boolean }>()
+  const actions = Array.isArray(manifest.actions) ? manifest.actions : []
+  for (const a of actions) {
+    if (isObj(a) && typeof a.id === 'string') out.set(a.id, { llm: a.llm === true, async: a.async === true })
+  }
+  return out
+}
+
+function navOf(contributes: Record<string, unknown>): NavContribution | undefined {
+  const nav = contributes.nav
+  if (!isObj(nav)) return undefined
+  const label = str(nav.label)
+  const icon = str(nav.icon)
+  const screen = str(nav.screen)
+  return label && icon && screen ? { label, icon, screen } : undefined
+}
+
+function chatActionsOf(
+  contributes: Record<string, unknown>,
+  flags: Map<string, { llm: boolean; async: boolean }>,
+): ChatSessionActionContribution[] {
+  const raw = contributes['chat.session.actions']
+  if (!Array.isArray(raw)) return []
+  const out: ChatSessionActionContribution[] = []
+  for (const c of raw) {
+    if (!isObj(c)) continue
+    const label = str(c.label)
+    if (!label) continue
+    const action = str(c.action)
+    const coreScreen = str(c.coreScreen) as CoreScreen | undefined
+    const key = action ?? coreScreen
+    if (!key) continue
+    const f = action ? flags.get(action) : undefined
+    out.push({
+      key,
+      label,
+      ...(str(c.icon) ? { icon: str(c.icon) } : {}),
+      ...(action ? { action } : {}),
+      ...(coreScreen ? { coreScreen } : {}),
+      ...(action && c.pick === 'session.skill' ? { pick: 'session.skill' as const } : {}),
+      llm: f?.llm ?? false,
+      async: f?.async ?? false,
+    })
+  }
+  return out
+}
+
+function skillRowsOf(contributes: Record<string, unknown>): ProjectSkillsRowContribution[] {
+  const raw = contributes['project.skills.row']
+  if (!Array.isArray(raw)) return []
+  const out: ProjectSkillsRowContribution[] = []
+  for (const c of raw) {
+    if (!isObj(c)) continue
+    const label = str(c.label)
+    const action = str(c.action)
+    if (label && action) out.push({ key: action, label, action })
+  }
+  return out
+}
+
+type Row = Parameters<typeof showsContributions>[0] & Pick<PluginInstall, 'pluginId' | 'manifest'>
+
+/**
+ * One plugin's contributions, or null when it shows none: not `showsContributions`, no
+ * manifest, or no UI point at all (a plugin with only skill.text would otherwise render an
+ * empty gear-menu group).
+ */
+export function rowContributions(row: Row): PluginContributions | null {
+  if (!showsContributions(row)) return null
+  const manifest = row.manifest
+  if (!isObj(manifest)) return null
+  const contributes = isObj(manifest.contributes) ? manifest.contributes : {}
+  const nav = navOf(contributes)
+  const chatSessionActions = chatActionsOf(contributes, actionFlags(manifest))
+  const projectSkillsRow = skillRowsOf(contributes)
+  if (!nav && chatSessionActions.length === 0 && projectSkillsRow.length === 0) return null
+  return {
+    pluginId: row.pluginId,
+    displayName: str(manifest.displayName) ?? row.pluginId,
+    updating: contributionsUpdating(row),
+    ...(nav ? { nav } : {}),
+    chatSessionActions,
+    projectSkillsRow,
+  }
+}
+
+/** Every enabled plugin's contributions, by plugin id. */
+export async function listContributions(db: Db = prisma): Promise<PluginContributions[]> {
+  const rows = await db.pluginInstall.findMany({ orderBy: { pluginId: 'asc' } })
+  return rows.map(rowContributions).filter((c): c is PluginContributions => c !== null)
+}

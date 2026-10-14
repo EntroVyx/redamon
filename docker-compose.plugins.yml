@@ -1,0 +1,16 @@
+# Plugin platform overlay: the only change the platform makes to an existing service.
+#
+# Loaded by redamon.sh on every install, update and up, once the plugin preflight passed
+# (_plugins_prepare appends it to COMPOSE_FILE). A plain `docker compose up -d` does not
+# load it: the webapp then starts without the plugin network and volume, and every plugin
+# action fails until the next ./redamon.sh up.
+services:
+  webapp:
+    # Merged with the base list (redamon, orchestrator-net): the webapp keeps its egress
+    # and reaches the plugin-gateway proxy, never plugins-net itself.
+    networks:
+      - plugins-edge
+    # Outside /app: `./redamon.sh up dev` bind-mounts ./webapp over /app, where a volume
+    # would create a root-owned webapp/plugins/ directory in the checkout.
+    volumes:
+      - plugins:/data/plugins

@@ -1,0 +1,17 @@
+{
+  "type": "page",
+  "title": "Echo",
+  "children": [
+    { "type": "markdown", "content": { "text": "The **Echo** fixture plugin exists to test the plugin platform." } },
+    {
+      "type": "list",
+      "title": "Items",
+      "source": { "action": "list_items", "params": { "limit": 10 } },
+      "itemTitle": "title",
+      "itemSubtitle": "detail",
+      "rowActions": [{ "label": "Echo", "action": "echo", "pass": ["title"] }],
+      "emptyText": "No items."
+    },
+    { "type": "button", "label": "Echo hello", "action": "echo", "params": { "text": "hello" }, "tone": "primary" }
+  ]
+}

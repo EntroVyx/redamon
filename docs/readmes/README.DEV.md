@@ -171,6 +171,18 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
             remediations, reports
 ```
 
+The plugin platform ([README.PLUGINS.md](README.PLUGINS.md)) adds two more services, which reach
+the rest of the stack only through each other:
+
+```
+Webapp ──runner key──→ plugin-gateway :7072 ──→ plugin-runner :7080 ──spawns──→ plugin workers
+   ▲                                                                                │
+   └── /api/plugin-gateway/v1/* ←── plugin-gateway :7071 ←──────── call token ──────┘
+```
+
+The agent never calls plugin code: a plugin change a person approved reaches it as data in its
+settings fetch.
+
 ### Networks
 
 | Network | Subnet | Purpose |
@@ -178,6 +190,8 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
 | **`redamon`** (`redamon-network`) | bridge (default) | Inter-service communication for webapp, agent, worker, databases |
 | **`orchestrator-net`** (`redamon-orchestrator-net`) | bridge | **Isolation network** for the privileged recon-orchestrator. Shared only with the webapp (multi-homed) and the on-demand Ollama judge, so a compromised worker cannot reach the orchestration API. |
 | **`pentest-net`** | 172.28.0.0/16 | Isolated scanning network — Kali sandbox, MCP tools, and target containers (guinea pigs) |
+| **`plugins-net`** (`redamon-plugins-net`) | bridge, `internal` | Plugin platform only: the plugin runner and the plugin-gateway proxy. No route out |
+| **`plugins-edge`** (`redamon-plugins-edge`) | bridge, `internal` | Plugin platform only: the plugin-gateway proxy and the webapp, which joins it through `docker-compose.plugins.yml` |
 
 > **Worker isolation.** The `recon-orchestrator` holds the Docker socket and is
 > the privileged component. It is **not** on `redamon`; it sits alone on
@@ -188,6 +202,15 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
 > recon containers the orchestrator spawns receive a filtering broker socket
 > (not the raw Docker socket), so they can only create the known tool images and
 > cannot mount the host filesystem or run privileged.
+
+> **Plugin isolation.** Plugin code runs in `plugin-runner`, alone on `plugins-net` with the
+> `plugin-gateway` proxy, which never joins `redamon`. The proxy passes only the webapp's
+> `/api/plugin-gateway/v1/*` and `/api/plugin-runner/v1/*` towards the webapp and the
+> supervisor's `/runner/v1/*` towards the runner, so a worker reaches neither Postgres, Neo4j,
+> the agent nor the internet. Both plugin networks set `gateway_mode_ipv4: isolated`, which
+> needs Docker Engine 28.0.0 or newer and stops a worker reaching the host through the bridge
+> address. `redamon.sh` creates both networks and the plugins volume; a plain
+> `docker compose up -d` creates neither.
 
 ### Docker Compose Services
 
@@ -202,6 +225,8 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
 | `gvmd` | redamon-gvm-gvmd | internal | GVM daemon (vulnerability scanner) |
 | `gvm-ospd` | redamon-gvm-ospd | internal | OpenVAS scanner engine |
 | `recon` | (profile: tools) | — | Recon pipeline image (spawned dynamically, not always running) |
+| `plugin-runner` | redamon-plugin-runner | internal (7080) | Runs plugin code, one worker process per plugin version (profile: plugins; started only by `redamon.sh`) |
+| `plugin-gateway` | redamon-plugin-gateway | internal (7071, 7072) | The only door between `plugins-net` and the webapp (same image as `plugin-runner`, profile: plugins) |
 
 > For full Mermaid diagrams, container architecture, and data flow pipelines, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -213,6 +238,7 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
 redamon/
 ├── agentic/                        # AI agent orchestrator (Python 3.11 / LangGraph / FastAPI)
 │   ├── api.py                      #   FastAPI entry point, mounts WebSocket endpoints
+│   ├── plugin_api.py               #   Master-key /plugins/* routes: skill parts, proposal validation, plugin model calls
 │   ├── orchestrator.py             #   Main ReAct agent loop: think → select tool → observe → repeat
 │   ├── state.py                    #   LangGraph AgentState (execution trace, todos, phases, messages)
 │   ├── tools.py                    #   Tool managers: MCP, Neo4j (Cypher), WebSearch, Shodan, GoogleDork
@@ -228,6 +254,8 @@ redamon/
 │   │   ├── base.py                 #     Core system prompt + tool availability tables
 │   │   ├── classification.py       #     Attack path classification (CVE, brute force, phishing, etc.)
 │   │   ├── tool_registry.py        #     Single source of truth for tool definitions
+│   │   ├── skill_parts.py          #     Registry of the built-in skill parts a plugin may override
+│   │   ├── skill_part_seam.py      #     Renders an approved override of a part, or its factory text
 │   │   ├── cve_exploit_prompts.py  #     CVE research & exploitation guidance
 │   │   ├── brute_force_credential_guess_prompts.py  # Credential attack strategy
 │   │   ├── phishing_social_engineering_prompts.py   # Social engineering tactics
@@ -315,6 +343,10 @@ redamon/
 │   │   │   │   ├── trufflehog/    #       TruffleHog secret scanner control
 │   │   │   │   ├── guardrail/      #       Scope guardrail validation
 │   │   │   │   ├── roe/            #       Rules of Engagement management
+│   │   │   │   ├── plugins/        #       Plugin platform: Plugins page model, lifecycle, actions, jobs, overrides
+│   │   │   │   ├── plugin-gateway/ #       The Gateway plugin code calls (call token only)
+│   │   │   │   ├── plugin-runner/  #       The plugin runner's run list (runner key only)
+│   │   │   │   ├── internal/plugins/ #     Plugin reconciliation (master internal key)
 │   │   │   │   ├── ws/             #       WebSocket proxy endpoints
 │   │   │   │   └── health/         #       Health check
 │   │   │   ├── projects/           #     Project dashboard pages
@@ -322,11 +354,13 @@ redamon/
 │   │   │   ├── settings/           #     Global settings (LLM keys, API keys)
 │   │   │   ├── cypherfix/          #     CypherFix remediation dashboard
 │   │   │   ├── reports/            #     Report listing and viewing
-│   │   │   └── insights/           #     Analytics, charts, reporting
+│   │   │   ├── insights/           #     Analytics, charts, reporting
+│   │   │   └── plugins/            #     Plugins page and plugin screens (/plugins/<id>)
 │   │   ├── components/             #   React UI components
 │   │   │   ├── layout/             #     App shell, sidebar, header
 │   │   │   ├── projects/           #     Project-specific UI (settings panels, agent drawer, graph view)
 │   │   │   ├── settings/           #     Global settings forms
+│   │   │   ├── plugins/            #     Plugin cards and dialogs, UI host primitives, review and versions modals
 │   │   │   ├── ui/                 #     Shared primitives (buttons, modals, badges, tables)
 │   │   │   └── icons/              #     Custom icon components
 │   │   ├── lib/                    #   Shared utilities
@@ -336,6 +370,7 @@ redamon/
 │   │   │   ├── recon-types.ts      #     Recon pipeline TypeScript types
 │   │   │   ├── llmProviderPresets.ts #   LLM provider configuration presets
 │   │   │   ├── validation.ts       #     Input validation utilities
+│   │   │   ├── plugins/            #     Plugin platform library (see §4.4)
 │   │   │   └── report/             #     Report generation utilities
 │   │   └── hooks/                  #   React hooks
 │   │       ├── useAgentWebSocket.ts #    Agent chat WebSocket connection
@@ -377,6 +412,14 @@ redamon/
 ├── scanners/gvm_scan/                       # OpenVAS/GVM vulnerability scanner Python wrapper
 ├── scanners/github_secret_hunt/             # GitHub credential scanner (40+ regex patterns + Shannon entropy)
 ├── scanners/trufflehog_scan/                # TruffleHog secret scanner (detector-based credential verification + deep git history)
+├── services/plugin_runner/          # Plugin runner + plugin-gateway proxy: one image, two services (plugin platform)
+│   ├── supervisor/                 #   FastAPI supervisor on :7080: run list, workers, jobs, logs, data migrations
+│   ├── worker/bootstrap.py         #   One worker process per plugin version (python -I -S, own UID, limits)
+│   ├── gateway_proxy/              #   The plugin-gateway proxy (:7071 towards the webapp, :7072 towards the runner)
+│   ├── sdk/                        #   redamon_plugin_sdk (the package plugin code imports) + contract_cases.json
+│   ├── platform_version.py         #   Must equal PLUGIN_PLATFORM_VERSION in the webapp
+│   ├── tests/                      #   The plugin_runner test section (image redamon-plugin-runner)
+│   └── tests_live/probe.py         #   Isolation probe run by tests/plugins_isolation_live.sh
 ├── testing/guinea_pigs/                    # Intentionally vulnerable test applications
 │   ├── apache_2.4.49/              #   Apache CVE-2021-41773 (path traversal + RCE)
 │   ├── apache_2.4.25/              #   Apache CVE-2017-3167 (auth bypass)
@@ -385,11 +428,21 @@ redamon/
 ├── docs/readmes/                        # All documentation (you are here)
 ├── .github/                        # GitHub Actions CI/CD workflows
 ├── docker-compose.yml              # Full stack orchestration — all containers, networks, volumes
+├── docker-compose.plugins.yml      # Plugin overlay (webapp on plugins-edge + plugins volume); loaded only by redamon.sh
+├── redamon-plugins/                # NOT part of this repository: optional local clone of the plugin repository, ignored by .gitignore
 ├── CONTRIBUTING.md                 # Contribution guidelines and contributor ranks
 ├── CHANGELOG.md                    # Release history
 ├── DISCLAIMER.md                   # Legal disclaimer
 └── SECURITY.md                     # Security vulnerability reporting
 ```
+
+**`redamon-plugins/` is a separate repository.** The plugins themselves, their signed catalog
+and the tools that pack, sign and validate them live in
+[`samugit83/redamon-plugins`](https://github.com/samugit83/redamon-plugins) (branch `master`). A
+developer may clone it at the root of this checkout, where `.gitignore` keeps it untracked; its
+git commands, commits and pushes are its own. RedAmon never reads that folder at runtime: it
+installs plugins from the published catalog or from uploaded files. How to write a plugin is in
+[README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
 
 ---
 
@@ -516,7 +569,7 @@ The webapp is a **Next.js 16** application that serves as both the frontend UI a
 
 **Backend (API routes):**
 
-All REST endpoints live in `webapp/src/app/api/`. There are 17 route groups:
+All REST endpoints live in `webapp/src/app/api/`. The main route groups:
 
 | Route Group | Purpose |
 |-------------|---------|
@@ -538,6 +591,10 @@ All REST endpoints live in `webapp/src/app/api/`. There are 17 route groups:
 | `roe/` | Rules of Engagement management |
 | `ws/` | WebSocket proxy to agent container |
 | `health/` | Health check |
+| `plugins/` | Plugin platform: the Plugins page model, admin lifecycle (install, update, rollback, enable, disable, uninstall, export, logs), actions and jobs, skill-version review |
+| `plugin-gateway/v1/` | The Gateway plugin code calls through the proxy; call token only |
+| `plugin-runner/v1/` | The plugin runner's run list; runner key only |
+| `internal/plugins/` | Plugin reconciliation, called by the recon orchestrator with the master internal key |
 
 **Frontend pages:**
 
@@ -550,6 +607,7 @@ All REST endpoints live in `webapp/src/app/api/`. There are 17 route groups:
 | Reports | `/reports` | Pentest report listing and viewing |
 | Settings | `/settings` | Global settings (LLM providers, API keys) |
 | Insights | `/insights` | Analytics charts and project metrics |
+| Plugins | `/plugins` | Plugin catalog, install and management; plugin screens at `/plugins/<id>` |
 
 **Database access:**
 
@@ -571,10 +629,29 @@ All REST endpoints live in `webapp/src/app/api/`. There are 17 route groups:
 | Kali Sandbox (MCP) | `http://kali-sandbox:8000/sse` (requires `Authorization: Bearer $MCP_AUTH_TOKEN`) |
 | Neo4j | `bolt://neo4j:7687` |
 | PostgreSQL | `postgresql://redamon:<POSTGRES_PASSWORD>@postgres:5432/redamon` (password from `.env`, generated on fresh install) |
+| Plugin runner | `http://plugin-gateway:7072` (`PLUGIN_RUNNER_URL`: the supervisor, through the proxy, over `plugins-edge`) |
 
 **React hooks:**
 
 The webapp exposes 19 custom hooks in `src/hooks/` that encapsulate all real-time communication and data fetching logic. Each SSE/WebSocket connection has its own dedicated hook (e.g., `useAgentWebSocket`, `useReconSSE`, `useCypherFixTriageWS`).
+
+**Plugin platform library (`src/lib/plugins/`):**
+
+The webapp is the trusted half of the plugin platform: it alone reads the database, writes the
+plugins volume and serves the Gateway. When the runner is down, actions answer
+`503 runner_unavailable` and the Plugins page says so. The design is in
+[README.PLUGINS.md](README.PLUGINS.md).
+
+| Area | Modules |
+|------|---------|
+| Catalog and downloads | `catalog.ts` (Ed25519 signature over the exact bytes; the highest serial is kept in `plugin_platform_state`; a catalog never expires), `keyring.ts` (the official public keys, plus `PLUGINS_EXTRA_TRUSTED_KEYS`), `fetchRemote.ts` (https only, `PLUGINS_DOWNLOAD_HOSTS` on every redirect hop) |
+| Archives and the volume | `archive.ts` (strict ustar reader), `installChecks.ts` (checksum, manifest, screens, in memory), `staging.ts` (the plugins volume layout) |
+| Plugin Manager | `lifecycle.ts`, `lifecycleRoutes.ts` (admin role read from the database), `registry.ts` (`plugin_installs`, the source of truth), `migrations.ts`, `reconcile.ts`, `runnerClient.ts` |
+| Gateway | `gateway.ts`, `callToken.ts`, `permissions.ts`, `dataStore.ts`, `transcript.ts` + `redact.ts` (masked session reads), `llmBudget.ts`, `jobs.ts` |
+| Skill-text overrides | `overrides.ts`, `overrideOps.ts`, `overrideDelivery.ts` (approved versions into the agent's settings payload), `skillPartsRegistry.ts`, `reviewModel.ts`, `riskFlags.ts`, `textDiff.ts` |
+| Contract | `schemas/` (zod manifest, screen and catalog schemas; `schemas/json/` is generated by `npm run plugins:schemas`), `extensionPoints.ts`, `contributions.ts`, `platformVersion.ts` |
+| Settings and time | `settings.ts` (limits from the environment; an invalid value falls back to the default), `clock.ts` (the only clock, so tests pin time) |
+| Test doubles | `__testing__/` (fake Prisma, fake runner, fake HTTP server, catalog builder); no production module may import it |
 
 > For the component tree and page structure, see [README.WEBAPP.md](README.WEBAPP.md).
 
@@ -617,7 +694,7 @@ Settings have defaults defined in **four layers** that must stay in sync:
 
 ### 5.1 Prerequisites
 
-- **Docker** & **Docker Compose v2+** ([install guide](https://docs.docker.com/get-docker/))
+- **Docker Engine 28.0.0 or newer** & **Docker Compose v2+** ([install guide](https://docs.docker.com/get-docker/)). `redamon.sh` refuses an older engine, because the plugin networks need it
 - **Git**
 - A code editor (VS Code recommended)
 - At least one LLM API key — configured in the webapp UI at `/settings`, NOT in `.env`
@@ -682,6 +759,10 @@ This is the most important table for day-to-day development. It tells you exactl
 | Any `Dockerfile` | `docker compose build <service> && docker compose up -d <service>` | Dockerfile changes always need rebuild |
 | Bump a pinned tool/model (T15/T17) | rebuild the affected image | `recon/Dockerfile`+`requirements.txt` and `services/knowledge_base/curation/pins.py` pin third-party pulls to commits/tags; a moved/removed pin **fails the build loudly**. Edit the pin, then rebuild. |
 | `docker-compose.yml` | `docker compose up -d` | Compose detects config changes and recreates affected containers |
+| `services/plugin_runner/**` (supervisor, worker, SDK, proxy) | `docker compose --profile plugins build plugin-runner`, then `./redamon.sh up` | Baked into one image, `redamon-plugin-runner`, that both plugin services run; `up` recreates them from the new image |
+| `docker-compose.plugins.yml` | `./redamon.sh up` | Only `redamon.sh` loads the overlay |
+| A plugin variable in `.env` | `./redamon.sh up` | A plain restart keeps the old environment; `up` runs the plugin preflight again and recreates the services whose environment changed |
+| The plugin platform version | Bump every copy (see [§6.6](#66-adding-a-plugin-extension-point)), rebuild webapp and runner | A runner whose version differs from the webapp's reports itself out of date and starts no worker |
 | `webapp/prisma/schema.prisma` | `docker compose exec webapp npx prisma db push` | Push schema changes to PostgreSQL |
 | New default value | Update ALL 4 layers + rebuild agent & webapp | See [checklist](#61-adding-a-new-project-setting) |
 
@@ -726,7 +807,25 @@ docker compose build agent && docker compose up -d agent  # Rebuild agent (code 
 docker compose restart kali-sandbox              # Restart kali-sandbox (code volume-mounted)
 docker compose down && docker compose up -d     # Full restart (preserves data)
 docker compose down -v && docker compose up -d  # DANGER: deletes ALL data (volumes)
+
+# ─── Plugin platform ────────────────────────────────────────────────────
+./redamon.sh status                             # PLUGINS: the runner and gateway state, or why they cannot run
+docker compose --profile plugins ps plugin-runner plugin-gateway
+docker compose --profile plugins logs -f plugin-runner plugin-gateway
+docker compose --profile plugins build plugin-runner   # one image for both plugin services
+# redamon.sh adds docker-compose.plugins.yml to COMPOSE_FILE. A plain `up` must name the
+# overlay and the profile itself (in dev mode also docker-compose.override.yml: an
+# explicit -f stops compose loading it):
+docker compose -f docker-compose.yml -f docker-compose.plugins.yml --profile plugins up -d webapp plugin-runner plugin-gateway
+docker compose --profile plugins down           # with the profile, or older Compose leaves the plugin containers running
 ```
+
+A plain `docker compose up -d` that leaves out the overlay recreates the webapp without
+`plugins-edge` and the plugins volume, so it loses the runner until the next
+`./redamon.sh up`. Prefer `./redamon.sh up`: it runs the plugin preflight (Docker Engine 28.0.0
+or newer, the internal key and the two plugin secrets, the runner image), loads the overlay,
+and starts the plugin services. A failed preflight stops it before any service is created and
+names the cause.
 
 ### 5.5 Important Rules
 
@@ -774,7 +873,7 @@ git update-index --add --cacheinfo 100644,$(git hash-object -w mine.tmp),path/th
 tree=$(git write-tree)
 new=$(git commit-tree "$tree" -p "$old" -F msg.txt)
 rm "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
-git update-ref refs/heads/<branch> "$new" "$old"   # refuses if HEAD moved meanwhile
+git update-ref refs/heads/<branch> "$new" "$old"   # refuses if <branch> moved meanwhile
 git reset -q -- path/one path/two path/three       # shared index follows YOUR paths only
 ```
 
@@ -783,6 +882,29 @@ test the exact tree before committing, export it with
 `GIT_INDEX_FILE=... git checkout-index -a --prefix=<dir>/` and run the checks
 there. The same technique works in the `redamon.wiki` submodule; its gitlink in
 the parent repository uses mode `160000`.
+
+The final `update-ref` is a compare-and-swap on the branch ref: it writes `$new`
+only while `refs/heads/<branch>` still holds `$old`. It does not look at `HEAD`.
+
+**Committing to a branch that is not checked out** (for example `master` while the
+tree is on a feature branch): base the commit on `refs/heads/<branch>`, not on
+`HEAD`, which belongs to the other branch.
+
+```bash
+old=$(git rev-parse refs/heads/<branch>)
+export GIT_INDEX_FILE="$(git rev-parse --absolute-git-dir)/priv.idx"
+git read-tree refs/heads/<branch>
+git add -- path/one                          # only if it differs from <branch> by your edits alone
+# otherwise stage <branch>'s version (git show <branch>:path/two) + only your edits
+git update-index --add --cacheinfo 100644,$(git hash-object -w mine.tmp),path/two
+tree=$(git write-tree)
+new=$(git commit-tree "$tree" -p "$old" -F msg.txt)
+rm "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
+git update-ref refs/heads/<branch> "$new" "$old"   # refuses if <branch> moved meanwhile
+```
+
+Skip the `git reset` here: the checked-out branch did not move, so the shared
+index is still right for it.
 
 ---
 
@@ -843,6 +965,48 @@ the parent repository uses mode `160000`.
 3. For WebSocket hooks, follow the pattern in `useAgentWebSocket.ts` (connect, message handling, cleanup).
 4. For SSE hooks, follow `useReconSSE.ts` (EventSource, reconnection, progress tracking).
 5. For data fetching hooks, use TanStack React Query (see `useProjects.ts` for examples).
+
+### 6.6 Adding a Plugin Extension Point
+
+An extension point (a UI slot such as `chat.session.actions`, or a behaviour point such as
+`skill.text`) is part of the plugin platform's public contract. Adding one is a **minor**
+platform version bump; changing or removing one is a **major** bump that makes every plugin
+whose `platform` range excludes the new version incompatible ([README.PLUGINS.md](README.PLUGINS.md)
+§11). The base repository still holds no plugin-specific code: the point must be generic.
+
+1. **Name it** in `webapp/src/lib/plugins/extensionPoints.ts` (`UI_EXTENSION_POINTS` or
+   `BEHAVIOUR_EXTENSION_POINTS`). A behaviour point also gets its permission in
+   `POINT_PERMISSION` and `permissions.ts`; a screen only the core may draw goes in
+   `CORE_SCREENS`.
+2. **Accept it in the manifest** (`schemas/manifest.ts`, the `contributes` object), including the
+   cross-check that every `action` it names exists, then regenerate the JSON schemas with
+   `cd webapp && npm run plugins:schemas` (`schemas/json/`, which `redamon-plugins` validates against).
+3. **Serve it** from `contributions.ts` (`GET /api/plugins/contributions` lists only enabled,
+   non-revoked plugins) and draw it in the core component that owns the slot, through
+   `usePluginContributions()`. Plugin text is React-escaped or `SafeMarkdown` without images; a
+   plugin never ships JavaScript or React.
+4. **Behaviour points only:** the agent side is data, never a call into plugin code. Mirror the
+   `skill.text` pattern: the approved value is delivered in the settings payload, the agent
+   validates it and falls back to the factory behaviour (`agentic/prompts/skill_part_seam.py`,
+   `agentic/plugin_api.py`).
+5. **Bump the platform version** in every copy, which `platformVersion.parity.test.ts` holds
+   equal: `webapp/src/lib/plugins/platformVersion.ts`, `services/plugin_runner/platform_version.py`,
+   `services/plugin_runner/sdk/redamon_plugin_sdk/__init__.py`,
+   `services/plugin_runner/sdk/contract_cases.json` and
+   `services/plugin_runner/tests/runner_contract_cases.json` (its `platformVersion` and the health
+   case), plus the pin in `services/plugin_runner/tests/test_sdk_contract.py`; the runner's other
+   tests read it from `platform_version.py`. Rebuild the webapp and the runner image together:
+   a runner whose version differs from the webapp's reports itself out of date and starts no worker.
+6. **Test the empty slot** (with no plugin contributing to it the slot renders nothing), and
+   **document** the point in README.PLUGINS.md §7.6 and in the author reference
+   [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
+7. **A point whose approval creates something instead of overriding** (as `user_skill.text`
+   saves a new user skill) leaves a product that outlives the plugin, so it needs two more
+   things: a **proposer gate** at save time (the proposing plugin still serving at the version
+   that made the proposal, which the Gateway records from the call token) and a **revocation
+   path** (reconciliation withdrawing that version's waiting proposals and quarantining what was
+   saved from them, installed or not). Its rows end in a terminal status of their own, never
+   `active`, so delivery, reconciliation and the one-active index never see them.
 
 ---
 

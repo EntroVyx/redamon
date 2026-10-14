@@ -19,11 +19,45 @@ import {
   GATE_CODES,
   featureModelMessage,
   getLlmFeature,
+  isPluginFeatureId,
   modelAllowedForFeature,
   readFeatureModelCode,
   type FeatureId,
+  type PluginFeatureId,
 } from '@/lib/llmFeatures'
 import styles from './FeatureModelGate.module.css'
+
+/** A core feature, or a plugin's own entry (`plugin:<id>`, TD-10). */
+export type GateFeatureId = FeatureId | PluginFeatureId
+
+/** What the caller knows about a plugin feature: the gate cannot look a plugin up. */
+export interface PluginFeatureText {
+  label?: string
+  description?: string
+}
+
+interface FeatureText {
+  label: string
+  description: string
+  hint: string
+}
+
+/**
+ * The words the gate shows. getLlmFeature knows only core features and throws for any
+ * other id, so a plugin feature's label comes from the caller (its manifest's name).
+ */
+function featureText(featureId: GateFeatureId, plugin: PluginFeatureText = {}): FeatureText {
+  if (!isPluginFeatureId(featureId)) return getLlmFeature(featureId)
+  return {
+    label: plugin.label || 'this plugin',
+    description: plugin.description || 'The model this plugin runs on, in all your projects.',
+    hint: '',
+  }
+}
+
+// Plugin features have no excluded models: the exclusions are core features' own limits.
+const allowedFor = (featureId: GateFeatureId) => (id: string) =>
+  isPluginFeatureId(featureId) || modelAllowedForFeature(featureId, id)
 
 // ---------------------------------------------------------------------------
 // Client calls shared by the gate and the Models by feature section
@@ -64,7 +98,7 @@ export async function fetchSavedFeatureModels(userId: string): Promise<Record<st
 /** Save one feature's model ('' clears it). Resolves with the whole saved map. */
 export async function saveFeatureModel(
   userId: string,
-  featureId: FeatureId,
+  featureId: GateFeatureId,
   model: string,
 ): Promise<Record<string, string>> {
   const res = await fetch(`/api/users/${encodeURIComponent(userId)}/settings`, {
@@ -94,7 +128,10 @@ export const SETTINGS_PROVIDERS_URL = '/settings?tab=providers'
 // ---------------------------------------------------------------------------
 
 export interface FeatureModelGateProps {
-  featureId: FeatureId
+  featureId: GateFeatureId
+  /** For a plugin feature: its name and description (a core feature has its own). */
+  label?: string
+  description?: string
   userId: string | null
   /** Shown above the picker, e.g. why the saved model could not be used. */
   message?: string
@@ -114,6 +151,8 @@ type LoadState = 'loading' | 'ready' | 'error'
  */
 export function FeatureModelGate({
   featureId,
+  label,
+  description,
   userId,
   message,
   inline = false,
@@ -121,13 +160,13 @@ export function FeatureModelGate({
   onSaved,
   onCancel,
 }: FeatureModelGateProps) {
-  const feature = getLlmFeature(featureId)
+  const feature = featureText(featureId, { label, description })
   const [models, setModels] = useState<ModelsByProvider>({})
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [picked, setPicked] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const allowed = useCallback((id: string) => modelAllowedForFeature(featureId, id), [featureId])
+  const allowed = useMemo(() => allowedFor(featureId), [featureId])
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -212,7 +251,7 @@ export function FeatureModelGate({
       {loadState === 'ready' && total > 0 && usable === 0 && (
         <div className={styles.emptyBox}>
           <span className={styles.emptyTitle}>None of your models can run {feature.label}</span>
-          <span>{feature.hint}</span>
+          {feature.hint && <span>{feature.hint}</span>}
           {providerActions}
         </div>
       )}
@@ -229,7 +268,7 @@ export function FeatureModelGate({
             disabled={saving}
             emptyLabel="Choose a model"
           />
-          <span className={styles.hint}>{feature.hint}</span>
+          {feature.hint && <span className={styles.hint}>{feature.hint}</span>}
         </div>
       )}
 
@@ -284,7 +323,7 @@ export function FeatureModelGate({
 // Provider + hook
 // ---------------------------------------------------------------------------
 
-export interface EnsureFeatureModelOptions {
+export interface EnsureFeatureModelOptions extends PluginFeatureText {
   /** Open the gate even when a model is saved (the saved one failed, or the user asked to change it). */
   force?: boolean
   message?: string
@@ -295,7 +334,7 @@ export interface FeatureModelGateApi {
    * The model to run `featureId` on: the saved one, else the one the user
    * picks in the gate. null when the user cancels.
    */
-  ensureFeatureModel: (featureId: FeatureId, opts?: EnsureFeatureModelOptions) => Promise<string | null>
+  ensureFeatureModel: (featureId: GateFeatureId, opts?: EnsureFeatureModelOptions) => Promise<string | null>
   /**
    * Run a request that may answer model_required / model_unavailable. On
    * either, the gate opens and, once a model is picked, the request runs ONE
@@ -303,7 +342,11 @@ export interface FeatureModelGateApi {
    * providers_unreachable code, comes back untouched: another model would not
    * fix those, so the caller shows featureModelMessage(code) instead.
    */
-  fetchWithFeatureModel: (featureId: FeatureId, doFetch: () => Promise<Response>) => Promise<Response>
+  fetchWithFeatureModel: (
+    featureId: GateFeatureId,
+    doFetch: () => Promise<Response>,
+    plugin?: PluginFeatureText,
+  ) => Promise<Response>
   /** Whose models the gate reads and saves; null outside the provider. */
   userId: string | null
   /** Bumped whenever the gate saves a model, so lines showing one can refetch. */
@@ -328,7 +371,8 @@ export function useFeatureModelGate(): FeatureModelGateApi {
 
 interface PendingGate {
   id: number
-  featureId: FeatureId
+  featureId: GateFeatureId
+  plugin: PluginFeatureText
   message?: string
   resolve: (model: string | null) => void
 }
@@ -342,10 +386,10 @@ export function FeatureModelGateProvider({ children }: { children: ReactNode }) 
   const pendingRef = useRef<PendingGate | null>(null)
   const seqRef = useRef(0)
 
-  const openGate = useCallback((featureId: FeatureId, message?: string) => {
+  const openGate = useCallback((featureId: GateFeatureId, message: string | undefined, plugin: PluginFeatureText) => {
     return new Promise<string | null>(resolve => {
       pendingRef.current?.resolve(null)
-      const next: PendingGate = { id: ++seqRef.current, featureId, message, resolve }
+      const next: PendingGate = { id: ++seqRef.current, featureId, plugin, message, resolve }
       pendingRef.current = next
       setOpen(next)
     })
@@ -363,7 +407,7 @@ export function FeatureModelGateProvider({ children }: { children: ReactNode }) 
     pending.resolve(model)
   }, [])
 
-  const ensureFeatureModel = useCallback(async (featureId: FeatureId, opts: EnsureFeatureModelOptions = {}) => {
+  const ensureFeatureModel = useCallback(async (featureId: GateFeatureId, opts: EnsureFeatureModelOptions = {}) => {
     if (!userId) return null
     if (!opts.force) {
       try {
@@ -373,10 +417,14 @@ export function FeatureModelGateProvider({ children }: { children: ReactNode }) 
         // Unreadable settings: asking is better than blocking the action.
       }
     }
-    return openGate(featureId, opts.message)
+    return openGate(featureId, opts.message, { label: opts.label, description: opts.description })
   }, [userId, openGate])
 
-  const fetchWithFeatureModel = useCallback(async (featureId: FeatureId, doFetch: () => Promise<Response>) => {
+  const fetchWithFeatureModel = useCallback(async (
+    featureId: GateFeatureId,
+    doFetch: () => Promise<Response>,
+    plugin: PluginFeatureText = {},
+  ) => {
     const res = await doFetch()
     if (res.ok) return res
     const body: unknown = await res.clone().json().catch(() => null)
@@ -384,6 +432,7 @@ export function FeatureModelGateProvider({ children }: { children: ReactNode }) 
     if (!code || !GATE_CODES.includes(code)) return res
     const failedModel = (body as { model?: unknown }).model
     const model = await ensureFeatureModel(featureId, {
+      ...plugin,
       force: true,
       message: code === 'model_unavailable'
         ? featureModelMessage('model_unavailable', typeof failedModel === 'string' ? failedModel : undefined)
@@ -404,6 +453,8 @@ export function FeatureModelGateProvider({ children }: { children: ReactNode }) 
         <FeatureModelGate
           key={open.id}
           featureId={open.featureId}
+          label={open.plugin.label}
+          description={open.plugin.description}
           userId={userId}
           message={open.message}
           onSaved={model => settle(open.id, model)}
@@ -427,10 +478,13 @@ type LineState = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; mode
  */
 export function FeatureModelLine({
   featureId,
+  featureLabel,
   label = 'Model',
   className,
 }: {
-  featureId: FeatureId
+  featureId: GateFeatureId
+  /** A plugin feature's name; a core feature has its own. */
+  featureLabel?: string
   label?: string
   className?: string
 }) {
@@ -459,8 +513,8 @@ export function FeatureModelLine({
       <button
         type="button"
         className={styles.lineChange}
-        onClick={() => void ensureFeatureModel(featureId, { force: true })}
-        aria-label={`Change the ${getLlmFeature(featureId).label} model`}
+        onClick={() => void ensureFeatureModel(featureId, { force: true, label: featureLabel })}
+        aria-label={`Change the ${featureText(featureId, { label: featureLabel }).label} model`}
       >
         {model ? 'Change' : 'Choose'}
       </button>

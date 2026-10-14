@@ -37,6 +37,7 @@ webapp/
 │   │   │       ├── ReconLogsDrawer/   # Real-time logs
 │   │   │       ├── ReconConfirmModal/ # Confirmation dialog
 │   │   │       └── AIAssistantDrawer/ # Agent chat & tool confirmation UI
+│   │   ├── plugins/           # Plugins page and plugin screens (plugin platform)
 │   │   ├── layout.tsx         # Root layout
 │   │   ├── page.tsx           # Home page
 │   │   └── globals.css        # Global styles
@@ -50,7 +51,8 @@ webapp/
 │   │   ├── prisma.ts          # Prisma client
 │   │   ├── recon-types.ts     # TypeScript types
 │   │   ├── websocket-types.ts # Agent WebSocket message types
-│   │   └── hard-guardrail.ts  # Deterministic domain blocklist (gov/mil/edu/int)
+│   │   ├── hard-guardrail.ts  # Deterministic domain blocklist (gov/mil/edu/int)
+│   │   └── plugins/           # Plugin platform: catalog, archives, lifecycle, reconcile, Gateway
 │   └── providers/             # React context providers
 ├── public/                    # Static assets
 ├── Dockerfile                 # Production multi-stage build
@@ -456,6 +458,65 @@ GET /api/recon/[projectId]/download
 
 Downloads the recon output JSON file for the project.
 
+### Plugin platform API
+
+The design is in [README.PLUGINS.md](README.PLUGINS.md). Errors are `{error, code}` with a stable
+`code`; a route that needs the plugin runner while it is down answers `503 runner_unavailable`.
+
+**For the signed-in user** (session cookie; state-changing routes also require a JSON body and a
+same-origin request, checked against `PLUGINS_ALLOWED_ORIGIN` when it is set):
+
+| Route | What it does |
+|---|---|
+| `GET /api/plugins/status` | Platform version and whether the plugin runner is reachable (never a 5xx) |
+| `GET /api/plugins/llm-features` | The plugins the user can choose a model for in Models by feature: `[{featureId: "plugin:<id>", pluginId, label, description}]` |
+| `POST /api/plugins/[pluginId]/actions/[actionId]` | Runs a plugin action. Body `{context: {projectId?, sessionId?}, params}`; the project and session must be the user's. A sync action answers `{ok, result \| error}`; an async one `202 {jobId}` (a second click while it runs answers the same job). `409 model_required` when the action calls a model and none is chosen; `503 runner_unavailable` / `plugin_not_running` when the runner cannot run it |
+| `GET /api/plugins/jobs/[jobId]` | An async action's job: `{status: queued\|running\|succeeded\|failed\|cancelled, progress, result, error, ...}`; owner only |
+| `POST /api/plugins/jobs/[jobId]/cancel` | Cancels the owner's job |
+| `GET /api/plugins` | The Plugins page model: the catalog's state, one entry per catalog plugin merged with the installed rows, each with its card state, the newest release this platform can run (with consent text) and any update; admins also see errors |
+| `GET /api/plugins/[pluginId]` | One plugin; admins also get the last error, versions on disk, data usage, approved versions and whether a rollback is possible |
+| `GET /api/plugins/contributions` | The UI every enabled plugin contributes (`nav`, `chatSessionActions`, `projectSkillsRow`), read from the stored manifests; an `updating` plugin is flagged |
+| `GET /api/plugins/overrides/change-sets/[id]` | The review model of a proposed skill version (before/after per part, warnings, risk flags), built against the agent's live registry; scope owner only |
+| `POST /api/plugins/overrides/change-sets/[id]/approve`, `.../reject` | Decide a proposal. A user-scope decision carries `{scopeOwnerId}`, which must be the effective user (`403 wrong_owner`). Approve re-checks the factory text and size with the agent: `409 stale_proposal` / `already_decided`, `422 over_limit`, `503 agent_outdated` |
+| `DELETE /api/plugins/overrides/change-sets/[id]` | Deletes a version that is not active (`409 active_not_deletable`) |
+| `GET /api/plugins/overrides/versions?point=skill.text&group=<skill>&projectId=<id>` | The versions of a built-in skill for the user's own scope, plus a project they own |
+| `POST /api/plugins/overrides/reset` | `{point, group, scopeType, scopeOwnerId?, projectId?}`: the scope's active version is cleared; works whatever the plugin's state |
+| `GET /api/plugins/overrides/summary?projectId=<id>` | Per built-in skill of a project the user owns: the version that governs it, whether it applies (and why not), pending proposals |
+
+Plugin pages: `/plugins/<pluginId>[/<screen>]` draws a plugin's `nav` screen (404 unless the plugin
+is enabled and the screen is listed in its manifest) and `/plugins/external-link?url=` is where
+every link in plugin text lands. The middleware sets a strict Content-Security-Policy on
+`/plugins` and `/plugins/*` only.
+
+**For admins** (the role is read from the database on every request, so a demoted admin's token is
+refused; same-origin and JSON bodies; `409 plugin_busy` when another operation holds the plugin):
+
+| Route | What it does |
+|---|---|
+| `POST /api/plugins/[pluginId]/install` | `{version, acceptedPermissions, restoreOverrides?}`: downloads the release the signed catalog pins, checks it, installs it. `acceptedPermissions` must be exactly the release's list; `restoreOverrides` is required when an earlier install left approved skill versions |
+| `POST /api/plugins/[pluginId]/update` | `{version, acceptedPermissions}`: side by side, with the plugin's data migrations; new permissions need consent again |
+| `POST /api/plugins/[pluginId]/rollback` | The previous version active again; refused (`no_down_migration`) when the data moved and cannot go back |
+| `POST /api/plugins/[pluginId]/enable`, `.../disable` | Enable (also the Retry of a failed plugin) or disable; code and data stay |
+| `POST /api/plugins/[pluginId]/uninstall` | `{mode: "keep" \| "purge", confirm: "<pluginId>"}`; purge deletes the plugin's data for every user and project and needs an export from the last hour |
+| `GET /api/plugins/[pluginId]/export` | A JSON download of every row the plugin left (install, data, overrides) |
+| `GET /api/plugins/[pluginId]/logs?lines=N` | The plugin's log from the runner's ring buffer |
+| `POST /api/plugins/offline-install` | `multipart/form-data` with `archive`, `catalog`, `signature`, `acceptedPermissions`: the same checks as a download (Content-Length checked before the body is read) |
+
+**For plugin code** (`/api/plugin-gateway/v1/*`, the Gateway): authenticated only by the call
+token the webapp mints per action (`Authorization: Bearer`), never by a cookie or the internal key;
+reached through the plugin-gateway proxy and denied at the single-host nginx. Every call re-checks
+the plugin (enabled, ready, at the token's version), the permission (granted and declared), and that
+the project and session still belong to the user. Operations: `session/read`, `llm/invoke`,
+`data/{get,put,query,count,delete}`, `override/{get,propose,withdraw}`, `jobs/{progress,complete}`.
+The wire format is `services/plugin_runner/sdk/contract_cases.json`.
+
+**For the plugin runner** (`/api/plugin-runner/v1/run-list`): the runner key (`X-Plugin-Runner-Key`)
+only.
+
+**For the recon orchestrator** (`POST /api/internal/plugins/reconcile`): the master internal key.
+Crash recovery, heals, revocations and clean-up; one at a time (`202 {skipped: "busy"}` while
+another runs).
+
 ---
 
 ## Environment Variables
@@ -473,6 +534,21 @@ Downloads the recon output JSON file for the project.
 | `INTERNAL_KEY_ALLOWLIST_ENFORCE` | When `true`, block internal-key requests to routes outside the allowlist; default is log-only | (unset = log-only) |
 | `NODE_ENV` | Environment mode | `development` |
 | `PORT` | Application port | `3000` |
+| `PLUGIN_RUNNER_KEY`, `PLUGIN_CALL_TOKEN_SECRET` | The webapp↔runner key and the secret that signs plugin call tokens (must differ from `AUTH_SECRET`); empty, plugin routes fail closed | (generated) |
+| `PLUGINS_ALLOWED_ORIGIN` | The public origin the same-origin check of plugin routes accepts (behind nginx, which drops the port from `Host`) | (unset: the request's host) |
+| `PLUGIN_ACTION_MAX_TIMEOUT` | Cap on any plugin action, seconds | `900` |
+| `PLUGIN_GATEWAY_CALLS_PER_TOKEN` | Gateway calls one call token may make | `600` |
+| `PLUGIN_LLM_DAILY_CALL_CAP` | Model calls one plugin may make per user and UTC day | `100` |
+| `PLUGIN_TRANSCRIPT_MAX_BYTES` | The most of one session transcript a plugin receives | `2097152` |
+| `PLUGINS_CATALOG_URL` | The signed plugin catalog (its signature is `<url>.sig`) | the `redamon-plugins` repository's `catalog.json` |
+| `PLUGINS_DOWNLOAD_HOSTS` | The only hosts the catalog and archives are fetched from, on every redirect hop (https only, public addresses only) | `github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,raw.githubusercontent.com` |
+| `PLUGINS_EXTRA_TRUSTED_KEYS` | Extra catalog signing keys an admin trusts, JSON `[{keyId, publicKey}]` (a custom catalog; the page warns) | (unset) |
+| `PLUGINS_DIR` | Where the plugins volume is mounted | `/data/plugins` |
+| `PLUGIN_ARCHIVE_MAX_BYTES` | Cap on a plugin archive, unpacked | `20971520` |
+| `PLUGIN_DATA_MAX_ROWS`, `PLUGIN_DATA_MAX_BYTES` | One plugin's data quota (per data namespace, across every owner; platform-reserved collections not counted): rows, and bytes of stored values | `10000`, `52428800` |
+| `PLUGIN_DATA_MAX_VALUE_BYTES` | The largest single value a plugin may store | `1048576` |
+| `PLUGIN_DATA_MAX_ROWS_PER_OWNER` | Rows one plugin may keep for one user or project | `2000` |
+| `PLUGIN_SKILL_TEXT_MAX_GROWTH` | How much larger than its factory text a whole skill may grow in an approved version (also read by the agent, which applies the same bound) | `1.5` |
 
 ---
 
@@ -527,7 +603,7 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 |-----------|-------------|
 | `AIAssistantDrawer` | Thin orchestrator — wires hooks together, renders sub-components |
 | `DrawerHeader` | Header bar — connection status, history toggle, new chat, download, close |
-| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown |
+| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown (Agent Behaviour, Tool Matrix, Agent Skills, then one group per enabled plugin with chat-session actions) |
 | `ChatArea` | Scrollable message list — renders grouped items, loading eye, empty state |
 | `InputArea` | Textarea, send/stop/resume buttons, Chat Skill picker (lightning bolt), `/skill` autocomplete, active skill badge |
 | `ApprovalDialog` | Phase-transition approval overlay |
@@ -541,6 +617,18 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 | `PlanWaveCard` | Parallel wave card — groups tools in a plan wave, **Allow/Deny** for dangerous waves |
 | `TodoListWidget` | Agent's live task list |
 | `FileDownloadCard` | Download card for agent-generated files (reports, exports) |
+
+#### Plugin actions in the gear menu
+
+After "Agent Skills" the settings dropdown shows a divider and one group per enabled plugin that
+contributes `chat.session.actions`, labelled with the plugin's name and the plugin badge (never
+"Plugins": the Tool Matrix already speaks of "MCP Tool Plugins"). The items stay disabled until the
+first message creates the conversation. The click flow lives in
+`components/plugins/usePluginChatActions.tsx` and `runPluginAction.ts`: an action that calls a model
+asks for one first, an async action opens `JobProgressModal`, and a result that proposes a skill
+version opens the core `OverrideReviewModal`; the "skill versions" item opens `SkillVersionsModal`
+on the session's skill. These modals are core UI (`components/plugins/review/`), also reachable from
+a project's Agent Skills settings.
 
 #### Custom Hooks (`hooks/`)
 

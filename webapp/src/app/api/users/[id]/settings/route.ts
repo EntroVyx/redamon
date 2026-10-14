@@ -8,6 +8,7 @@ import { ROTATION_TOOL_NAMES } from '@/lib/rotationTools'
 import { requireEffectiveUser } from '@/lib/access'
 import { writeAudit } from '@/lib/audit'
 import { featureModelsMap, parseFeatureModelsPatch, type FeatureModelsPatch } from '@/lib/featureModels'
+import { listPluginLlmFeatures } from '@/lib/plugins/pluginLlmFeatures'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -262,7 +263,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       const eff = await requireEffectiveUser()
       if (eff instanceof NextResponse) return eff
       if (eff.userId !== id) return refused
-      const parsed = parseFeatureModelsPatch(body.featureModels)
+      // Plugin keys qualify only for the plugins installed, enabled and holding llm:invoke.
+      const pluginFeatureIds = new Set((await listPluginLlmFeatures()).map((f) => f.featureId))
+      const parsed = parseFeatureModelsPatch(body.featureModels, { pluginFeatureIds })
       if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
       featureModelsPatch = parsed
       featureModelsActor = (await getSession())?.userId ?? null

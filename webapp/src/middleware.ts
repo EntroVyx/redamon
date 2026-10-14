@@ -14,6 +14,13 @@ const AUTH_COOKIE_NAME = 'redamon-auth'
 // the OUTBOUND plugin-admin routes (/api/mcp/manifest|reload|test) public too.
 const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/api/health', '/api/version/check', '/api/global/tunnel-config/sync', '/api/mcp-server']
 
+// Plugin platform routes that authenticate with their own credential and no cookie:
+// plugin code calls the Gateway with a call token, the runner fetches its run list with
+// the runner key. Their handlers never honour X-Internal-Key, getSession or the
+// effective user (RV-33). Each entry is an exact prefix ending at the version segment's
+// `/`: without it, `/api/plugin-gateway/v10/` or `/api/plugin-gatewayx` would be public.
+const TOKEN_AUTH_PREFIXES = ['/api/plugin-gateway/v1/', '/api/plugin-runner/v1/']
+
 // S2/E2: the internal-key bypass is scoped to exactly the routes that internal
 // services (agent / orchestrator / recon) legitimately reach with X-Internal-Key.
 // A valid key on ANY OTHER route no longer skips JWT once enforcement is on.
@@ -45,6 +52,8 @@ const INTERNAL_ALLOWLIST: { method: string; pattern: RegExp }[] = [
   // Periodic pruning of long-dead MCP access tokens. The webapp has no
   // scheduler of its own, so the orchestrator's maintenance loop drives it.
   { method: 'POST', pattern: /^\/api\/internal\/mcp-tokens\/prune$/ },
+  // Plugin reconciliation (TD-20), driven by the same loop; the route re-checks the key.
+  { method: 'POST', pattern: /^\/api\/internal\/plugins\/reconcile$/ },
   // Scan Timeline scheduler: the orchestrator worker polls for due schedules and
   // asks the webapp to run or defer them (the webapp owns the version freeze).
   { method: 'GET', pattern: /^\/api\/internal\/scan-schedules\/due$/ },
@@ -101,6 +110,29 @@ export function scannerKeyRouteAllowed(method: string, pathname: string): boolea
   )
 }
 
+const isPluginPage = (pathname: string) => pathname === '/plugins' || pathname.startsWith('/plugins/')
+
+/**
+ * The Content-Security-Policy of plugin pages (/plugins and /plugins/*), where plugin
+ * screens are drawn. Strict, but with 'unsafe-inline' because Next.js inlines its
+ * bootstrap scripts and styles; dev mode also needs 'unsafe-eval'. Plugin text shown
+ * elsewhere (the chat drawer, project settings) gets no CSP here, since a strict one would
+ * break those pages: SafeMarkdown and React escaping are the controls there.
+ */
+export function pluginPagesCsp(): string {
+  const script = process.env.NODE_ENV === 'production' ? "'self' 'unsafe-inline'" : "'self' 'unsafe-inline' 'unsafe-eval'"
+  return [
+    "default-src 'self'",
+    `script-src ${script}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ')
+}
+
 function getSecret() {
   const secret = process.env.AUTH_SECRET
   if (!secret || secret === 'changeme') return null
@@ -125,6 +157,13 @@ export async function middleware(request: NextRequest) {
   // Allow public paths
   if (PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))) {
     return NextResponse.next()
+  }
+  if (TOKEN_AUTH_PREFIXES.some(p => pathname.startsWith(p))) {
+    // No session on these routes: user headers can only be the caller's own.
+    const headers = new Headers(request.headers)
+    headers.delete('x-user-id')
+    headers.delete('x-user-role')
+    return NextResponse.next({ request: { headers } })
   }
 
   // Allow static assets and Next.js internals
@@ -192,7 +231,9 @@ export async function middleware(request: NextRequest) {
   requestHeaders.set('x-user-id', payload.sub)
   requestHeaders.set('x-user-role', payload.role)
 
-  return NextResponse.next({ request: { headers: requestHeaders } })
+  const response = NextResponse.next({ request: { headers: requestHeaders } })
+  if (isPluginPage(pathname)) response.headers.set('Content-Security-Policy', pluginPagesCsp())
+  return response
 }
 
 export const config = {

@@ -77,3 +77,21 @@ describe('Modal: initial focus', () => {
     expect(document.activeElement).toBe(screen.getByRole('dialog'))
   })
 })
+
+describe('Modal: its accessible name', () => {
+  test('two modals open at once are each named by their own title', () => {
+    // A refusal alert opens over the dialog that asked: each must announce its own title.
+    render(
+      <>
+        <Modal isOpen onClose={vi.fn()} title="Install Echo">
+          <p>body</p>
+        </Modal>
+        <Modal isOpen onClose={vi.fn()} title="The plugin operation was refused">
+          <p>why</p>
+        </Modal>
+      </>
+    )
+    expect(screen.getByRole('dialog', { name: 'Install Echo' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'The plugin operation was refused' })).toBeTruthy()
+  })
+})

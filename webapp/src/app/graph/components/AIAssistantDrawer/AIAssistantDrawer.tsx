@@ -36,6 +36,10 @@ import { useChatPersistence } from '@/hooks/useChatPersistence'
 import { DrawerHeader } from './DrawerHeader'
 import { PhaseIndicatorBar } from './PhaseIndicatorBar'
 import { SettingsModal } from './SettingsModal'
+import { usePluginChatActions } from '@/components/plugins/usePluginChatActions'
+import { OverrideReviewModal } from '@/components/plugins/review/OverrideReviewModal'
+import { SkillVersionsModal } from '@/components/plugins/review/SkillVersionsModal'
+import { isBuiltinSkill } from '@/lib/plugins/builtinSkills'
 import { ModelPickerModal } from './ModelPickerModal'
 import { ChatArea } from './ChatArea'
 import { ApprovalDialog } from './ApprovalDialog'
@@ -118,7 +122,7 @@ export function AIAssistantDrawer({
     scrollToBottom, checkIfAtBottom, resetScrollState,
   } = useScrollBehavior(chatItems)
 
-  const { skillData } = useAttackSkillData(userId, projectId)
+  const { skillData, refetch: refetchSkillData } = useAttackSkillData(userId, projectId)
 
   const {
     missingApiKeys,
@@ -145,6 +149,21 @@ export function AIAssistantDrawer({
     projectFormData, updateProjectField,
     settingsDropdownRef,
   } = useSettingsModal(projectId)
+
+  // Plugin chat-session actions from the gear menu (design §6.7): the review modal (step 6.5)
+  // and the core versions modal (step 6.6). The versions modal opens on the session's skill
+  // (attackPathType), built-in or the person's own, so they land on the right skill.
+  const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
+  const [versionsFor, setVersionsFor] = useState<{ projectId: string | null; initialSkill?: string } | null>(null)
+  const { run: runPluginChatAction, modals: pluginChatModals } = usePluginChatActions({
+    onReviewProposal: (changeSetId) => setReviewChangeSetId(changeSetId),
+    onCoreScreen: (screen, context) => {
+      if (screen === 'skill.text.versions') {
+        const sessionSkill = attackPathType.startsWith('user_skill:') || isBuiltinSkill(attackPathType) ? attackPathType : undefined
+        setVersionsFor({ projectId: context.projectId ?? null, initialSkill: sessionSkill })
+      }
+    },
+  })
 
   // ─── Conversation persistence ─────────────────────────────────────────────
   const {
@@ -453,13 +472,44 @@ export function AIAssistantDrawer({
         setSettingsModal={setSettingsModal}
         modelName={modelName}
         setShowModelModal={setShowModelModal}
+        projectId={projectId}
+        sessionId={sessionId}
+        conversationId={conversationId}
+        onRunPluginAction={runPluginChatAction}
       />
+
+      {pluginChatModals}
+
+      {reviewChangeSetId && (
+        <OverrideReviewModal
+          changeSetId={reviewChangeSetId}
+          scopeOwnerId={userId}
+          projectId={projectId}
+          onClose={() => setReviewChangeSetId(null)}
+          onDecided={(outcome) => {
+            setReviewChangeSetId(null)
+            if (outcome === 'saved') refetchSkillData()
+          }}
+        />
+      )}
+
+      {versionsFor && (
+        <SkillVersionsModal
+          projectId={versionsFor.projectId}
+          initialSkill={versionsFor.initialSkill}
+          scopeOwnerId={userId}
+          onClose={() => setVersionsFor(null)}
+          onOpenReview={(changeSetId) => { setVersionsFor(null); setReviewChangeSetId(changeSetId) }}
+          onReviewAgain={(changeSetId) => { setVersionsFor(null); setReviewChangeSetId(changeSetId) }}
+        />
+      )}
 
       <SettingsModal
         settingsModal={settingsModal}
         setSettingsModal={setSettingsModal}
         projectFormData={projectFormData}
         updateProjectField={updateProjectField}
+        projectId={projectId}
       />
 
       <ModelPickerModal
