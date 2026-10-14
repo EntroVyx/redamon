@@ -89,6 +89,19 @@ export interface EngagementStatus {
   blockers: string[]
   /** Not blocking, but an operator should see it. */
   warnings: string[]
+  /** digestScopeDocument of the current RoE text, or null with no document. */
+  documentTextSha256: string | null
+  /**
+   * Does the newest `roe_document` authorization record THIS document? Null
+   * when there is no document or no such authorization to compare with.
+   */
+  documentMatchesAuthorization: boolean | null
+}
+
+export interface EngagementDocumentCheck {
+  textSha256: string | null
+  /** documentSha256 of the newest authorization whose documentKind is roe_document. */
+  roeAuthorizationSha256: string | null
 }
 
 /**
@@ -132,7 +145,8 @@ export function effectiveCeiling(project: EngagementProjectRow): number | null {
 
 export function describeEngagement(
   project: EngagementProjectRow,
-  authorizationCount: number
+  authorizationCount: number,
+  document: EngagementDocumentCheck = { textSha256: null, roeAuthorizationSha256: null },
 ): EngagementStatus {
   const kind: EngagementKind = isEngagementKind(project.engagementKind)
     ? project.engagementKind
@@ -172,6 +186,21 @@ export function describeEngagement(
     )
   }
 
+  // An authorization records ONE document's digest. After a replace or a
+  // remove the scans run under different terms than the ones authorized, which
+  // the start gate (it counts rows) cannot see.
+  const documentMatchesAuthorization =
+    document.textSha256 && document.roeAuthorizationSha256
+      ? document.textSha256 === document.roeAuthorizationSha256
+      : null
+  if (documentMatchesAuthorization === false) {
+    warnings.push(
+      'The current Rules of Engagement document is not the one the newest authorization ' +
+      'recorded: it was replaced after the authorization. Record an authorization for the ' +
+      'current document with attach_engagement_authorization.'
+    )
+  }
+
   const activeLimits: string[] = []
   if (project.roeGlobalMaxRps > 0) activeLimits.push('a request-rate ceiling')
   if ((project.roeExcludedHosts ?? []).some(h => String(h).trim() !== '')) {
@@ -188,6 +217,8 @@ export function describeEngagement(
     hasAuthorization: authorizationCount > 0,
     blockers,
     warnings,
+    documentTextSha256: document.textSha256,
+    documentMatchesAuthorization,
   }
 }
 
@@ -199,7 +230,28 @@ const ENGAGEMENT_SELECT = {
   roeExcludedHosts: true,
   roeTimeWindowEnabled: true,
   targetDomain: true,
+  roeRawText: true,
 } as const
+
+/** The digest of a stored RoE text, or null when the project has none. */
+export function roeTextDigest(rawText: string | null | undefined): string | null {
+  return typeof rawText === 'string' && rawText !== '' ? digestScopeDocument(rawText) : null
+}
+
+/**
+ * The digest of the project's current RoE text, read before a scan is handed
+ * to the orchestrator so its history row names the document it ran under.
+ * Never throws: a missing digest is a gap in history, not a reason to refuse.
+ */
+export async function currentRoeTextSha256(projectId: string): Promise<string | null> {
+  try {
+    const row = await prisma.project.findUnique({ where: { id: projectId }, select: { roeRawText: true } })
+    return roeTextDigest(row?.roeRawText)
+  } catch (err) {
+    console.error(`[engagement] could not read the RoE text of ${projectId}:`, err)
+    return null
+  }
+}
 
 /**
  * Load a project's engagement status.
@@ -224,6 +276,8 @@ export async function loadEngagement(projectId: string): Promise<EngagementStatu
       hasAuthorization: false,
       blockers: ['Project not found.'],
       warnings: [],
+      documentTextSha256: null,
+      documentMatchesAuthorization: null,
     }
   }
   let count = 0
@@ -236,7 +290,21 @@ export async function loadEngagement(projectId: string): Promise<EngagementStatu
     console.error(`[engagement] could not count authorizations for ${projectId}:`, err)
     count = 0
   }
-  return describeEngagement(project as EngagementProjectRow, count)
+  let roeAuthorizationSha256: string | null = null
+  try {
+    const newest = await prisma.engagementAuthorization.findFirst({
+      where: { projectId, documentKind: 'roe_document' },
+      orderBy: { recordedAt: 'desc' },
+      select: { documentSha256: true },
+    })
+    roeAuthorizationSha256 = newest?.documentSha256 ?? null
+  } catch (err) {
+    console.error(`[engagement] could not read the RoE authorization of ${projectId}:`, err)
+  }
+  return describeEngagement(project as EngagementProjectRow, count, {
+    textSha256: roeTextDigest(project.roeRawText),
+    roeAuthorizationSha256,
+  })
 }
 
 /**

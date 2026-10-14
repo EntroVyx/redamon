@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
 import { getEffectiveUser } from '@/lib/session'
 import { recordScanStart } from '@/lib/scanTimeline'
+import { currentRoeTextSha256 } from '@/lib/engagement'
 import prisma from '@/lib/prisma'
 import { existsSync } from 'fs'
 import path from 'path'
@@ -79,6 +80,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     // Call recon orchestrator to start the GitHub hunt
+    // Read before the start, so a RoE replaced mid-start cannot misattribute the run.
+    const roeTextSha256 = await currentRoeTextSha256(projectId)
     const response = await orchestratorFetch(`${RECON_ORCHESTRATOR_URL}/github-hunt/${projectId}/start`, {
       method: 'POST',
       headers: {
@@ -107,7 +110,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // The scan is already running: recording who started it must never be able
     // to turn a successful start into an error response.
     const __eff = await getEffectiveUser().catch(() => null)
-    await recordScanStart({ projectId, kind: 'github_hunt', initiatedByUserId: __eff?.userId ?? null })
+    await recordScanStart({ roeTextSha256, projectId, kind: 'github_hunt', initiatedByUserId: __eff?.userId ?? null })
 
     const data = await response.json()
     return NextResponse.json(data)

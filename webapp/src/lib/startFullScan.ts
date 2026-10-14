@@ -250,6 +250,7 @@ async function startFullScanLocked(input: StartFullScanInput): Promise<StartFull
       mode,
       status: 'failed',
       initiatedByUserId: input.actorUserId ?? null,
+      roeTextSha256: engagement.documentTextSha256,
       scheduleId: input.scheduleId ?? null,
       ramReason: 'start outcome unknown: the orchestrator did not answer',
     }).catch(jobErr => {
@@ -288,6 +289,7 @@ async function startFullScanLocked(input: StartFullScanInput): Promise<StartFull
       mode,
       status: norm.limit?.limitType === 'ram' ? 'deferred_ram' : 'failed',
       initiatedByUserId: input.actorUserId ?? null,
+      roeTextSha256: engagement.documentTextSha256,
       scheduleId: input.scheduleId ?? null,
       ramReason: isLimit ? String(norm.limit?.detail ?? norm.error) : null,
     }).catch(err => {
@@ -324,6 +326,7 @@ async function startFullScanLocked(input: StartFullScanInput): Promise<StartFull
     authorizationId: await currentAuthorizationId(projectId),
     status: 'running',
     initiatedByUserId: input.actorUserId ?? null,
+    roeTextSha256: engagement.documentTextSha256,
     scheduleId: input.scheduleId ?? null,
   }).catch(err => {
     console.error('[scanTimeline] could not record scan job:', err)

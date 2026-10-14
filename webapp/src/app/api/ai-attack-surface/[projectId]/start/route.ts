@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
 import { getEffectiveUser } from '@/lib/session'
 import { recordScanStart } from '@/lib/scanTimeline'
+import { currentRoeTextSha256 } from '@/lib/engagement'
 import prisma from '@/lib/prisma'
 import { orchestratorFetch } from '@/lib/orchestrator'
 import { normalizeOrchestratorStartError } from '@/lib/orchestratorError'
@@ -30,6 +31,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
+    // Read before the start, so a RoE replaced mid-start cannot misattribute the run.
+    const roeTextSha256 = await currentRoeTextSha256(projectId)
     const response = await orchestratorFetch(`${RECON_ORCHESTRATOR_URL}/ai-attack-surface/${projectId}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -71,6 +74,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // to turn a successful start into an error response.
     const __eff = await getEffectiveUser().catch(() => null)
     await recordScanStart({
+      roeTextSha256,
       projectId,
       kind: 'ai_attack',
       runId: typeof data?.run_id === 'string' ? data.run_id : '',

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
 import { getEffectiveUser } from '@/lib/session'
 import { recordScanStart } from '@/lib/scanTimeline'
+import { currentRoeTextSha256 } from '@/lib/engagement'
 import { orchestratorFetch } from '@/lib/orchestrator'
 import { normalizeOrchestratorStartError } from '@/lib/orchestratorError'
 import { assertGraphNotActivating } from '@/lib/activationLock'
@@ -48,6 +49,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status })
     }
 
+    // Read before the start, so a RoE replaced mid-start cannot misattribute the run.
+    const roeTextSha256 = await currentRoeTextSha256(projectId)
     const response = await orchestratorFetch(
       `${RECON_ORCHESTRATOR_URL}/trufflehog/${projectId}/start`,
       {
@@ -71,6 +74,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // parallel rows and the rest stick at `running` forever.
     const __eff = await getEffectiveUser().catch(() => null)
     await recordScanStart({
+      roeTextSha256,
       projectId,
       kind: 'trufflehog',
       runId: resolved.source,

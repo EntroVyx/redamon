@@ -245,6 +245,8 @@ export interface CreateScanJobInput {
   authorizationId?: string | null
   /** The project roots the run covers, as the orchestrator returned them. */
   targets?: string[]
+  /** digestScopeDocument of the RoE text in force when the run started. */
+  roeTextSha256?: string | null
 }
 
 export async function createScanJob(input: CreateScanJobInput): Promise<{ id: string }> {
@@ -264,6 +266,7 @@ export async function createScanJob(input: CreateScanJobInput): Promise<{ id: st
       settingsHash: input.settingsHash ?? null,
       authorizationId: input.authorizationId ?? null,
       targets: input.targets ?? [],
+      roeTextSha256: input.roeTextSha256 ?? null,
       startedAt: status === 'running' ? new Date() : null,
     },
     select: { id: true },
@@ -284,6 +287,8 @@ export async function recordScanStart(input: {
   scheduleId?: string | null
   /** The roots the run covers (partial recon reports them). */
   targets?: string[]
+  /** Read before the orchestrator was called, so a replace cannot misattribute the run. */
+  roeTextSha256?: string | null
 }): Promise<void> {
   try {
     await createScanJob({
@@ -292,6 +297,7 @@ export async function recordScanStart(input: {
       kind: input.kind,
       runId: input.runId ?? '',
       targets: input.targets ?? [],
+      roeTextSha256: input.roeTextSha256 ?? null,
       // These kinds do not version the graph, so there is no mode to record.
       trigger: input.scheduleId ? 'scheduled' : 'manual',
       mode: null,

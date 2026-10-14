@@ -28,6 +28,7 @@ import {
   isDocumentKind,
   isEngagementKind,
   isSha256,
+  roeTextDigest,
   type EngagementProjectRow,
 } from './engagement'
 
@@ -185,5 +186,31 @@ describe('the authorization record is a digest, never the document', () => {
     expect(isEngagementKind('third_party')).toBe(true)
     expect(isEngagementKind('thirdparty')).toBe(false)
     expect(isEngagementKind(undefined)).toBe(false)
+  })
+})
+
+describe('the current RoE document against the newest RoE authorization', () => {
+  test('a matching digest is reported as a match', () => {
+    const s = describeEngagement(project(), 1, { textSha256: 'a'.repeat(64), roeAuthorizationSha256: 'a'.repeat(64) })
+    expect(s.documentMatchesAuthorization).toBe(true)
+    expect(s.documentTextSha256).toBe('a'.repeat(64))
+  })
+
+  test('a replaced document is a mismatch, with a warning that says what to do', () => {
+    const s = describeEngagement(project(), 1, { textSha256: 'b'.repeat(64), roeAuthorizationSha256: 'a'.repeat(64) })
+    expect(s.documentMatchesAuthorization).toBe(false)
+    expect(s.warnings.join(' ')).toMatch(/attach_engagement_authorization/)
+  })
+
+  test('nothing to compare is null, not a mismatch', () => {
+    expect(describeEngagement(project(), 1).documentMatchesAuthorization).toBeNull()
+    expect(describeEngagement(project(), 1, { textSha256: 'a'.repeat(64), roeAuthorizationSha256: null })
+      .documentMatchesAuthorization).toBeNull()
+  })
+
+  test('roeTextDigest is the authorization digest of the text, and null for no text', () => {
+    expect(roeTextDigest('x')).toBe(digestScopeDocument('x'))
+    expect(roeTextDigest('')).toBeNull()
+    expect(roeTextDigest(null)).toBeNull()
   })
 })

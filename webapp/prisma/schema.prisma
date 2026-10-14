@@ -1457,8 +1457,41 @@ model Project {
   nodeFilterExemptions              NodeFilterExemption[]
   pluginData                        PluginData[]
   pluginOverrides                   PluginOverride[]
+  // Superseded Rules of Engagement documents. A relation rather than columns,
+  // because a replace must not destroy the contract earlier scans ran under.
+  roeDocumentRevisions              RoeDocumentRevision[]
 
   @@map("projects")
+}
+
+/// A Rules of Engagement document that a replace or a remove superseded.
+///
+/// The project row holds one document, the current one. Earlier scans ran under
+/// earlier documents, and the report and the scan history need to be able to
+/// say which, so the outgoing document is kept here, bytes and parse included.
+/// The newest 10 per project are kept, pruned in the same transaction as the
+/// replace.
+model RoeDocumentRevision {
+  id             String    @id @default(cuid())
+  projectId      String    @map("project_id")
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentName   String    @map("document_name")
+  mimeType       String    @map("mime_type")
+  data           Bytes?
+  /// SHA-256 of the file bytes. Empty for a legacy document stored before hashes.
+  bytesSha256    String    @map("bytes_sha256")
+  /// digestScopeDocument(rawText): the digest an MCP engagement authorization records.
+  textSha256     String    @map("text_sha256")
+  rawText        String    @db.Text @map("raw_text")
+  parsedJson     Json?     @map("parsed_json")
+  appliedAt      DateTime? @map("applied_at")
+  supersededAt   DateTime  @default(now()) @map("superseded_at")
+  supersededById String    @map("superseded_by_id")
+  /// "replaced" | "removed"
+  reason         String
+
+  @@index([projectId, supersededAt])
+  @@map("roe_document_revisions")
 }
 
 // ========== AUTHENTICATED SESSION PROFILE ==========
@@ -1701,6 +1734,11 @@ model ScanJob {
   /// or a run that wrote no coverage), 0 = complete, N = N degraded sources.
   /// full_recon only; other kinds leave it null.
   degradedSources    Int?         @map("degraded_sources")
+  /// digestScopeDocument of the project's RoE text when the run started, read
+  /// with the engagement before the orchestrator is called. Ties each run to the
+  /// document in force, which a later replace would otherwise erase. Null when
+  /// the project had no document.
+  roeTextSha256      String?      @map("roe_text_sha256")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 

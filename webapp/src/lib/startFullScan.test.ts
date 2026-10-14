@@ -542,3 +542,20 @@ describe('domain batch preconditions', () => {
     expect((r as { error: string }).error).toContain('no target domain')
   })
 })
+
+describe('the run records which RoE document it started under', () => {
+  test('the digest of the stored RoE text reaches the job, read before the start', async () => {
+    const { digestScopeDocument } = await import('./engagement')
+    h.findProject.mockResolvedValue({
+      id: 'p1', userId: 'owner', targetDomain: 'x.tld', ipMode: false, targetIps: [],
+      engagementKind: 'internal', roeGlobalMaxRps: 0, roeRawText: 'RoE v1: max 5 rps',
+    })
+    await startFullScan({ projectId: 'p1', mode: 'new', trigger: 'manual', actorUserId: 'owner' })
+    expect(h.createJob.mock.calls[0][0].roeTextSha256).toBe(digestScopeDocument('RoE v1: max 5 rps'))
+  })
+
+  test('no document records null', async () => {
+    await startFullScan({ projectId: 'p1', mode: 'new', trigger: 'manual', actorUserId: 'owner' })
+    expect(h.createJob.mock.calls[0][0].roeTextSha256).toBeNull()
+  })
+})
