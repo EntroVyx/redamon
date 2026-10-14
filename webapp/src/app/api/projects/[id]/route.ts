@@ -18,8 +18,7 @@ import { writeAudit } from '@/lib/audit'
 import { canonicalJson } from '@/lib/fingerprint'
 import { field, fieldsWhere } from '@/lib/reconSettings/registry'
 import { STALE_SAVE_MESSAGE } from '@/lib/projectVersion'
-import { validateCrossFieldRules, writeFireteamAudit } from '@/lib/reconSettings/crossField'
-import { JEV_ENGINE_SELECT, validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
+import { JEV_ENGINE_SELECT, guardProjectWrite, recordProjectWrite } from '@/lib/projectWriteGuards'
 import { seedProjectDomains } from '@/lib/graphSeedDomains'
 import { computeSkillTextOverrides } from '@/lib/plugins/overrideDelivery'
 import { userSkillsForAgent } from '@/lib/userSkillAgentPayload'
@@ -391,21 +390,17 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       )
     }
 
-    // Supply-chain input becomes a `git clone` argument in the scan container and
-    // fireteam carries a rule over two fields, so both are validated server-side:
-    // a direct PUT bypasses the form's own checks. Shared with the MCP writers.
-    const crossFieldError = await validateCrossFieldRules(updateData, Object.keys(updateData), eff.userId, {
-      ownerUserId: existing ? existing.userId : undefined,
+    // Supply-chain input becomes a `git clone` argument in the scan container,
+    // fireteam carries a rule over two fields, and a switch onto the Jev engine
+    // needs the owner's Jev token: all validated server-side, because a direct
+    // PUT bypasses the form's own checks. The same guards as the RoE routes.
+    const guardError = await guardProjectWrite({
+      existing: existing as ({ userId: string } & Record<string, unknown>) | null,
+      updateData,
+      actorUserId: eff.userId,
     })
-    if (crossFieldError) {
-      return NextResponse.json({ error: crossFieldError }, { status: 400 })
-    }
-
-    // A switch onto the Jev engine needs a Jev token on the OWNER's account. The
-    // form's own token lookup is a convenience; this is the authority.
-    if (existing) {
-      const jevError = await validateJevEngineChange(existing, updateData, existing.userId)
-      if (jevError) return NextResponse.json({ error: jevError }, { status: 400 })
+    if (guardError) {
+      return NextResponse.json({ error: guardError }, { status: 400 })
     }
 
     // The values being replaced, for the fireteam audit and the save's own.
@@ -453,7 +448,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       })
     }
 
-    await writeFireteamAudit(id, before, updateData, {
+    await recordProjectWrite(id, before, updateData, {
       userId: (project as { userId?: string | null }).userId ?? null,
       source: 'api',
     })
