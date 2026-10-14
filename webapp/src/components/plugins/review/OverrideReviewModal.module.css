@@ -171,3 +171,14 @@
     transform: rotate(360deg);
   }
 }
+
+/* A phone: the buttons wrap instead of overflowing, and stay in view below the body. */
+@media (max-width: 640px) {
+  .footer {
+    flex-wrap: wrap;
+  }
+
+  .footer > button {
+    flex: 1 1 auto;
+  }
+}

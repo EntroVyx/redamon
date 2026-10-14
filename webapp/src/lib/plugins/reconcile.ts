@@ -13,6 +13,7 @@ import { JOBS_COLLECTION, failJob, type Job } from './jobs'
 import { commitIn, hasKeptData, manifestOnDisk, purgeRows, withoutPrevious } from './lifecycle'
 import { INSTALLED_STATUSES } from './lifecycleCommon'
 import { markStale, type StaleReason } from './overrides'
+import { pairsWithUserSkillProvenance, revokeUserSkillProvenance } from './userSkillRevocation'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
 import {
   PluginConflictError,
@@ -85,6 +86,8 @@ export interface ReconcileReport {
   statusChanges: { pluginId: string; from: string; to: string }[]
   revoked: string[]
   unrevoked: string[]
+  /** What revoked plugin versions left at user_skill.text: proposals withdrawn, skills quarantined. */
+  userSkillRevocations: { withdrawn: string[]; quarantined: string[] }
   catalog: string
   registry: string
   staleSets: string[]
@@ -433,7 +436,8 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
   const started = Date.now()
   const timeLeft = () => Date.now() - started < d.budgetMs
   const report: ReconcileReport = {
-    recovered: [], healed: [], deferred: [], statusChanges: [], revoked: [], unrevoked: [], catalog: 'not_loaded',
+    recovered: [], healed: [], deferred: [], statusChanges: [], revoked: [], unrevoked: [],
+    userSkillRevocations: { withdrawn: [], quarantined: [] }, catalog: 'not_loaded',
     registry: 'not_checked', staleSets: [], foldersRemoved: [], stagingRemoved: [], expiredRows: 0, overdueJobs: 0,
     runnerReloaded: false, budgetExhausted: false, errors: [],
   }
@@ -533,6 +537,27 @@ export async function reconcile(deps: ReconcileDeps = {}): Promise<ReconcileRepo
         }
       } catch (e) {
         note(`checking ${row.pluginId}`, e)
+      }
+    }
+
+    // 3b. Every version the catalog revokes, installed or not: its waiting user-skill
+    // proposals are withdrawn and the skills saved from its proposals quarantined. A plugin
+    // that was uninstalled keeps no row here, which is why this does not walk the installs.
+    if (loaded) {
+      let pairs: { id: string; version: string }[] = []
+      try {
+        pairs = await pairsWithUserSkillProvenance(loaded.catalog.revoked)
+      } catch (e) {
+        note('reading what revoked versions proposed', e)
+      }
+      for (const { id, version } of pairs) {
+        try {
+          const done = await revokeUserSkillProvenance(id, version)
+          report.userSkillRevocations.withdrawn.push(...done.withdrawn)
+          report.userSkillRevocations.quarantined.push(...done.quarantined)
+        } catch (e) {
+          note(`revoking what ${id} ${version} proposed`, e)
+        }
       }
     }
 

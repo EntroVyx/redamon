@@ -10,6 +10,10 @@ import { BUILTIN_SKILLS } from '@/lib/plugins/builtinSkills'
 import type { ScopeVersions, VersionRow, VersionsModel } from '@/lib/plugins/versionsModel'
 import { OverrideApiError, deleteChangeSet, fetchVersions, resetSkill } from './overridesClient'
 import { dormantCopy } from './dormantCopy'
+import { UserSkillVersionsSection } from './UserSkillVersionsSection'
+import { useUserSkillsChanged } from '@/lib/userSkillsChannel'
+
+const USER_PREFIX = 'user_skill:'
 import styles from './SkillVersionsModal.module.css'
 
 const FACTORY_REVISION = 1
@@ -47,15 +51,39 @@ export function SkillVersionsModal({
 }) {
   const { confirm, dangerConfirm } = useAlertModal()
   const toast = useToast()
-  const first = initialSkill && BUILTIN_SKILLS.some((s) => s.id === initialSkill) ? initialSkill : BUILTIN_SKILLS[0]?.id
+  const first = initialSkill && (BUILTIN_SKILLS.some((s) => s.id === initialSkill) || initialSkill.startsWith(USER_PREFIX))
+    ? initialSkill
+    : BUILTIN_SKILLS[0]?.id
   const [skill, setSkill] = useState(first)
   const [model, setModel] = useState<VersionsModel | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [viewing, setViewing] = useState<string | null>(null)
+  // null until read: a skill opened from the chat is not "deleted" just because the list is late.
+  const [ownList, setOwnList] = useState<{ id: string; name: string }[] | null>(null)
+  const ownSkills = ownList ?? []
+  const userSkillId = skill?.startsWith(USER_PREFIX) ? skill.slice(USER_PREFIX.length) : null
+
+  // The person's own skills, for the selector's "Your skills" group.
+  // Read again when a skill is uploaded, deleted or saved elsewhere, this window's "Delete older
+  // versions" included, so the selector never offers a skill that is gone.
+  const [ownGeneration, setOwnGeneration] = useState(0)
+  useUserSkillsChanged(() => setOwnGeneration((g) => g + 1))
+  useEffect(() => {
+    if (!scopeOwnerId) {
+      setOwnList([])
+      return
+    }
+    let cancelled = false
+    fetch(`/api/users/${encodeURIComponent(scopeOwnerId)}/attack-skills`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: { id: string; name: string }[]) => { if (!cancelled) setOwnList(Array.isArray(rows) ? rows : []) })
+      .catch(() => { if (!cancelled) setOwnList([]) })
+    return () => { cancelled = true }
+  }, [scopeOwnerId, ownGeneration])
 
   const load = useCallback(() => {
-    if (!skill) return
+    if (!skill || skill.startsWith(USER_PREFIX)) return
     setModel(null)
     setError(null)
     fetchVersions(skill, projectId).then(setModel, (e) => setError(e instanceof Error ? e.message : 'Could not load the versions.'))
@@ -105,7 +133,8 @@ export function SkillVersionsModal({
     }, 'Old versions deleted.')
   }
 
-  const title = model ? `Versions · ${model.skillDisplayName}` : 'Skill versions'
+  const ownName = userSkillId ? ownSkills.find((s) => s.id === userSkillId)?.name : undefined
+  const title = userSkillId ? `Versions · ${ownName ?? 'your skill'}` : model ? `Versions · ${model.skillDisplayName}` : 'Skill versions'
 
   return (
     <Modal isOpen onClose={onClose} title={title} size="xlarge" closeOnOverlayClick={false}>
@@ -113,25 +142,49 @@ export function SkillVersionsModal({
         <label className={styles.selector}>
           Skill
           <select className="textInput" value={skill} onChange={(e) => setSkill(e.target.value)} disabled={busy}>
-            {BUILTIN_SKILLS.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.displayName}
-              </option>
-            ))}
+            <optgroup label="Built-in">
+              {BUILTIN_SKILLS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.displayName}
+                </option>
+              ))}
+            </optgroup>
+            {(ownSkills.length > 0 || userSkillId) && (
+              <optgroup label="Your skills">
+                {userSkillId && !ownSkills.some((s) => s.id === userSkillId) && (
+                  <option value={skill}>{ownList === null ? 'Loading…' : 'A deleted skill'}</option>
+                )}
+                {ownSkills.map((s) => (
+                  <option key={s.id} value={`${USER_PREFIX}${s.id}`}>
+                    {s.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
 
-        {!model && !error && (
+        {userSkillId && (
+          <UserSkillVersionsSection
+            key={userSkillId}
+            skillId={userSkillId}
+            projectId={projectId}
+            scopeOwnerId={scopeOwnerId}
+            onOpenReview={onOpenReview}
+          />
+        )}
+
+        {!userSkillId && !model && !error && (
           <div className={styles.loading}>
             <Loader2 size={14} className={styles.spin} /> Loading…
           </div>
         )}
-        {error && <div className={styles.error} role="alert">{error}</div>}
-        {model?.registryError && (
+        {!userSkillId && error && <div className={styles.error} role="alert">{error}</div>}
+        {!userSkillId && model?.registryError && (
           <div className={styles.note}>The agent could not be read, so the factory text is not shown here.</div>
         )}
 
-        {model?.scopes.map((scope) => (
+        {!userSkillId && model?.scopes.map((scope) => (
           <ScopeSection
             key={`${scope.scopeType}:${scope.scopeOwnerId}`}
             scope={scope}

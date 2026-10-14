@@ -377,7 +377,7 @@ Then run:
 docker compose exec webapp npx prisma db push
 ```
 
-Existing projects have their own stored `attackSkillConfig` JSON and will NOT auto-pick up the new key (missing keys are treated as "enabled" by the `user` side of `get_enabled_user_skills`, but `builtIn` is a strict has-key check in `get_enabled_builtin_skills`). If you want existing rows to inherit the default, run:
+Existing projects have their own stored `attackSkillConfig` JSON and will NOT auto-pick up the new key: a missing key means off on both sides (`builtIn` in `get_enabled_builtin_skills`, `user` in `get_enabled_user_skills`, where only an explicit `true` enables a skill). If you want existing rows to inherit the default, run:
 
 ```bash
 docker compose exec webapp npx prisma db execute --stdin <<'SQL'

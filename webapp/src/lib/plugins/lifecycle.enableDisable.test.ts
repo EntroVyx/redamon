@@ -22,7 +22,7 @@ import * as ov from './overrides'
 
 let db: FakePrisma
 let w: LifecycleWorld
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const SHA = 'a'.repeat(64)
 
 beforeEach(async () => {

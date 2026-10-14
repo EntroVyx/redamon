@@ -188,7 +188,8 @@ export function PhaseIndicatorBar({
                   <div className={styles.skillTooltipGroup}>
                     <div className={styles.skillTooltipGroupLabel}>Built-in</div>
                     {skillData.builtIn.map(s => {
-                      const enabled = skillData.config.builtIn[s.id] !== false
+                      // The agent's rule: a built-in skill is on only when its key says so.
+                      const enabled = skillData.config.builtIn[s.id] === true
                       const isActive = attackPathType === s.id
                       return (
                         <div key={s.id} className={`${styles.skillTooltipItem} ${!enabled ? styles.skillTooltipItemDisabled : ''} ${isActive ? styles.skillTooltipItemActive : ''}`}>
@@ -199,17 +200,17 @@ export function PhaseIndicatorBar({
                       )
                     })}
                   </div>
-                  {skillData.user.length > 0 && (
+                  {/* Only the skills this project turned on (a missing toggle is off, as the
+                      agent reads it): a user may have hundreds. */}
+                  {skillData.user.some(s => skillData.config.user[s.id] === true) && (
                     <div className={styles.skillTooltipGroup}>
                       <div className={styles.skillTooltipGroupLabel}>User Skills</div>
-                      {skillData.user.map(s => {
-                        const enabled = skillData.config.user[s.id] !== false
+                      {skillData.user.filter(s => skillData.config.user[s.id] === true).map(s => {
                         const isActive = attackPathType === `user_skill:${s.id}`
                         return (
-                          <div key={s.id} className={`${styles.skillTooltipItem} ${!enabled ? styles.skillTooltipItemDisabled : ''} ${isActive ? styles.skillTooltipItemActive : ''}`}>
+                          <div key={s.id} className={`${styles.skillTooltipItem} ${isActive ? styles.skillTooltipItemActive : ''}`}>
                             <span className={styles.skillTooltipName}>{s.name}</span>
                             {isActive && <Check size={11} className={styles.skillTooltipCheck} />}
-                            {!enabled && <span className={styles.skillTooltipOff}>OFF</span>}
                           </div>
                         )
                       })}

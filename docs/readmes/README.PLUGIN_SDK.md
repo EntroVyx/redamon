@@ -75,7 +75,7 @@ validates against.
 | `description` | 1-500 chars | Shown on the card. |
 | `platform` | a range such as `">=1.0.0 <2.0.0"` (comparators `>= > <= < =` on full `x.y.z`) | Platform versions this release runs on. The platform installs the newest release whose range includes it. |
 | `dataVersion` | integer ≥ 1 | The shape of the data this release stores (§8). |
-| `permissions` | subset of `session:read`, `llm:invoke`, `override:skill.text`, no duplicates | What the admin consents to at install (§4.2). |
+| `permissions` | subset of `session:read`, `llm:invoke`, `override:skill.text`, `override:user_skill.text` (platform 1.1.0), no duplicates | What the admin consents to at install (§4.2). |
 | `llmFeature` | `{description: 1-200 chars}` | Required with `llm:invoke` (and only then): the text of the plugin's tile in Global Settings → LLM Providers → Models by feature. |
 | `actions` | at most 50 | Entry points (§4). |
 | `actions[].id` | `^[a-z][a-z0-9_]{1,39}$`, unique | Named by contributions and screens. |
@@ -86,7 +86,7 @@ validates against.
 | `actions[].resultScreen` | `ui/<path>.json`, listed in `screens` | Accepted and checked; in 1.0.0 no extension point opens it (a form's own `resultScreen` does, §9). |
 | `contributes` | object, keys below | The UI extension points the plugin uses (§9.1). An unknown key is refused as an unknown extension point. |
 | `contributes.nav` | `{label, icon, screen}` | One page of the plugin at `/plugins/<id>`. |
-| `contributes["chat.session.actions"]` | at most 5 of `{label, icon?, action?, coreScreen?}`, exactly one of `action` / `coreScreen` | Items in the chat gear menu. `coreScreen: "skill.text.versions"` opens the core versions window and needs `override:skill.text`. |
+| `contributes["chat.session.actions"]` | at most 5 of `{label, icon?, action?, coreScreen?, pick?}`, exactly one of `action` / `coreScreen` | Items in the chat gear menu. `coreScreen: "skill.text.versions"` opens the core versions window and needs `override:skill.text`. `pick: "session.skill"` (platform 1.1.0, with an `action` only, needs `session:read` and `override:skill.text` or `override:user_skill.text`) makes the core show its skill picker first; see §4.1. |
 | `contributes["project.skills.row"]` | at most 3 of `{label, action}` | Buttons in each built-in skill row of project settings. |
 | `screens` | at most 50 `ui/<path>.json`, unique | Every screen file the plugin has. A screen not listed here cannot be opened. |
 
@@ -113,6 +113,14 @@ async def run(ctx, params: dict) -> dict:
 
 - `params` is the JSON object the UI sent (at most 64 KB): a screen's `source.params`, a form's
   fields, a row action's `pass` fields, or `{}` from a menu item.
+- A menu item with `pick: "session.skill"` (platform 1.1.0) sends `params.pick =
+  {kind: "session.skill", point, target, ref}`: the skill the person picked among those the
+  session used, of the points your plugin is granted. `ref` is a built-in id or
+  `user_skill:<id>`; `point` is `skill.text` or `user_skill.text`; `target` is the target group
+  to pass to `sdk.override`. RedAmon re-derives it from the session and refuses a pick not in its
+  list (`400 invalid_pick`), so you may trust it as the person's choice; your action should still
+  work without it (an older RedAmon never sends one). One job runs per session: a start while one
+  runs answers that job, whatever was picked.
 - The return value must be a JSON object of at most 2 MB. Anything else fails the call with
   `invalid_result`.
 - Raise `PluginError(code, message)` (from `redamon_plugin_sdk`) to fail with a message the user
@@ -285,12 +293,16 @@ deleted = await ctx.sdk.data.delete("notes", "n1")         # True when a row was
 | Paging | Pass `next` back as `cursor` with the same query. Inserts and deletes between pages never skip or repeat a row; an update moves a row in the `updated` orders (in `-updated` behind the cursor, not returned again), and an `updated` walk is bounded by its newest row at the start, so a walk that writes back as it reads ends. A cursor from another query, or a forged one, is `400 invalid_cursor`. |
 | `count` | How many live rows `query` would page through with the same `prefix` and `where`. |
 
-### 5.5 `sdk.override` (needs `override:skill.text`)
+### 5.5 `sdk.override` (needs `override:skill.text` or `override:user_skill.text`)
 
-The behaviour extension point `skill.text`: a proposal of new text for a built-in agent skill's
-static workflow parts (the parts the agent registers in
-[skill_parts.py](../../agentic/prompts/skill_parts.py)). Nothing changes for the agent until a
-person approves it in the core review window.
+Two behaviour extension points:
+- `skill.text` (needs `override:skill.text`): a proposal of new text for a built-in agent skill's
+  static workflow parts (the parts the agent registers in
+  [skill_parts.py](../../agentic/prompts/skill_parts.py)). Nothing changes for the agent until a
+  person approves it in the core review window.
+- `user_skill.text` (needs `override:user_skill.text`, platform 1.1.0): a proposal of new text for
+  one of the **user's own** skills that the call's session used. Approving it never changes that
+  skill: RedAmon saves the text as a **new** skill of the user's. See "User skills" below.
 
 ```python
 target = await ctx.sdk.override.get("skill.text", "sql_injection")
@@ -335,6 +347,44 @@ await ctx.sdk.override.withdraw(proposal["changeSetId"])    # a pending proposal
 - Versions are numbered per scope by a counter that never goes back, so a deleted `v3` is never
   reused. Approval, rejection, deletion and reset are core actions of the scope's owner (or an
   admin), never a plugin's.
+- The platform records with every proposal the plugin version, conversation and job of the call
+  (from its token); those keys, and the platform's other meta keys, are dropped from your `meta`.
+
+**User skills (`user_skill.text`).**
+
+```python
+target = await ctx.sdk.override.get("user_skill.text", params["pick"]["target"])
+# {"point": "user_skill.text", "targetGroup": "<skill id>", "displayName": "My SQLi flow v2",
+#  "description": "…", "parts": [{"partId": "body", "text": "…", "sha256": "…", "chars": 1234,
+#  "maxChars": 51200, "kind": "plain", "placeholders": []}], "active": None, "pendingCount": 0,
+#  "limits": {"skillMaxChars": 51200, "parts": {"body": 51200}},
+#  "lineage": {"rootName": "My SQLi flow", "version": 2}}
+proposal = await ctx.sdk.override.propose("user_skill.text", target["targetGroup"],
+                                          {"body": new_text}, note="Why", scope="user")
+# {"changeSetId": "…", "fromRevision": None, "proposedRevisionLabel": None}
+```
+
+- Only a skill the **session** of the call used (the agent's record of the text it rendered, or
+  the skill label in older sessions), owned by the call's user, and not quarantined. Every other
+  case, unknown ids included, is the same `404 invalid_target`; outside a session `get` is `400
+  no_session`. A skill whose name, description or text holds a key or token in a recognised format (a private key, a
+  JWT, a cloud or API token) is never given to a plugin: `422 skill_contains_credentials`.
+- One plain part, `body`, used verbatim (no placeholders; braces written normally). `maxChars`
+  counts UTF-16 code units, like JavaScript's `.length`: measure with
+  `redamon_plugin_sdk.client.js_length`, not `len`.
+- `propose` takes `scope="user"` only (`400 invalid_proposal` otherwise) and parts exactly
+  `{"body": text}` (`422`). A `get` of the same target in the action (or `based_on`) is
+  **required**: the SDK sends back its hash (`readSha256`), and a text the user edited since is
+  `409 factory_changed`. The agent then validates the text (`POST /plugins/text/validate`): not
+  empty, no NUL, within the limit, different from the current text, and no reserved marker, Rules
+  of Engagement heading or hidden character the current text did not already hold (`422
+  invalid_proposal`; `503` when the agent is down).
+- Five proposals may wait per skill (`409 too_many_pending`). `withdraw` needs the permission of
+  the set's own point.
+- What happens next is RedAmon's: the person saves the proposal as a new skill (named after the
+  source with the next ` vN`), optionally in place of the source in a project; saving needs your
+  plugin enabled and **at the version that made the proposal**. If the catalog revokes that
+  version, its waiting proposals are withdrawn and the skills saved from them quarantined.
 
 ### 5.6 `sdk.jobs`
 
@@ -349,7 +399,8 @@ job's end is reported by the runner, not by plugin code.
 |---|---|---|
 | `session:read` | `sdk.session.read` | The plugin reads the chat session it is started from, with secrets masked. |
 | `llm:invoke` | `sdk.llm.invoke` | The plugin calls the model each user chooses for it, counted against that user. |
-| `override:skill.text` | `sdk.override.*`, the `skill.text.versions` core screen | The plugin may propose new text for built-in skills; a person approves every version. |
+| `override:skill.text` | `sdk.override.*` at `skill.text`, the `skill.text.versions` core screen | The plugin may propose new text for built-in skills; a person approves every version. |
+| `override:user_skill.text` | `sdk.override.*` at `user_skill.text` (platform 1.1.0) | The plugin may propose new versions of the user's own skills from the sessions that used them, reading their text; saving creates a new skill and never changes the original; a skill holding credential-shaped values is never given to it. |
 
 The wording is [permissions.ts](../../webapp/src/lib/plugins/permissions.ts) `PERMISSION_TEXT`. An
 update that adds a permission asks the admin for consent again.
@@ -360,8 +411,9 @@ update that adds a permission asks the admin for consent again.
 
 A refusal raised by the SDK and not caught reaches the user through the action's failure: the
 action fails with that `PluginError`'s code and message. Catch the ones you can handle
-(`model_required`, `plugin_llm_cap`, `factory_changed`, `too_many_pending`) and raise your own
-`PluginError` with a sentence the user can act on.
+(`model_required`, `plugin_llm_cap`, `factory_changed`, `too_many_pending`,
+`skill_contains_credentials`) and raise your own `PluginError` with a sentence the user can act
+on.
 
 ---
 
@@ -413,6 +465,7 @@ every link lands on an exit page first.
 | `project.skills.row` | buttons | Each built-in skill row of a saved project's Agent Skills settings. |
 | `nav` | one page | An "Open" entry on the plugin's card on `/plugins`, and the page at `/plugins/<id>` (sub-screens at `/plugins/<id>/<path without ui/ and .json>`). Not a header entry: the header has one Plugins button. |
 | `skill.text` (behaviour) | the `override:skill.text` permission | The core review and versions windows, which a plugin can open (`reviewProposal`, `coreScreen`) but never draw. |
+| `user_skill.text` (behaviour) | the `override:user_skill.text` permission | The core skill picker before the action (`pick`), and the core save-as-new-skill review (`reviewProposal` with `extensionPoint: "user_skill.text"`). |
 
 ### 9.2 The primitives
 
@@ -478,7 +531,10 @@ it to the runner image.
 
 - `FakeSdk(...)`: the real `Sdk` over an in-memory Gateway that applies its main refusals
   (permissions, owner, reserved collections, unknown parts, five pending proposals); inspect
-  `.proposals`, `.progress`, `.rows`; `set_active(...)` makes a version active as if approved.
+  `.proposals`, `.progress`, `.rows`; `set_active(...)` makes a version active as if approved;
+  `add_user_skill(id, name, content, *, used_in_session=True, owner=None, ...)` adds one of the
+  user's own skills for `user_skill.text` (the same key and token formats as RedAmon, over the
+  name, description and text; its text checks are a subset of the agent's, never stricter).
   Passing here is necessary, not sufficient: not every quota is applied.
 - `ScriptedLlm([...])`: answers model calls from a queue (a string, a dict, or a `PluginError` to
   raise) and records every prompt; an empty queue raises `llm_script_exhausted`.

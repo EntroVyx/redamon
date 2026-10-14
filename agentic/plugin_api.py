@@ -2,7 +2,9 @@
 
 The webapp reads the overridable built-in skill parts here (its reconciliation compares
 their hashes with stored overrides and marks changed ones stale) and validates proposed
-values with the same rules the seam applies at use (prompts/skill_part_seam.py).
+values with the same rules the seam applies at use (prompts/skill_part_seam.py). A
+proposed replacement for a whole plain text, such as a user's own skill, is validated
+against the text it replaces (/plugins/text/validate).
 Plugins call a model through `/plugins/llm/invoke`, via the webapp's Gateway, so a
 provider key never leaves the agent.
 
@@ -14,11 +16,11 @@ another tenant's last-loaded settings.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictStr
 
 from llm_guard import master_key_is_weak, require_master_internal_auth
 from prompts import skill_parts
@@ -118,6 +120,57 @@ async def validate_skill_parts(body: ValidateSkillPartsRequest):
             "maxChars": skill_parts.skill_total_limit(skill_id),
         },
     }
+
+
+# ── /plugins/text/validate ──────────────────────────────────────────────────
+
+TEXT_MAX_CHARS_LIMIT = 1_000_000
+
+
+class ValidateTextRequest(BaseModel):
+    text: StrictStr
+    baseText: StrictStr
+    maxChars: Annotated[int, Field(strict=True, gt=0, le=TEXT_MAX_CHARS_LIMIT)]
+
+
+def _utf16_length(text: str) -> int:
+    # The webapp measures text with JavaScript's .length, which counts UTF-16 code units:
+    # an astral character is two. surrogatepass keeps a lone surrogate countable.
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def text_errors(text: str, base_text: str, max_chars: int) -> list:
+    """Every reason `text` cannot replace `base_text` as a whole plain text (a user's own
+    skill): the rules of validate_part_value, except that a reserved string or hidden
+    character already in the base is the person's own and stays allowed."""
+    errors = []
+    if not text.strip():
+        errors.append("value is empty")
+    if "\x00" in text:
+        errors.append("value contains a NUL character")
+    if text == base_text:
+        errors.append("value does not change the text")
+    length = _utf16_length(text)
+    if length > max_chars:
+        errors.append(f"value is {length} characters; the limit is {max_chars}")
+    hidden = sorted(skill_parts._hidden_chars(text) - skill_parts._hidden_chars(base_text))
+    if hidden:
+        shown = ", ".join(f"U+{ord(ch):04X}" for ch in hidden[:5])
+        errors.append(f"value contains invisible or control characters ({shown}); the person "
+                      "approving a version could not see them")
+    in_base = set(skill_parts.reserved_errors(base_text))
+    errors.extend(e for e in skill_parts.reserved_errors(text) if e not in in_base)
+    return errors
+
+
+@router.post("/text/validate")
+async def validate_text(body: ValidateTextRequest):
+    """Validate a proposed replacement for a whole plain text against the text it
+    replaces. `maxChars` is the caller's limit in UTF-16 code units."""
+    if master_key_is_weak():
+        return _weak_key_refusal()
+    errors = text_errors(body.text, body.baseText, body.maxChars)
+    return {"ok": not errors, "errors": errors}
 
 
 # ── /plugins/llm/invoke ─────────────────────────────────────────────────────

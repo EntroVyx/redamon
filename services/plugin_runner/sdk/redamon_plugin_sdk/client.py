@@ -288,7 +288,13 @@ class OverrideApi(_Api):
         self._read: dict = {}
 
     async def get(self, point: str, target_group: str) -> dict:
-        """The factory parts of a target, the version that applies (or None), the limits.
+        """The parts of a target, the version that applies (or None), the limits.
+
+        `point` is `skill.text` (a built-in skill: its factory parts, the approved version
+        that applies) or `user_skill.text` (a skill of the user's own that this session used:
+        one plain part `body`, its current text, `active` always None, plus `lineage`
+        `{rootName, version}`; a skill holding credential-shaped values is refused with
+        `skill_contains_credentials`, and any other refusal is `invalid_target`).
 
         Each part is `{partId, text, sha256, chars, maxChars, kind, placeholders}`: a
         `template` part keeps exactly its placeholders and writes a new literal brace doubled;
@@ -304,8 +310,13 @@ class OverrideApi(_Api):
         """Stores a proposal for a person to review: `{changeSetId, fromRevision, ...}`.
 
         `based_on` is the `get` answer the parts were built from; by default, the last `get`
-        of the same target in this action. If the factory text changed since, the proposal
-        is refused with `factory_changed`: read the target again and redo it.
+        of the same target in this action. If the text changed since, the proposal is refused
+        with `factory_changed`: read the target again and redo it.
+
+        At `user_skill.text` the scope is `user`, the parts are exactly `{"body": text}`, a
+        prior `get` (or `based_on`) is required, and the answer's `fromRevision` and
+        `proposedRevisionLabel` are None: approving saves the text as a NEW skill of the
+        person's and never changes the one it was built on.
         """
         body: dict = {"point": point, "targetGroup": target_group, "parts": parts,
                       "note": note, "scope": scope}

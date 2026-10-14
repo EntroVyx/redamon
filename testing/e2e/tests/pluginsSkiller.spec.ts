@@ -1,4 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
@@ -138,10 +139,13 @@ test('review a proposed skill version from project settings, approve it, then re
  * session from the chat's gear menu, review and approve, twice; then the versions window
  * (delete, reset to factory) and a third run whose number is never a reused one (TD-19); the
  * model gate; uninstall keeping the data, reinstall restoring it, uninstall deleting everything.
+ * Since Skiller 1.1.0 (platform 1.1.0) every run goes through RedAmon's skill picker, and one test
+ * improves one of the person's own skills: saved as a NEW skill (`<name> v2`), switched on in the
+ * project in place of its source, then a run on that one suggesting `v3`.
  *
  * Needs:
  * - Skiller packed and signed into SKILLER_DIST (default ../../redamon-plugins/dist):
- *   skiller-1.0.0.tar.gz, catalog.json and catalog.json.sig (redamon-plugins README.md,
+ *   skiller-<SKILLER_VERSION>.tar.gz, catalog.json and catalog.json.sig (redamon-plugins README.md,
  *   "Developing a plugin against a local RedAmon"), with the signing key's public half in
  *   PLUGINS_EXTRA_TRUSTED_KEYS;
  * - the stub model of scripts/stub-llm-server.mjs, which this spec starts on the address the
@@ -151,11 +155,22 @@ test('review a proposed skill version from project settings, approve it, then re
  *
  * SKILLER_FROM_CATALOG=1 installs Skiller from its card in the official catalog instead (no
  * files, no extra trusted key): the catalog must be the signed, official one and list Skiller
- * 1.0.0.
+ * at SKILLER_VERSION (1.0.0 by default in that mode, which has no picker and no user skills).
  */
 const FROM_CATALOG = process.env.SKILLER_FROM_CATALOG === '1'
+const SKILLER_VERSION = process.env.SKILLER_VERSION || (FROM_CATALOG ? '1.0.0' : '1.1.0')
+const WITH_PICKER = SKILLER_VERSION !== '1.0.0'
+const VERSION_RE = SKILLER_VERSION.replace(/\./g, '\\.')
 const SKILLER_DIST = process.env.SKILLER_DIST || join(__dirname, '..', '..', '..', 'redamon-plugins', 'dist')
-const SKILLER_FILES = ['skiller-1.0.0.tar.gz', 'catalog.json', 'catalog.json.sig']
+const SKILLER_FILES = [`skiller-${SKILLER_VERSION}.tar.gz`, 'catalog.json', 'catalog.json.sig']
+const USER_SESSION = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'skiller-user-session.json'), 'utf8')) as {
+  skillName: string
+  skillDescription: string
+  skillContent: string
+  events: { type: string; data: unknown }[]
+}
+/** The agent's record of a user skill's text: the first 16 hex of its SHA-256 (agentic skill_part_seam.py). */
+const sha16 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16)
 const SESSION = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'skiller-session.json'), 'utf8')) as {
   skillId: string
   events: { type: string; data: unknown }[]
@@ -191,6 +206,11 @@ test.describe.serial('Skiller', () => {
   let ready = false
   let sessionId = ''
   let firstLabel = 0
+  // The user-skill test's own rows, removed in afterAll: skills created or saved, sessions
+  // seeded, and the project's toggles as they were.
+  const ownSkills: string[] = []
+  const ownSessions: string[] = []
+  let savedToggles: unknown = undefined
 
   const versions = async () => {
     const res = await api.get(`/api/plugins/overrides/versions?point=skill.text&group=${SQLI}`)
@@ -213,20 +233,21 @@ test.describe.serial('Skiller', () => {
       await expect(page.getByTestId('catalog-status')).toContainText('Official catalog')
       const card = page.getByTestId('plugin-card-skiller')
       await expect(card.getByTestId('plugin-state')).toHaveText('Not installed')
-      await expect(card).toContainText('1.0.0 available')
-      for (const title of ['Read chat sessions', 'Use a language model', 'Propose agent instructions']) {
+      await expect(card).toContainText(`${SKILLER_VERSION} available`)
+      for (const title of ['Read chat sessions', 'Use a language model', 'Propose agent instructions',
+        ...(WITH_PICKER ? ['Propose versions of your own skills'] : [])]) {
         await expect(card.getByText(title, { exact: true })).toBeVisible()
       }
       await shot(page, 'catalog_card')
       await card.getByRole('button', { name: 'Install', exact: true }).click()
-      return { dialog, install: dialog.getByRole('button', { name: /^Install 1\.0\.0/ }) }
+      return { dialog, install: dialog.getByRole('button', { name: new RegExp(`^Install ${VERSION_RE}`) }) }
     }
     await page.getByRole('button', { name: /install from file/i }).click()
     const inputs = dialog.locator('input[type="file"]')
-    await inputs.nth(0).setInputFiles(join(SKILLER_DIST, 'skiller-1.0.0.tar.gz'))
+    await inputs.nth(0).setInputFiles(join(SKILLER_DIST, `skiller-${SKILLER_VERSION}.tar.gz`))
     await inputs.nth(1).setInputFiles(join(SKILLER_DIST, 'catalog.json'))
     await inputs.nth(2).setInputFiles(join(SKILLER_DIST, 'catalog.json.sig'))
-    return { dialog, install: dialog.getByRole('button', { name: /^Install Skiller 1\.0\.0/ }) }
+    return { dialog, install: dialog.getByRole('button', { name: new RegExp(`^Install Skiller ${VERSION_RE}`) }) }
   }
 
   async function installSkiller(page: Page) {
@@ -251,7 +272,7 @@ test.describe.serial('Skiller', () => {
     await expect(page.getByTestId('plugin-card-skiller').getByTestId('plugin-state')).toHaveText('Ready', { timeout: 60_000 })
   }
 
-  async function openSession(page: Page) {
+  async function openSession(page: Page, id = sessionId) {
     await page.goto(`/graph?project=${projectId}`)
     // /graph closes every drawer when its project changes, and the ?project= one is applied
     // after the first render: wait for the graph, then open the chat until it stays open.
@@ -264,7 +285,7 @@ test.describe.serial('Skiller', () => {
       await expect(history).toBeVisible()
     }).toPass({ timeout: 60_000 })
     await history.click()
-    await page.locator(`[title="${sessionId}"]`).first().click()
+    await page.locator(`[title="${id}"]`).first().click()
     // The seeded session's turns are on screen: the drawer has the conversation.
     await expect(page.getByText('Fetch the catalog page.').first()).toBeVisible({ timeout: 30_000 })
   }
@@ -274,9 +295,23 @@ test.describe.serial('Skiller', () => {
     await page.getByText(item, { exact: true }).click()
   }
 
+  /** In RedAmon's skill picker (platform 1.1.0): choose the skill `ref` and start. */
+  async function pick(page: Page, ref: string, tag?: string) {
+    if (!WITH_PICKER) return
+    const picker = page.getByRole('dialog', { name: 'Choose a skill' })
+    await expect(picker).toBeVisible()
+    const row = picker.getByTestId(`pick-${ref}`)
+    await expect(row).toBeVisible({ timeout: 30_000 })
+    await row.getByRole('radio').check()
+    if (tag) await shot(page, `picker_${tag}`)
+    await picker.getByRole('button', { name: 'Start' }).click()
+    await expect(picker).toBeHidden()
+  }
+
   /** One "Improve skill" run up to an approved version; returns the version number approved. */
   async function improveAndApprove(page: Page, from: number, tag: string): Promise<number> {
     await gear(page, 'Improve skill from this session')
+    await pick(page, SQLI, tag)
     await expect(page.getByRole('dialog', { name: /Choose a model for Skiller/ })).toHaveCount(0)
     const job = page.getByRole('dialog', { name: 'Improve skill from this session' })
     await expect(job).toBeVisible()
@@ -339,9 +374,16 @@ test.describe.serial('Skiller', () => {
         headers: { 'Content-Type': 'application/json' },
       })
       if (providerId) await api.delete(`/api/users/${admin}/llm-providers/${providerId}`)
-      if (sessionId) {
-        const conv = await api.get(`/api/conversations/by-session/${sessionId}`)
+      for (const id of [sessionId, ...ownSessions].filter(Boolean)) {
+        const conv = await api.get(`/api/conversations/by-session/${id}`)
         if (conv.ok()) await api.delete(`/api/conversations/${((await conv.json()) as { id: string }).id}`)
+      }
+      for (const id of ownSkills) await api.delete(`/api/users/${admin}/attack-skills/${id}`)
+      if (savedToggles !== undefined && projectId) {
+        await api.put(`/api/projects/${projectId}`, {
+          data: { attackSkillConfig: savedToggles },
+          headers: { 'Content-Type': 'application/json' },
+        })
       }
     }
     stub?.kill()
@@ -370,6 +412,129 @@ test.describe.serial('Skiller', () => {
     expect(firstLabel).toBeGreaterThanOrEqual(2)
     const second = await improveAndApprove(page, firstLabel, 'second')
     expect(second).toBe(firstLabel + 1)
+  })
+
+  /** A session on the user skill `id` (whose text is `content`), with three built-in turns first. */
+  async function seedUserSession(id: string, content: string): Promise<string> {
+    const session = `session_e2e_skiller_user_${Date.now().toString(16)}`
+    const events = JSON.parse(
+      JSON.stringify(USER_SESSION.events).replaceAll('__USER_SKILL_ID__', id).replaceAll('__USER_SKILL_SHA16__', sha16(content)),
+    )
+    const seeded = await api.post(`/api/conversations/by-session/${session}/messages`, {
+      data: { projectId, userId: admin, messages: events },
+      headers: { 'Content-Type': 'application/json', 'x-internal-key': envValue('INTERNAL_API_KEY') },
+    })
+    expect(seeded.status(), await seeded.text()).toBe(201)
+    ownSessions.push(session)
+    return session
+  }
+
+  const ownSkillList = async () =>
+    (await (await api.get(`/api/users/${admin}/attack-skills`)).json()) as {
+      id: string; name: string; version: number | null; derivedFromName: string | null; pendingChangeSetIds: string[]
+    }[]
+
+  const projectToggles = async () =>
+    (((await (await api.get(`/api/projects/${projectId}`)).json()) as { attackSkillConfig: { user?: Record<string, boolean> } })
+      .attackSkillConfig.user ?? {})
+
+  test('improve one of your own skills: saved as a new skill, used in the project instead of the old one', async ({ page }) => {
+    test.setTimeout(600_000)
+    test.skip(!ready || !firstLabel || !WITH_PICKER, 'Needs Skiller 1.1.0 installed by the first test.')
+    const stamp = Date.now().toString(36)
+    const name = `${USER_SESSION.skillName} ${stamp}`
+
+    // The source skill, on in the project.
+    const created = await api.post(`/api/users/${admin}/attack-skills`, {
+      data: { name, description: USER_SESSION.skillDescription, content: USER_SESSION.skillContent },
+      headers: { 'Content-Type': 'application/json' },
+    })
+    expect(created.status(), await created.text()).toBe(201)
+    const source = ((await created.json()) as { id: string }).id
+    ownSkills.push(source)
+    const project = (await (await api.get(`/api/projects/${projectId}`)).json()) as { attackSkillConfig: Record<string, unknown> }
+    savedToggles = project.attackSkillConfig
+    const on = await api.put(`/api/projects/${projectId}`, {
+      data: { attackSkillConfig: { ...project.attackSkillConfig, user: { ...(await projectToggles()), [source]: true } } },
+      headers: { 'Content-Type': 'application/json' },
+    })
+    expect(on.ok(), await on.text()).toBeTruthy()
+
+    // The picker lists both skills of the session; pick the person's own.
+    const first = await seedUserSession(source, USER_SESSION.skillContent)
+    await openSession(page, first)
+    await gear(page, 'Improve skill from this session')
+    const picker = page.getByRole('dialog', { name: 'Choose a skill' })
+    await expect(picker.getByTestId(`pick-${SQLI}`)).toContainText('Built-in')
+    await expect(picker.getByTestId(`pick-user_skill:${source}`)).toContainText('Your skill')
+    await pick(page, `user_skill:${source}`, 'user')
+
+    // The job names the skill as the person's own.
+    const job = page.getByRole('dialog', { name: 'Improve skill from this session' })
+    await expect(job.getByText(`${name} (your skill)`)).toBeVisible({ timeout: 30_000 })
+
+    // The review: a new skill, named v2 by default; a taken name is refused.
+    const review = page.getByRole('dialog', { name: `New version of "${name}"` })
+    await expect(review).toBeVisible({ timeout: 120_000 })
+    const nameInput = review.getByLabel('Name', { exact: true })
+    await expect(nameInput).toHaveValue(`${name} v2`)
+    await nameInput.fill(name.toUpperCase())
+    await expect(review.getByText(/You already have a skill with this name/)).toBeVisible()
+    await expect(review.getByTestId('save-new-skill')).toBeDisabled()
+    await nameInput.fill(`${name} v2`)
+    await expect(review.getByText('✓ available')).toBeVisible()
+    await expect(review.getByLabel(/^Use it in project/)).toBeChecked()
+    await expect(review.getByLabel(new RegExp(`instead of "${name}"`))).toBeChecked()
+    await shot(page, 'user_review')
+    await review.getByTestId('save-new-skill').click()
+    await expect(review).toBeHidden({ timeout: 30_000 })
+
+    // An ordinary skill of the person's, on in the project in place of its source.
+    const saved = (await ownSkillList()).find((s) => s.name === `${name} v2`)
+    expect(saved).toBeTruthy()
+    ownSkills.push(saved!.id)
+    expect(saved!.version).toBe(2)
+    expect(saved!.derivedFromName).toBe(name)
+    const toggles = await projectToggles()
+    expect(toggles[saved!.id]).toBe(true)
+    expect(toggles[source]).toBe(false)
+    await page.goto('/settings?tab=skills')
+    const card = page.getByTestId(`user-skill-${saved!.id}`)
+    await expect(card).toContainText(`v2 · from ${name}`)
+    await shot(page, 'user_skill_saved')
+
+    // A session on v2 suggests v3; the picker and the review fit a phone. The graph page itself
+    // is not laid out for one, so the session is opened at desktop width and the window then shrinks.
+    const v2Text = ((await (await api.get(`/api/users/${admin}/attack-skills/${saved!.id}`)).json()) as { content: string }).content
+    const second = await seedUserSession(saved!.id, v2Text)
+    await openSession(page, second)
+    await gear(page, 'Improve skill from this session')
+    await expect(picker).toBeVisible()
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect(picker.getByRole('button', { name: 'Start' })).toBeInViewport()
+    await shot(page, 'picker_phone')
+    await pick(page, `user_skill:${saved!.id}`)
+    const review2 = page.getByRole('dialog', { name: `New version of "${name} v2"` })
+    await expect(review2).toBeVisible({ timeout: 120_000 })
+    await expect(review2.getByLabel('Name', { exact: true })).toHaveValue(`${name} v3`)
+    await expect(review2.getByTestId('save-new-skill')).toBeInViewport()
+    await shot(page, 'user_review_phone')
+    await review2.getByRole('button', { name: 'Close', exact: true }).click()
+    await page.setViewportSize({ width: 1280, height: 800 })
+
+    // Deleting v2 would also delete its proposal waiting for review: the confirmation says so.
+    await expect.poll(async () => (await ownSkillList()).find((s) => s.id === saved!.id)?.pendingChangeSetIds.length).toBe(1)
+    await page.goto('/settings?tab=skills')
+    await card.getByTitle('Delete').click()
+    await expect(page.getByText('Its 1 proposal waiting for review is deleted too.')).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+
+    // Uninstalling Skiller says the saved skills are not affected, whether its data is kept or
+    // deleted (the next test uninstalls).
+    await page.goto('/plugins')
+    await page.getByTestId('plugin-card-skiller').getByRole('button', { name: 'Uninstall' }).click()
+    await expect(page.getByRole('dialog').getByText(/Skills people saved from its proposals as their own are not affected/)).toHaveCount(2)
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
   })
 
   test('versions, delete, reset, numbers never reused, the model gate, uninstall and reinstall', async ({ page }) => {
@@ -408,9 +573,10 @@ test.describe.serial('Skiller', () => {
     const third = await improveAndApprove(page, 1, 'third')
     expect(third).toBe(second + 1)
 
-    // Without a model, the action opens the model chooser instead of running.
+    // Without a model, the action opens the model chooser instead of running (after the pick).
     await setModel('')
     await gear(page, 'Improve skill from this session')
+    await pick(page, SQLI)
     const gate = page.getByRole('dialog', { name: /Choose a model for Skiller/ })
     await expect(gate).toBeVisible()
     await shot(page, 'model_gate')
@@ -447,5 +613,13 @@ test.describe.serial('Skiller', () => {
     else await expect(card).toHaveCount(0)
     rows = await versions()
     expect(rows).toEqual([])
+
+    // A skill saved from Skiller's proposal is the person's own: the purge deletes only the
+    // proposal records, never the skill.
+    if (ownSkills.length > 1) {
+      const kept = await ownSkillList()
+      for (const id of ownSkills) expect(kept.some((s) => s.id === id), id).toBe(true)
+      expect(kept.every((s) => s.pendingChangeSetIds.length === 0)).toBe(true)
+    }
   })
 })

@@ -6,6 +6,8 @@ import { bodyOwnerMatches, ownsScope } from '@/lib/plugins/changeSetAccess'
 import * as ov from '@/lib/plugins/overrides'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
 import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill, validateSkillParts } from '@/lib/plugins/skillPartsRegistry'
+import { adoptUserSkillVersion } from '@/lib/plugins/userSkillAdoption'
+import { auditActorFor, userSkillErrorResponse } from '@/lib/userSkillWrites'
 
 /**
  * POST /api/plugins/overrides/change-sets/[id]/approve: make a proposed version active
@@ -16,6 +18,12 @@ import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill, validateS
  * re-validated by the agent's batch validator (whole-skill total included, so a lowered
  * PLUGIN_SKILL_TEXT_MAX_GROWTH is honoured). An approval the running agent could not apply is
  * refused, not stored: 503 when the agent has no /plugins/skill-parts.
+ *
+ * A `user_skill.text` set is never made active: it is SAVED AS A NEW USER SKILL of the
+ * owner's (lib/plugins/userSkillAdoption.ts), with the body `{scopeOwnerId, name,
+ * description?, projectId?, enableNew, disableSource, acknowledgedRiskLines}` and the answer
+ * `{skillId, name, version}`. `projectId` must be a project the scope owner owns (strict,
+ * never requireProjectAccess). Nothing of the agent registry is read for it.
  */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +44,29 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!set || !(await ownsScope(set.scope, eff.userId))) return notFound()
   if (!bodyOwnerMatches(set.scope, eff.userId, parsed.body.scopeOwnerId)) {
     return refuse(403, 'wrong_owner', 'This version does not belong to the user you are acting as.')
+  }
+
+  if (set.point === ov.USER_SKILL_POINT) {
+    const body = parsed.body
+    const session = await getSession()
+    try {
+      const saved = await adoptUserSkillVersion({
+        changeSetId: id,
+        ownerId: eff.userId,
+        actor: { ...auditActorFor(session?.userId ?? eff.userId, eff.userId), actorId: session?.userId ?? eff.userId },
+        name: body.name,
+        description: body.description,
+        projectId: typeof body.projectId === 'string' && body.projectId ? body.projectId : null,
+        enableNew: body.enableNew === true,
+        disableSource: body.disableSource === true,
+        acknowledgedRiskLines: body.acknowledgedRiskLines,
+      })
+      return NextResponse.json(saved)
+    } catch (e) {
+      const refused = userSkillErrorResponse(e)
+      if (refused) return refused
+      throw e
+    }
   }
 
   // Current factory hashes and texts, cache cleared so approval checks what the agent runs now.

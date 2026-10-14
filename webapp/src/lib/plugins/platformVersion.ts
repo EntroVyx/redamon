@@ -5,4 +5,4 @@
  * bump, and every plugin whose `platform` range excludes the new value becomes
  * incompatible. The runner image reports the version it was built with and must match.
  */
-export const PLUGIN_PLATFORM_VERSION = '1.0.0'
+export const PLUGIN_PLATFORM_VERSION = '1.1.0'

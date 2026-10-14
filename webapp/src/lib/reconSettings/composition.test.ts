@@ -44,6 +44,7 @@ function legalValue(key: string, spec: RegistryField): unknown {
     case 'number-list':
       return [200]
     case 'json':
+      if (spec.validator === 'attack_skill_config') return { builtIn: {}, user: {} }
       return {}
     case 'datetime':
       return new Date(0).toISOString()

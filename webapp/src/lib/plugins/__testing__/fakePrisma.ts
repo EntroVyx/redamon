@@ -19,6 +19,10 @@
  *   (async) lock held until the transaction ends, so two interleaved transactions
  *   serialize exactly where Postgres would and nowhere else; the only other raw
  *   statement is the purge's removal of a `feature_models` key;
+ * - `$queryRaw` answers only the two user-skill name queries of userSkillNames.ts (found
+ *   by their marker comment), with an ASCII-whitespace key that approximates Postgres's;
+ *   userSkillNames.pg.integration.test.ts runs the real one;
+ * - a unique key with a NULL in it never collides, as in Postgres;
  * - `@default(cuid())`, `@default(now())` and `@updatedAt` are applied, with the
  *   platform clock.
  *
@@ -43,6 +47,9 @@ export type TableName =
   | 'userSettings'
   | 'conversation'
   | 'chatMessage'
+  | 'userAttackSkill'
+  | 'userProjectPreset'
+  | 'auditLog'
 
 interface TableSpec {
   pk: string
@@ -117,9 +124,38 @@ const TABLES: Record<TableName, TableSpec> = {
     }),
   },
   chatMessage: { pk: 'id', uniques: {}, defaults: () => ({ memberIdKey: null, fireteamIdKey: null }) },
+  userAttackSkill: {
+    pk: 'id',
+    uniques: { originChangeSetId: ['originChangeSetId'] },
+    defaults: () => ({
+      description: null,
+      derivedFromId: null,
+      lineageRootId: null,
+      version: null,
+      originChangeSetId: null,
+      originPluginId: null,
+      originPluginVersion: null,
+      originChain: [],
+      quarantinedAt: null,
+      quarantineReason: null,
+      quarantinedFor: null,
+      releasedFor: [],
+    }),
+  },
+  userProjectPreset: { pk: 'id', uniques: {}, defaults: () => ({ description: '' }) },
+  auditLog: { pk: 'id', uniques: {}, defaults: () => ({ actorId: null, targetId: null, before: null, after: null, source: 'api' }) },
 }
-const HAS_UPDATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride', 'pluginPlatformState', 'conversation', 'userSettings']
-const HAS_CREATED_AT: TableName[] = ['pluginInstall', 'pluginData', 'pluginOverride', 'conversation', 'chatMessage']
+const HAS_UPDATED_AT: TableName[] = [
+  'pluginInstall', 'pluginData', 'pluginOverride', 'pluginPlatformState', 'conversation', 'userSettings', 'userAttackSkill',
+]
+const HAS_CREATED_AT: TableName[] = [
+  'pluginInstall', 'pluginData', 'pluginOverride', 'conversation', 'chatMessage', 'userAttackSkill', 'auditLog',
+]
+
+/** The name key of userSkillNames.ts (NFC, JavaScript's whitespace set), for tests. */
+export function fakeNameKey(name: string): string {
+  return name.normalize('NFC').replace(/\s+/gu, ' ').replace(/^ | $/g, '').toLowerCase()
+}
 
 const clone = <T>(v: T): T => (v === undefined ? v : structuredClone(v))
 
@@ -145,7 +181,7 @@ const cmp = (a: unknown, b: unknown): number => {
   return x < y ? -1 : x > y ? 1 : 0
 }
 
-const OPERATORS = new Set(['equals', 'in', 'notIn', 'lt', 'lte', 'gt', 'gte', 'not', 'startsWith', 'contains'])
+const OPERATORS = new Set(['equals', 'in', 'notIn', 'lt', 'lte', 'gt', 'gte', 'not', 'startsWith', 'contains', 'has', 'hasSome'])
 
 /** Postgres LIKE: `_` is one character, `%` any run, a backslash escapes the next one. */
 function like(value: unknown, pattern: string): boolean {
@@ -199,6 +235,9 @@ function matchField(value: unknown, cond: unknown): boolean {
       case 'not': if (isOperatorObject(arg) ? matchField(value, arg) : eq(value, arg)) return false; break
       case 'startsWith': if (!like(value, `${arg}%`)) return false; break
       case 'contains': if (!like(value, `%${arg}%`)) return false; break
+      // Scalar lists (String[]).
+      case 'has': if (!Array.isArray(value) || !value.some((v) => eq(v, arg))) return false; break
+      case 'hasSome': if (!Array.isArray(value) || !(arg as unknown[]).some((a) => value.some((v) => eq(v, a)))) return false; break
     }
   }
   return true
@@ -303,6 +342,7 @@ export interface FakeDelegate {
 export interface FakePrisma extends Record<TableName, FakeDelegate> {
   $transaction<T>(fn: (tx: FakePrisma) => Promise<T>): Promise<T>
   $executeRaw(strings: TemplateStringsArray, ...values: unknown[]): Promise<number>
+  $queryRaw(query: { sql: string; values: unknown[] }): Promise<unknown[]>
   /** Every raw statement, with its values, in order (for assertions). */
   rawCalls: { sql: string; values: unknown[] }[]
   /** Tables, keyed by primary key. */
@@ -336,6 +376,7 @@ export function createFakePrisma(): FakePrisma {
         throw known('P2002', `Unique constraint failed on ${spec.pk}`, { target: [spec.pk] })
       }
       for (const [name, fields] of Object.entries(spec.uniques)) {
+        if (fields.some((f) => row[f] === null || row[f] === undefined)) continue
         if (fields.every((f) => eq(other[f], row[f]))) {
           throw known('P2002', `Unique constraint failed on ${name}`, { target: fields })
         }
@@ -508,6 +549,25 @@ export function createFakePrisma(): FakePrisma {
         return count
       }
       throw new Error(`fakePrisma: raw SQL not supported: ${sql}`)
+    }
+    c.$queryRaw = async (query: { sql?: string; values?: unknown[] }) => {
+      const sql = String(query?.sql ?? '')
+      const values = query?.values ?? []
+      rawCalls.push({ sql, values })
+      if (sql.includes('/* user_skill_name_taken */')) {
+        // values: userId, the whitespace pattern, the name, the pattern again, the excepted id.
+        const [userId, , name, , exceptId] = values as string[]
+        const key = fakeNameKey(name)
+        const taken = [...tables.userAttackSkill.values()].some(
+          (r) => r.userId === userId && r.id !== exceptId && fakeNameKey(String(r.name)) === key,
+        )
+        return [{ taken }]
+      }
+      if (sql.includes('/* user_skill_name_keys */')) {
+        const names = values[1] as string[]
+        return names.map((n, i) => ({ i: i + 1, k: fakeNameKey(n) }))
+      }
+      throw new Error(`fakePrisma: raw query not supported: ${sql}`)
     }
     c.$transaction = async (arg: unknown) => {
       if (Array.isArray(arg)) return Promise.all(arg)

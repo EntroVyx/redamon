@@ -260,7 +260,7 @@ export async function findInstall(pluginId: string, db: Db = prisma): Promise<Pl
 // without touching the admin's `enabled`.
 // ---------------------------------------------------------------------------
 
-const isRevoked = (row: Pick<PluginInstall, 'revokedReason'>) => row.revokedReason != null
+export const isRevoked = (row: Pick<PluginInstall, 'revokedReason'>) => row.revokedReason != null
 
 type RowFacts = Pick<PluginInstall, 'status' | 'enabled' | 'revokedReason' | 'grantedPermissions'>
 

@@ -5,6 +5,8 @@ System prompts for the ReAct agent orchestrator.
 Includes phase-aware reasoning, tool descriptions, and structured output formats.
 """
 
+import logging
+
 # Re-export from base
 from .base import (
     TOOL_REGISTRY,
@@ -151,6 +153,41 @@ from project_settings import get_setting, get_allowed_tools_for_phase, get_hydra
 
 # Called as _seam.resolve_skill_part(...) so one patch of the module reaches every site.
 from . import skill_part_seam as _seam
+
+logger = logging.getLogger(__name__)
+
+USER_SKILL_PREFIX = "user_skill:"
+
+
+def resolve_user_skill(attack_path_type) -> dict | None:
+    """The enabled user skill whose text a `user_skill:<id>` label renders, or None.
+
+    The skill itself while it is enabled. Otherwise the enabled skill whose `supersedes`
+    lists the id: the webapp marks, per project, which turned-off versions of a skill
+    each enabled version replaces, so a session labelled with an older version (an
+    approval, answer or tool-confirmation resume keeps its label) renders the version
+    the person switched to. Only the rendered text follows the successor: the label,
+    the chain graph and the phase stay as they are. Never raises.
+    """
+    try:
+        if not isinstance(attack_path_type, str) or not attack_path_type.startswith(USER_SKILL_PREFIX):
+            return None
+        skill_id = attack_path_type[len(USER_SKILL_PREFIX):]
+        if not skill_id:
+            return None
+        from project_settings import get_enabled_user_skills
+        enabled = get_enabled_user_skills()
+        skill = next((s for s in enabled if s["id"] == skill_id), None)
+        if skill is None:
+            # The webapp gives each superseded id to one enabled version only; when two
+            # claim it anyway, the first in the enabled order wins.
+            skill = next((s for s in enabled
+                          if isinstance(s.get("supersedes"), list) and skill_id in s["supersedes"]),
+                         None)
+        return skill
+    except Exception as exc:  # noqa: BLE001 - a lookup failure renders no user skill
+        logger.warning("user skill for %r not resolved: %s", attack_path_type, exc)
+        return None
 
 
 def _msf_search_failed(execution_trace: list) -> bool:
@@ -594,14 +631,13 @@ def get_phase_tools(
         if session_config:
             parts.append(session_config)
 
-    # Helper: resolve user skill content (used across all phases)
-    def _resolve_user_skill() -> str | None:
-        if not attack_path_type.startswith("user_skill:"):
-            return None
-        from project_settings import get_enabled_user_skills
-        skill_id = attack_path_type.split(":", 1)[1]
-        skill = next((s for s in get_enabled_user_skills() if s['id'] == skill_id), None)
-        return f"## User Attack Skill: {skill['name']}\n\n{skill['content']}" if skill else None
+    # The same skill in every phase: the label's own, or the version that supersedes it.
+    user_skill = resolve_user_skill(attack_path_type)
+    user_skill_block = (f"## User Attack Skill: {user_skill['name']}\n\n{user_skill['content']}"
+                        if user_skill else None)
+
+    def _record_user_skill() -> None:
+        _seam.record_applied_user(user_skill["id"], user_skill["content"])
 
     # Helper: inject built-in skill workflow prompts (used in both informational and exploitation).
     # Delegates to the module-level build_builtin_skill_workflow so LATS expand shares the same playbook.
@@ -622,13 +658,13 @@ def get_phase_tools(
     # replacements. The descriptions teach the LLM what each tool does;
     # the skill workflow tells it the playbook for the current attack.
     if phase == "informational":
-        user_skill_content = _resolve_user_skill()
-        if user_skill_content:
+        if user_skill_block:
             parts.append(
-                user_skill_content + "\n\n"
+                user_skill_block + "\n\n"
                 "**Current phase is informational.** Follow the skill's reconnaissance "
                 "steps to gather target info, then request transition to exploitation."
             )
+            _record_user_skill()
         else:
             _inject_builtin_skill_workflow()
 
@@ -637,10 +673,11 @@ def get_phase_tools(
         # attack paths (CVE exploit, brute force, etc.). They append to
         # — not replace — the generic tool descriptions above.
         if not _inject_builtin_skill_workflow():
-            if attack_path_type.startswith("user_skill:"):
-                user_skill_content = _resolve_user_skill()
-                if user_skill_content:
-                    parts.append(user_skill_content)
+            if attack_path_type.startswith(USER_SKILL_PREFIX):
+                if user_skill_block:
+                    parts.append(user_skill_block)
+                    # After the built-in attempt, which recorded None for this label.
+                    _record_user_skill()
                 else:
                     parts.append(UNCLASSIFIED_EXPLOIT_TOOLS)
             elif attack_path_type.endswith("-unclassified"):
@@ -651,13 +688,13 @@ def get_phase_tools(
             parts.append("\n**NOTE:** Post-exploitation phase is DISABLED. Complete exploitation and use action='complete'.\n")
 
     elif phase == "post_exploitation":
-        user_skill_content = _resolve_user_skill()
-        if user_skill_content:
+        if user_skill_block:
             parts.append(
-                user_skill_content + "\n\n"
+                user_skill_block + "\n\n"
                 "**Current phase is post-exploitation.** Follow the skill's "
                 "post-exploitation steps if defined, or use available tools."
             )
+            _record_user_skill()
         elif "metasploit_console" in allowed_tools:
             if is_statefull:
                 parts.append(POST_EXPLOITATION_TOOLS_STATEFULL)
@@ -769,4 +806,5 @@ __all__ = [
     "DEEP_THINK_SELF_REQUEST_INSTRUCTION",
     # Function
     "get_phase_tools",
+    "resolve_user_skill",
 ]

@@ -1699,11 +1699,15 @@ fields:
     traffic: active
     roe_capped: false
     mcp: settable
-    validator: json_object
+    validator: attack_skill_config
     group: agent
     meaning: >-
-      Per-project enable state for the built-in attack skills. Rewritten across
-      every project when a user deletes one of their own skills.
+      Per-project enable state of the attack skills: `builtIn` maps each built-in
+      skill id to on or off, `user` maps the project owner's own uploaded skills
+      by id. A user skill is on only when set to true (missing is off); at most
+      20 of the owner's skills may be on, ids the owner does not have are dropped,
+      and a quarantined skill cannot be turned on. Rewritten across every project
+      when a user deletes one of their own skills.
     form_section: "AttackSkillsSection"
   baddnsDockerImage:
     tool: baddns

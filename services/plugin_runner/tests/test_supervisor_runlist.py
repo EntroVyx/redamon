@@ -1,6 +1,7 @@
 """The run list: the supervisor asks the webapp which plugins to run and converges its
 workers on it (README.PLUGINS.md §7.2, D-38)."""
 
+from platform_version import PLATFORM_VERSION
 from tests.support import RUNNER_KEY, install_plugin, pid_alive, run_list, wait_until
 
 
@@ -15,7 +16,7 @@ def test_a_listed_plugin_gets_a_worker_at_start(runner, plugins_dir):
     h = runner([install_plugin(plugins_dir)])
     health = h.health()
     assert health["state"] == "ok"
-    assert health["platformVersion"] == "1.0.0"
+    assert health["platformVersion"] == PLATFORM_VERSION
     assert [(w["id"], w["version"]) for w in health["workers"]] == [("echo", "1.0.0")]
     w = health["workers"][0]
     assert pid_alive(w["pid"]) and w["inFlight"] == 0 and w["restarts"] == 0 and w["startedAt"]

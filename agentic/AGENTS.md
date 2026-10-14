@@ -37,6 +37,20 @@ When performing these actions, ALWAYS invoke the corresponding skill FIRST:
 - **NEVER** give the agent white-box knowledge of a target. RedAmon agents
   operate black-box (no source access to the systems they test); prompts,
   skills, and tools must not assume target internals.
+- **ALWAYS** read user attack skills through `get_enabled_user_skills()`
+  ([project_settings.py](project_settings.py)), never `USER_ATTACK_SKILLS`
+  directly. A skill with no key in `ATTACK_SKILL_CONFIG.user` is OFF (only an
+  explicit `true` enables it, as in the project form), and at most
+  `MAX_ENABLED_USER_SKILLS` (20, first by name then id) are used.
+- **ALWAYS** resolve a `user_skill:<id>` label with `resolve_user_skill()`
+  ([prompts/\_\_init\_\_.py](prompts/__init__.py)). When the label's skill is off,
+  it returns the enabled skill whose `supersedes` lists it. That substitution is
+  render-only: never relabel, `switch_skill`, write Neo4j or reset LATS for it.
+- **ALWAYS** record rendered user-skill text with `record_applied_user()`
+  ([prompts/skill_part_seam.py](prompts/skill_part_seam.py)): `skill_workflow`
+  becomes `{skillId: "user_skill:<id>", kind: "user", contentSha256}` (16 hex of
+  the UTF-8 content's SHA-256) with **no `revision` key**, so every reader takes
+  `revision` with a default.
 
 ---
 

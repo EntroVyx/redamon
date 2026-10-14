@@ -37,7 +37,7 @@ const INDEX_DEF =
 // Keep in step with PLUGIN_STATUSES (registry.ts) and OVERRIDE_STATUSES (overrides.ts);
 // a vitest compares them.
 const INSTALL_STATUSES = ['available', 'installing', 'ready', 'failed', 'incompatible', 'updating', 'uninstalling']
-const OVERRIDE_STATUSES = ['proposed', 'active', 'rejected', 'withdrawn', 'superseded', 'stale', 'cleared']
+const OVERRIDE_STATUSES = ['proposed', 'active', 'rejected', 'withdrawn', 'superseded', 'stale', 'cleared', 'adopted']
 
 const inList = (values) => values.map((v) => `'${v}'`).join(', ')
 
@@ -51,7 +51,7 @@ const CHECKS = [
   {
     table: 'plugin_overrides',
     family: 'plugin_overrides_status_ck',
-    name: 'plugin_overrides_status_ck1',
+    name: 'plugin_overrides_status_ck2',
     check: `status IN (${inList(OVERRIDE_STATUSES)})`,
   },
   {
@@ -166,6 +166,23 @@ async function ensureCheck(prisma, { table, family, name, check }) {
   }
 }
 
+/**
+ * ensureCheck drops a lower-numbered check BEFORE adding its successor, so a failed add
+ * leaves no status check at all rather than one that refuses the newest status. Say so
+ * loudly: the override store still refuses an unknown status, but the wall is down.
+ */
+async function verifyStatusCheck(prisma) {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = 'plugin_overrides'::regclass AND contype = 'c' AND conname LIKE 'plugin_overrides_status_ck%'`
+  )
+  const complete = rows.some(({ def }) => OVERRIDE_STATUSES.every((s) => def.includes(`'${s}'`)))
+  if (!complete) {
+    const found = rows.map((r) => r.conname).join(', ') || 'none'
+    console.error(`ERROR [plugins] plugin_overrides has no status check listing every status (${OVERRIDE_STATUSES.join(', ')}); found: ${found}`)
+  }
+}
+
 async function main() {
   const prisma = new PrismaClient()
   try {
@@ -175,6 +192,7 @@ async function main() {
     }
     await ensureOneActiveIndex(prisma)
     for (const c of CHECKS) await ensureCheck(prisma, c)
+    await verifyStatusCheck(prisma)
   } catch (err) {
     console.error('[plugins] constraint script failed:', err?.message || err)
   } finally {

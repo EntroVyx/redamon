@@ -163,6 +163,9 @@ export function JobProgressModal({
     <Modal isOpen onClose={onClose} title={job.label} footer={footer} closeOnOverlayClick={false}>
       <div className={styles.jobBody}>
         <PluginBadge label={job.displayName} />
+        {job.skillName !== undefined && (
+          <div className={styles.jobSkill} data-testid="job-skill">Skill: {job.skillName ?? 'a deleted skill'}</div>
+        )}
 
         {!terminal && !fatal && (
           <>

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrade notes
+
+- **A user skill with no toggle in a project is now OFF everywhere**: the agent, the chat's skills tooltip and the project form agree. So that nothing that runs today stops, the first start of this version turns every skill you never toggled ON explicitly in your existing projects (at most 20 per project); from then on a new skill starts off until you turn it on. The one-time step is recorded in the audit log as `system.user_skill_toggles_backfill`.
+- **Plugin platform 1.1.0.** Rebuild the webapp, the agent and the plugin runner together (`./redamon.sh update` does); a runner of another platform version runs no worker. Plugins written for 1.0.0 keep working. Updating a plugin to a release that asks for the new `override:user_skill.text` permission needs an admin's consent; until then it stays on its current version.
+
+### Added
+
+- **Skiller and other plugins can improve your own Agent Skills** (plugin platform 1.1.0, the `user_skill.text` point and the `override:user_skill.text` permission). From a chat's gear menu, **Improve skill from this session** first opens a **skill picker**: the skills the agent used in the session, built-in and your own, with how many turns used each. For one of your own skills, saving the reviewed proposal (**Save as new skill**) creates a **new skill** named `<name> vN` by default (another name can be typed); the original is never changed. Opened from a project, the review window offers to use the new skill there instead of the old one (on by default). The saved skill is an ordinary skill of yours, in Global Settings, every project and the chat drawer, and stays if the plugin is removed. Requires Skiller 1.1.0.
+- **Global Settings → Agent Skills**: search, the count of your skills ("N of 1000"), a **rename** in the Edit window, a version badge ("v3 · from …"), the proposals waiting for review per skill, a flag on two skills with the same name, and the quarantine banner with **Release**.
+- **Project → Attack Skills**: search, "Enabled only", "N of 20 enabled", version badges, and a note when two versions of one skill are on together.
+- **Skill versions** has a "Your skills" group: a skill's proposals, its family of saved versions, and **Delete older versions** (keeps the newest and any version on in a project).
+- **The agent records which of your skills it followed**: `phase_update.skill_workflow` is `{skillId: "user_skill:<id>", kind: "user", contentSha256}` when your skill's text was in its instructions. A session whose skill was replaced by a newer version in its project follows the newer one from its next message or resume.
+
+### Changed
+
+- **Up to 1,000 Agent Skills per user** (was 20); **at most 20 of them on in one project**, enforced by every writer (the project form, the API, MCP, presets, project import).
+- **Skill names are unique per user**, ignoring case and spacing, on upload, rename, community import and save; at most 100 characters. Existing duplicates are flagged for renaming, never renamed for you.
+- **Applying a preset keeps your own skills' toggles** unless the preset itself names them.
+- The chat drawer's settings windows save **only the fields you changed**, and say when a save fails.
+- **Community import** reports why each skill was skipped (already yours, over the limit, too large, could not be fetched) and checks the name each skill is created with.
+- A plugin's data export (`exportVersion` 2) no longer holds the text plugins proposed for people's own skills.
+
+### Security
+
+- **Saving a plugin's proposal needs the plugin still serving at the version that made it**; a revoked version's waiting proposals are withdrawn and the skills saved from its proposals, and the versions saved from those since, are **quarantined** (off everywhere, out of the agent's prompt) until their owner reads and releases them, also when the plugin is no longer installed.
+- **A plugin reads your own skill only when its session used it**, never another user's, and never one whose text holds a key or token in a recognised format (a private key, a JWT, an API token); every refusal looks the same, so ids cannot be probed. The proposed text is checked by the agent (no reserved markers, Rules of Engagement headings or hidden characters that the source did not hold), and lines flagged as risky must be acknowledged before saving.
+- **The platform's own record of a proposal** (the plugin version, conversation and job that made it, what it was built on and what it became) can no longer be set by a plugin.
+- **Every write of a user skill is audited** (`user_attack_skill.create|update|delete|import|release|quarantine`, `plugin.override.adopt`), and reject and delete decisions record the user an admin acted for.
+
 ## [7.0.0] - 2026-10-12
 
 ### Added

@@ -31,7 +31,7 @@ import { POST as offlineInstall } from '@/app/api/plugins/offline-install/route'
 let db: FakePrisma
 let w: LifecycleWorld
 const dev = makeKeyPair('dev-offline')
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 
 beforeEach(async () => {
   db = createFakePrisma()

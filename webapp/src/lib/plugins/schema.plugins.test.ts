@@ -96,6 +96,17 @@ describe('the constraint script', () => {
     expect(entry!).toMatch(/apply-plugin-constraints\.mjs 2>&1 \|\| echo "\[plugins\] constraint script failed"/)
   })
 
+  test('the one-time user-skill toggle backfill runs after db push and before the server, never fatally', () => {
+    const entry = dockerfile.split('\n').find((l) => l.startsWith('RUN printf') && l.includes('entrypoint'))!
+    const push = entry.indexOf('db push')
+    const backfill = entry.indexOf('backfill-user-skill-toggles.mjs')
+    const server = entry.indexOf('exec node server.js')
+    expect(backfill).toBeGreaterThan(push)
+    expect(server).toBeGreaterThan(backfill)
+    // No `|| exit`: the script logs a failure and the next boot retries it.
+    expect(entry).toMatch(/node scripts\/backfill-user-skill-toggles\.mjs 2>&1\\n/)
+  })
+
   test('uses an index name Prisma never generates', () => {
     expect(script).toContain("const INDEX = 'plugin_overrides_one_active'")
     expect('plugin_overrides_one_active').not.toMatch(/_(key|idx|pkey|fkey)$/)

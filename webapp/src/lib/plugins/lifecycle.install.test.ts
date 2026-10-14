@@ -25,7 +25,7 @@ import { stagingPath, versionPath } from './staging'
 
 let db: FakePrisma
 let w: LifecycleWorld
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 
 beforeEach(async () => {
   db = createFakePrisma()

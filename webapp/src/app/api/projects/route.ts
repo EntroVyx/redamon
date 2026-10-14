@@ -6,6 +6,7 @@ import { getGraphSession } from '@/app/api/graph/neo4j'
 import { isBlankModelField } from '@/components/projects/ProjectForm/projectLlmGate.logic'
 import { requireEffectiveUser, ownerScope } from '@/lib/access'
 import { validateJevEngineChange } from '@/lib/reconSettings/jevEngine'
+import { normalizeUserSkillToggles, UserSkillError } from '@/lib/userSkills'
 import { validateDomainBatch, splitWildcard } from '@/lib/domainBatch'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || 'http://localhost:8080'
@@ -305,6 +306,16 @@ export async function POST(request: NextRequest) {
     }
     if (typeof sanitizedParams.targetIps === 'object' && Array.isArray(sanitizedParams.targetIps)) {
       sanitizedParams.targetIps = (sanitizedParams.targetIps as string[]).map(s => s.trim()).filter(Boolean)
+    }
+
+    // The user-skill toggles may name only the creator's own skills, at most 20 of them on.
+    if ('attackSkillConfig' in sanitizedParams) {
+      try {
+        sanitizedParams.attackSkillConfig = await normalizeUserSkillToggles(prisma, userId, sanitizedParams.attackSkillConfig)
+      } catch (e) {
+        if (e instanceof UserSkillError) return NextResponse.json({ error: e.message, code: e.code }, { status: 400 })
+        throw e
+      }
     }
 
     // A new project starts with every engine on the LLM, so any Jev flag in the

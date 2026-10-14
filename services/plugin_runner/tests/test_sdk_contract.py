@@ -36,7 +36,7 @@ def test_the_sdk_imports_only_the_standard_library_and_itself():
 
 
 def test_the_sdk_declares_the_runner_platform_version():
-    assert redamon_plugin_sdk.PLATFORM_VERSION == platform_version.PLATFORM_VERSION == "1.0.0"
+    assert redamon_plugin_sdk.PLATFORM_VERSION == platform_version.PLATFORM_VERSION == "1.1.0"
     assert json.loads(CONTRACT_CASES.read_text())["platformVersion"] == platform_version.PLATFORM_VERSION
 
 

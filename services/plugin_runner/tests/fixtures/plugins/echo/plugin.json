@@ -5,7 +5,7 @@
   "description": "The plugin platform's test fixture: one action per runner path, every permission and every extension point. Not a real plugin.",
   "platform": ">=1.0.0 <2.0.0",
   "dataVersion": 1,
-  "permissions": ["session:read", "llm:invoke", "override:skill.text"],
+  "permissions": ["session:read", "llm:invoke", "override:skill.text", "override:user_skill.text"],
   "llmFeature": { "description": "The model the Echo test fixture calls in its call_llm action." },
   "actions": [
     { "id": "echo", "entry": "engine/main.py:echo", "timeoutSeconds": 30 },
@@ -27,6 +27,7 @@
     "nav": { "label": "Echo", "icon": "puzzle", "screen": "ui/home.json" },
     "chat.session.actions": [
       { "label": "Echo this session", "icon": "play", "action": "read_session" },
+      { "label": "Echo a skill of this session", "icon": "sparkles", "action": "echo", "pick": "session.skill" },
       { "label": "Echo skill versions", "icon": "history", "coreScreen": "skill.text.versions" }
     ],
     "project.skills.row": [{ "label": "Echo this skill", "action": "echo" }]

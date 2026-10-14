@@ -2,11 +2,12 @@ import prisma from '@/lib/prisma'
 import { KNOWN_ATTACK_PATH_CONFIG } from '@/app/graph/components/AIAssistantDrawer/phaseConfig'
 import { auditPlugin } from './audit'
 import { BEHAVIOUR_EXTENSION_POINTS, POINT_PERMISSION, type BehaviourExtensionPoint } from './extensionPoints'
-import { GatewayError, type GatewayContext } from './gateway'
+import { assertPermission, GatewayError, type GatewayContext } from './gateway'
 import * as ov from './overrides'
 import type { PluginPermission } from './permissions'
 import { overridesQualify } from './registry'
 import { registrySkill, validateSkillParts, type RegistrySkill } from './skillPartsRegistry'
+import { getUserSkillOverride, proposeUserSkillOverride } from './userSkillOverrideOps'
 
 /**
  * The Gateway's override operations (`sdk.override.*`, README.PLUGINS.md §7.3/§7.6):
@@ -30,6 +31,9 @@ import { registrySkill, validateSkillParts, type RegistrySkill } from './skillPa
  *   text over a version that does not run), the proposal built on no revision of its
  *   scope: `fromRevision` is the factory's, so the review warns that approving replaces
  *   the scope's active version, and `meta.basedOn` names what was shown.
+ *
+ * `user_skill.text` is dispatched on the body's point BEFORE any registry call: a user's
+ * skill is not in the agent's registry (userSkillOverrideOps.ts).
  */
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 const MAX_PARTS = 50
@@ -84,6 +88,7 @@ async function appliedSet(ctx: GatewayContext, point: string, group: string, ski
 }
 
 export async function getOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
+  if (ctx.body.point === ov.USER_SKILL_POINT) return getUserSkillOverride(ctx)
   const { point, group, skill } = await target(ctx)
   const [set, pendingCount] = await Promise.all([
     appliedSet(ctx, point, group, skill),
@@ -166,6 +171,7 @@ function checkReadHashes(ctx: GatewayContext, skill: RegistrySkill, group: strin
 }
 
 export async function proposeOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
+  if (ctx.body.point === ov.USER_SKILL_POINT) return proposeUserSkillOverride(ctx)
   const { point, group, skill } = await target(ctx)
   const scope = proposalScope(ctx)
   if (typeof ctx.body.note !== 'string') throw invalidProposal(400, 'a note is required')
@@ -212,6 +218,9 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
       ...(builtOnActive
         ? {}
         : { basedOn: shown ? { scope: shown.scope.type, changeSetId: shown.changeSetId, revision: shown.revision } : null }),
+      pluginVersion: ctx.version,
+      conversationId: ctx.conversation?.id ?? null,
+      jobId: ctx.claims.jid ?? null,
     },
     createdBy: ctx.userId,
   })
@@ -227,6 +236,7 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
       scopeId: scope.id,
       parts: Object.keys(parts).sort(),
       fromRevision,
+      pluginVersion: ctx.version,
       ...(ctx.actorId ? { onBehalfOf: ctx.userId } : {}),
     },
   })
@@ -234,6 +244,11 @@ export async function proposeOverride(ctx: GatewayContext): Promise<Record<strin
   return { changeSetId, fromRevision, proposedRevisionLabel: `v${next}` }
 }
 
+/**
+ * The route declares no static permission (`permission: 'in-handler'`): the one needed is
+ * that of the set's own point, known only once the set is read. A set that is not this
+ * plugin's is 404 before any permission is looked at, so the answer says nothing about it.
+ */
 export async function withdrawOverride(ctx: GatewayContext): Promise<Record<string, unknown>> {
   const id = ctx.body.changeSetId
   const notFound = new GatewayError(404, 'not_found', `No proposal ${typeof id === 'string' ? id : JSON.stringify(id)} of this plugin.`)
@@ -243,7 +258,8 @@ export async function withdrawOverride(ctx: GatewayContext): Promise<Record<stri
     !!set &&
     ((set.scope.type === 'user' && set.scope.id === ctx.userId) ||
       (set.scope.type === 'project' && set.scope.id === ctx.projectId))
-  if (!set || set.pluginId !== ctx.pluginId || !ownScope) throw notFound
+  if (!set || set.pluginId !== ctx.pluginId || !ownScope || !isPoint(set.point)) throw notFound
+  assertPermission(ctx, POINT_PERMISSION[set.point])
   try {
     await ov.withdraw(id, ctx.pluginId)
   } catch (e) {
@@ -255,7 +271,7 @@ export async function withdrawOverride(ctx: GatewayContext): Promise<Record<stri
     pluginId: ctx.pluginId,
     targetType: 'plugin_change_set',
     targetId: id,
-    after: { targetGroup: set.targetGroup, scope: set.scope.type, scopeId: set.scope.id, ...(ctx.actorId ? { onBehalfOf: ctx.userId } : {}) },
+    after: { point: set.point, targetGroup: set.targetGroup, scope: set.scope.type, scopeId: set.scope.id, ...(ctx.actorId ? { onBehalfOf: ctx.userId } : {}) },
   })
   return { withdrawn: true }
 }

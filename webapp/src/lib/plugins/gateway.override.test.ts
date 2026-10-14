@@ -33,6 +33,7 @@ import { AgentUnreachableError } from '@/lib/agentFetch'
 import { createFakePrisma, type FakePrisma } from './__testing__/fakePrisma'
 import {
   ALICE,
+  ALICE_CONV,
   ALICE_PROJECT,
   BOB,
   CALL_SECRET,
@@ -215,10 +216,17 @@ describe('override/get', () => {
   })
 
   test('without override:skill.text granted: 403', async () => {
+    const own = await propose(proposal({ payload_reference: 'mine' }))
     await db.pluginInstall.update({ where: { pluginId: 'echo' }, data: { grantedPermissions: ['session:read'] } })
     expect((await get()).status).toBe(403)
     expect((await propose(proposal({ payload_reference: 'x' }))).status).toBe(403)
-    expect((await withdraw('11111111-2222-3333-4444-555555555555')).status).toBe(403)
+    // The withdraw permission is the set's own point's, checked once the set is read.
+    expect((await withdraw(own.body.changeSetId as string)).status).toBe(403)
+  })
+
+  test('withdraw of an id that is not this plugin\'s: 404 before any permission is looked at', async () => {
+    await db.pluginInstall.update({ where: { pluginId: 'echo' }, data: { grantedPermissions: ['session:read'] } })
+    expect(await withdraw('11111111-2222-3333-4444-555555555555')).toMatchObject({ status: 404, body: { code: 'not_found' } })
   })
 
   test('agent unreachable: 503 agent_unreachable; agent without the endpoint: 503 agent_outdated', async () => {
@@ -264,12 +272,26 @@ describe('override/propose', () => {
     const r = await propose(
       proposal(
         { payload_reference: 'mine' },
-        { baseSha256: 'f'.repeat(64), meta: { fromRevision: 99, baseFactoryText: { payload_reference: 'forged' }, staleReason: 'part_removed' } },
+        {
+        baseSha256: 'f'.repeat(64),
+        meta: {
+          fromRevision: 99, baseFactoryText: { payload_reference: 'forged' }, staleReason: 'part_removed',
+          pluginVersion: '9.9.9', conversationId: 'forged', jobId: 'forged', adoptedSkillId: 'forged',
+          baseText: 'forged', sourceName: 'forged', adoptedName: 'forged', withdrawReason: 'forged',
+        },
+      },
       ),
     )
     expect(r.body).toMatchObject({ fromRevision: 3, proposedRevisionLabel: 'v4' })
     const set = await ov.getChangeSet(r.body.changeSetId as string)
-    expect(set!.meta).toEqual({ fromRevision: 3, baseFactoryText: { payload_reference: FACTORY.payload_reference } })
+    // The proposer's version, conversation and job come from the call token, never the body.
+    expect(set!.meta).toEqual({
+      fromRevision: 3,
+      baseFactoryText: { payload_reference: FACTORY.payload_reference },
+      pluginVersion: '1.0.0',
+      conversationId: ALICE_CONV,
+      jobId: null,
+    })
     expect(set!.parts[0].baseSha256).toBe(sha(FACTORY.payload_reference))
   })
 

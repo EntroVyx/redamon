@@ -32,7 +32,7 @@ import { commitVersion, stageArchive, stagingPath, versionPath } from './staging
 let db: FakePrisma
 let w: LifecycleWorld
 let clock: Date
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const OP1 = '0f8b6c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b'
 const OP2 = '1f8b6c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b'
 

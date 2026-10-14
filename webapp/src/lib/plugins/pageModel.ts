@@ -254,6 +254,8 @@ export interface PluginDetail {
     activeVersions: number
     /** Approved versions that do not reach the agent while the plugin is in this state. */
     dormantVersions: number
+    /** Proposals for people's own skills: waiting for review, and saved as new skills. */
+    userSkillProposals: { waiting: number; saved: number }
     rollback: RollbackCheck
   }
 }
@@ -274,6 +276,11 @@ export async function buildPluginDetail(pluginId: string, isAdmin: boolean): Pro
     prisma.pluginOverride.findMany({ where: { pluginId, status: 'active' }, select: { changeSetId: true } }),
   ])
   const activeVersions = new Set(overrides.map((o) => o.changeSetId)).size
+  const userSkillRows = await prisma.pluginOverride.findMany({
+    where: { pluginId, extensionPoint: 'user_skill.text', status: { in: ['proposed', 'adopted'] } },
+    select: { changeSetId: true, status: true },
+  })
+  const setsWith = (status: string) => new Set(userSkillRows.filter((r) => r.status === status).map((r) => r.changeSetId)).size
   const limits = dataLimits()
   return {
     plugin: entry,
@@ -284,6 +291,7 @@ export async function buildPluginDetail(pluginId: string, isAdmin: boolean): Pro
       data: { rows: usage._count._all, bytes: usage._sum.sizeBytes ?? 0, maxRows: limits.maxRows, maxBytes: limits.maxBytes },
       activeVersions,
       dormantVersions: row && overridesQualify(row) ? 0 : activeVersions,
+      userSkillProposals: { waiting: setsWith('proposed'), saved: setsWith('adopted') },
       rollback: await rollbackCheck(pluginId),
     },
   }

@@ -8,7 +8,9 @@ What must hold (TD-16, TD-17):
 - gates still decide whether a part is rendered;
 - the settings are never mutated;
 - each render records which version of the playbook the turn used, and phase_update
-  carries that record.
+  carries that record;
+- a rendered user skill records its own id and content hash instead (the successor's
+  when one stands in for the label's skill), and a skill that is off records nothing.
 """
 
 import asyncio
@@ -592,6 +594,98 @@ def test_get_phase_tools_records_none_when_no_workflow_renders():
     assert in_session({}, go) is None
 
 
+# ── the user-skill record (D6) and successor rendering (D14) ────────────────
+
+PHASES_ALL = ("informational", "exploitation", "post_exploitation")
+USER_TEXT = "Probe the login form — then report the finding ✓"
+# sha256 of USER_TEXT's UTF-8 bytes, first 16 hex: what the webapp computes with Node.
+USER_SHA16 = "173fa6f54eba794c"
+SUCCESSOR_TEXT = "Version two: confirm with a second request."
+SUCCESSOR_SHA16 = "557bef1e88fa4ac5"
+STALE = {"skillId": "stale", "revision": 9, "changeSetId": "stale"}
+
+
+def _user_skills(toggles, *skills):
+    return {"ATTACK_SKILL_CONFIG": {"builtIn": {}, "user": toggles},
+            "USER_ATTACK_SKILLS": list(skills)}
+
+
+def _phase_tools_and_record(phase, label, settings):
+    import prompts
+
+    def go():
+        seam.applied_skill_workflow.set(STALE)
+        with recorder.stubbed({}, ALL_TOOLS):
+            text = prompts.get_phase_tools(phase, attack_path_type=label)
+        return text, seam.applied_skill_workflow.get()
+
+    return in_session({}, go, settings=settings)
+
+
+@pytest.mark.parametrize("phase", PHASES_ALL)
+def test_a_rendered_user_skill_is_recorded(phase):
+    login = {"id": "sk-1", "name": "Login probe", "description": None, "content": USER_TEXT}
+    text, record = _phase_tools_and_record(phase, "user_skill:sk-1",
+                                           _user_skills({"sk-1": True}, login))
+    assert f"## User Attack Skill: Login probe\n\n{USER_TEXT}" in text
+    assert record == {"skillId": "user_skill:sk-1", "kind": "user", "contentSha256": USER_SHA16}
+
+
+@pytest.mark.parametrize("toggles", [{"sk-1": False}, {}])
+@pytest.mark.parametrize("phase", PHASES_ALL)
+def test_a_user_skill_that_is_not_enabled_renders_and_records_nothing(phase, toggles):
+    login = {"id": "sk-1", "name": "Login probe", "description": None, "content": USER_TEXT}
+    text, record = _phase_tools_and_record(phase, "user_skill:sk-1", _user_skills(toggles, login))
+    assert "## User Attack Skill" not in text
+    assert record is None
+
+
+@pytest.mark.parametrize("phase", PHASES_ALL)
+def test_a_successor_is_rendered_and_recorded_under_the_old_label(phase):
+    old = {"id": "sk-old", "name": "Login probe", "description": None, "content": USER_TEXT}
+    new = {"id": "sk-new", "name": "Login probe v2", "description": None,
+           "content": SUCCESSOR_TEXT, "supersedes": ["sk-old"]}
+    text, record = _phase_tools_and_record(
+        phase, "user_skill:sk-old", _user_skills({"sk-old": False, "sk-new": True}, old, new))
+    assert f"## User Attack Skill: Login probe v2\n\n{SUCCESSOR_TEXT}" in text
+    assert USER_TEXT not in text
+    assert record == {"skillId": "user_skill:sk-new", "kind": "user",
+                      "contentSha256": SUCCESSOR_SHA16}
+
+
+def test_a_built_in_record_is_unchanged_next_to_enabled_user_skills():
+    login = {"id": "sk-1", "name": "Login probe", "description": None, "content": USER_TEXT}
+
+    def go():
+        render("ssrf")
+        return seam.applied_skill_workflow.get()
+
+    record = in_session({}, go, settings=_user_skills({"sk-1": True}, login))
+    assert record == {"skillId": "ssrf", "revision": 1, "changeSetId": None}
+
+
+@pytest.mark.parametrize("skill_id,content", [
+    ("sk-1", None), ("sk-1", 5), (None, USER_TEXT), ("", USER_TEXT), (7, USER_TEXT)])
+def test_recording_a_user_skill_never_raises(skill_id, content, caplog):
+    def go():
+        seam.applied_skill_workflow.set(STALE)
+        seam.record_applied_user(skill_id, content)
+        return seam.applied_skill_workflow.get()
+
+    with caplog.at_level(logging.WARNING, logger="prompts.skill_part_seam"):
+        assert contextvars.copy_context().run(go) is None
+    assert "not recorded" in caplog.text
+
+
+def test_a_lone_surrogate_is_hashed_instead_of_raising():
+    def go():
+        seam.record_applied_user("sk-1", "broken \ud800 text")
+        return seam.applied_skill_workflow.get()
+
+    record = contextvars.copy_context().run(go)
+    assert record["skillId"] == "user_skill:sk-1" and len(record["contentSha256"]) == 16
+
+
 def test_a_usable_set_gated_off_this_turn_still_reports_its_version():
     """S2: the version is in effect even when its changed part is gated off; what was
     rendered is what that version renders under these gates."""
@@ -650,7 +744,11 @@ def _callback():
     return callback
 
 
-@pytest.mark.parametrize("record", [{"skillId": "ssrf", "revision": 3}, None])
+@pytest.mark.parametrize("record", [
+    {"skillId": "ssrf", "revision": 3},
+    {"skillId": "user_skill:sk-1", "kind": "user", "contentSha256": USER_SHA16},
+    None,
+])
 def test_emit_streaming_events_passes_the_record(record):
     from orchestrator_helpers.streaming import emit_streaming_events
     callback = _callback()

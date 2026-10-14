@@ -686,5 +686,5 @@
     }
   },
   "title": "RedAmon plugin screen description",
-  "description": "Generated from webapp/src/lib/plugins/schemas/screen.ts for platform 1.0.0. Do not edit by hand."
+  "description": "Generated from webapp/src/lib/plugins/schemas/screen.ts for platform 1.1.0. Do not edit by hand."
 }

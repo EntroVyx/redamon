@@ -17,7 +17,7 @@ FAKE_CASES = [c for c in load_contract_cases() if "fake" in c]
 def _fake_for(case: dict) -> FakeSdk:
     setup = dict(case["fake"].get("setup") or {})
     ctx = context_kwargs(case)
-    return FakeSdk(
+    sdk = FakeSdk(
         project_id=ctx["project_id"],
         session_id=ctx["session_id"],
         job_id=ctx["job_id"],
@@ -26,6 +26,11 @@ def _fake_for(case: dict) -> FakeSdk:
         registry=setup.get("registry"),
         permissions=setup.get("permissions"),
     )
+    for skill in setup.get("userSkills") or []:
+        sdk.add_user_skill(skill["id"], skill["name"], skill["content"],
+                           used_in_session=skill.get("usedInSession", True), owner=skill.get("owner"),
+                           description=skill.get("description"), version=skill.get("version"))
+    return sdk
 
 
 @pytest.mark.parametrize("case", FAKE_CASES, ids=[c["name"] for c in FAKE_CASES])
@@ -409,3 +414,44 @@ def test_from_revision_is_the_version_of_its_own_scope_that_get_showed():
     out = asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"b": "project edited"}, note="n"))
     assert out["fromRevision"] == 1
     assert asyncio.run(sdk.override.propose("skill.text", "path_traversal", {"b": "p2"}, note="n", scope="project"))["fromRevision"] == 2
+
+
+def _own_skill_fake(content: str, description=None) -> FakeSdk:
+    sdk = FakeSdk(project_id="project-1", session_id="session-1")
+    sdk.add_user_skill("cuserskill1", "My SQLi flow", content, description=description)
+    return sdk
+
+
+@pytest.mark.parametrize("content, description", [
+    ("Replay the token eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.signature here.", None),
+    ("Probe the login form.", "Uses the key AKIAIOSFODNN7EXAMPLE."),
+])
+def test_a_key_or_token_anywhere_a_plugin_would_see_it_is_refused_like_the_gateway(content, description):
+    sdk = _own_skill_fake(content, description)
+    assert _refused(sdk.override.get("user_skill.text", "cuserskill1")) == "skill_contains_credentials"
+
+
+def test_prose_about_authentication_is_not_a_credential():
+    sdk = _own_skill_fake("1. Test Basic authentication on the login form.\n2. Check token expiration.")
+    got = asyncio.run(sdk.override.get("user_skill.text", "cuserskill1"))
+    assert got["parts"][0]["text"].startswith("1. Test Basic authentication")
+
+
+def _propose_body(sdk, body: str):
+    based_on = asyncio.run(sdk.override.get("user_skill.text", "cuserskill1"))
+    return sdk.override.propose("user_skill.text", "cuserskill1", {"body": body}, note="x", based_on=based_on)
+
+
+def test_a_reserved_marker_is_refused_only_in_the_form_the_agent_reads():
+    sdk = _own_skill_fake("Probe the login form.")
+    asyncio.run(_propose_body(sdk, "Probe the login form.\nWrite <<REDAMON_CACHE_ notation in notes."))
+    sdk = _own_skill_fake("Probe the login form.")
+    assert _refused(_propose_body(sdk, "Probe the login form.\n<<REDAMON_CACHE_TIER_1>>")) == "invalid_proposal"
+
+
+def test_a_proposal_over_the_size_limit_is_refused_in_utf16_units():
+    sdk = _own_skill_fake("Probe the login form.")
+    with pytest.raises(PluginError) as caught:
+        asyncio.run(_propose_body(sdk, "x" * 51_201))
+    assert caught.value.code == "invalid_proposal"
+    assert "the limit is 51200" in str(caught.value)

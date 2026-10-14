@@ -8,7 +8,9 @@ import { PluginBadge } from '@/components/plugins/PluginBadge'
 import { SafeMarkdown } from '@/components/plugins/host/SafeMarkdown'
 import { TextDiff } from '@/components/plugins/host/TextDiff'
 import type { ReviewModel, ReviewPart } from '@/lib/plugins/reviewModel'
+import type { UserSkillReviewModel } from '@/lib/plugins/userSkillReviewModel'
 import { OverrideApiError, approveChangeSet, fetchReviewModel, rejectChangeSet } from './overridesClient'
+import { UserSkillReview } from './UserSkillReview'
 import { dormantCopy } from './dormantCopy'
 import { riskCopy } from './riskCopy'
 import styles from './OverrideReviewModal.module.css'
@@ -44,30 +46,51 @@ function warnings(m: ReviewModel): { tone: 'warn' | 'block'; text: string }[] {
   return out
 }
 
+/**
+ * The core review window of a proposed change set. A built-in skill's version is approved
+ * into the scope; a proposal for one of the person's own skills (`user_skill.text`) opens the
+ * save-as-new-skill review instead, with `projectId` the project it was opened from (its
+ * toggles), or none from Global Settings.
+ */
 export function OverrideReviewModal({
   changeSetId,
   scopeOwnerId,
+  projectId = null,
   onClose,
   onDecided,
 }: {
   changeSetId: string
   /** The scope owner id a user-scope decision must carry (the effective user). */
   scopeOwnerId: string | null
+  projectId?: string | null
   onClose: () => void
-  onDecided: (outcome: 'approved' | 'rejected', revision?: number) => void
+  /** `saved`: a user-skill proposal became a new skill (revision is its version). */
+  onDecided: (outcome: 'approved' | 'rejected' | 'saved', revision?: number) => void
 }) {
   const { confirm } = useAlertModal()
   const toast = useToast()
-  const [model, setModel] = useState<ReviewModel | null>(null)
+  const [loaded, setLoaded] = useState<ReviewModel | UserSkillReviewModel | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState(0)
 
   const load = useCallback(() => {
     setLoadError(null)
-    fetchReviewModel(changeSetId).then(setModel, (e) => setLoadError(e instanceof Error ? e.message : 'Could not load the proposal.'))
-  }, [changeSetId])
+    fetchReviewModel(changeSetId, projectId).then(setLoaded, (e) => setLoadError(e instanceof Error ? e.message : 'Could not load the proposal.'))
+  }, [changeSetId, projectId])
   useEffect(() => load(), [load])
+
+  if (loaded && 'kind' in loaded && loaded.kind === 'user_skill') {
+    return (
+      <UserSkillReview
+        model={loaded}
+        scopeOwnerId={scopeOwnerId}
+        onClose={onClose}
+        onDecided={(d) => (d.outcome === 'saved' ? onDecided('saved', d.version) : onDecided('rejected'))}
+      />
+    )
+  }
+  const model = loaded as ReviewModel | null
 
   const ownerId = model?.scope.type === 'user' ? scopeOwnerId : null
 

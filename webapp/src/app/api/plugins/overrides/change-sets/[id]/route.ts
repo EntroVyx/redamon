@@ -17,13 +17,15 @@ export const dynamic = 'force-dynamic'
 
 const notFound = () => NextResponse.json({ error: 'Not found', code: 'not_found' }, { status: 404 })
 
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const eff = await getEffectiveUser()
   if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
   const set = await ov.getChangeSet(id)
   if (!set || !(await ownsScope(set.scope, eff.userId))) return notFound()
-  const model = await buildReviewModel(id)
+  // A project the scope owner owns only (the model reads it with that owner): the review of
+  // a user-skill proposal opened from a project shows that project's toggles.
+  const model = await buildReviewModel(id, { projectId: new URL(request.url).searchParams.get('projectId') })
   if (!model) return notFound()
   return NextResponse.json(model, { headers: { 'Cache-Control': 'no-store' } })
 }
@@ -50,7 +52,14 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     pluginId: set.pluginId,
     targetType: 'plugin_change_set',
     targetId: id,
-    after: { point: set.point, targetGroup: set.targetGroup, scope: set.scope.type, scopeId: set.scope.id, revision: set.revision },
+    after: {
+      point: set.point,
+      targetGroup: set.targetGroup,
+      scope: set.scope.type,
+      scopeId: set.scope.id,
+      revision: set.revision,
+      ...(session && session.userId !== eff.userId ? { onBehalfOf: eff.userId } : {}),
+    },
     source: 'ui',
   })
   return NextResponse.json({ deleted: true })

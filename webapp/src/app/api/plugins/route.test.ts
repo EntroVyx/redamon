@@ -107,7 +107,7 @@ describe('GET /api/plugins', () => {
   test('a plugin not installed: the newest release this platform can run, with consent text', async () => {
     const { status, body } = await list()
     expect(status).toBe(200)
-    expect(body).toMatchObject({ platformVersion: '1.0.0', isAdmin: false, catalog: { state: 'ok', official: true } })
+    expect(body).toMatchObject({ platformVersion: '1.1.0', isAdmin: false, catalog: { state: 'ok', official: true } })
     expect(body.plugins).toHaveLength(1)
     const e = body.plugins[0]
     expect(e).toMatchObject({ id: 'echo', displayName: 'Echo', inCatalog: true, state: 'not_installed', installed: null, installBlocked: null })

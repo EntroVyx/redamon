@@ -72,7 +72,7 @@ describe('one active job per action and session', () => {
   test('a second click returns the running job, and the runner is called once', async () => {
     const first = await start()
     const second = await start()
-    expect(second).toEqual({ status: 200, body: { jobId: first.body.jobId, status: 'running', existing: true } })
+    expect(second).toEqual({ status: 200, body: { jobId: first.body.jobId, status: 'running', existing: true, pick: null } })
     expect(runner.actionCalls).toHaveLength(1)
   })
 

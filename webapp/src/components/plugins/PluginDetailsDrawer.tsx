@@ -106,6 +106,15 @@ export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback, bus
                   : `${admin.activeVersions} applied.`}
             </p>
           </section>
+          {admin.userSkillProposals && (admin.userSkillProposals.waiting > 0 || admin.userSkillProposals.saved > 0) && (
+            <section data-testid="plugin-user-skill-proposals">
+              <h4>Proposals for people&apos;s own skills</h4>
+              <p>
+                {admin.userSkillProposals.waiting} waiting for review · {admin.userSkillProposals.saved} saved as new skills.
+                Saved skills belong to the people who saved them and stay if the plugin is removed.
+              </p>
+            </section>
+          )}
           <section>
             <h4>Rollback</h4>
             {rollback?.possible && installed?.previousVersion ? (
@@ -136,6 +145,7 @@ export function PluginDetailsDrawer({ pluginId, isOpen, onClose, onRollback, bus
             <a className="secondaryButton" href={`/api/plugins/${pluginId}/export`} download>
               Export data
             </a>
+            <p className={styles.notice}>Text that plugins proposed for people&apos;s own skills is not included.</p>
           </section>
         </div>
       )}

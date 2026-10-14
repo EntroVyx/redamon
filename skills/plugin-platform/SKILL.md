@@ -36,8 +36,8 @@ for an LLM call path, `llm-provider-integration`; for tests, `redamon-testing`.
 
 - **NEVER put plugin-specific logic in the base repository.** No plugin id, prompt or behaviour
   in `webapp/src`, `agentic` or `services`; a plugin's name may appear only in tests, fixtures
-  and docs. Check: `grep -rn -i "skiller" --include=*.ts --include=*.tsx --include=*.py webapp/src agentic services`
-  finds only test files. The platform is generic; a plugin lives in `redamon-plugins`.
+  and docs. Check: `grep -rnw -i "skiller" --include=*.ts --include=*.tsx --include=*.py webapp/src agentic services`
+  finds only test files (`-w`, or every `UserSkillError` matches). The platform is generic; a plugin lives in `redamon-plugins`.
 - **NEVER add an off switch or a degrade-to-off path.** The platform always runs (owner decision
   2026-10-12). A host that cannot run it is refused by install, update and up with the cause
   named, before any core service is recreated (`require_plugin_engine`, `plugins_preflight`,
@@ -79,12 +79,31 @@ for an LLM call path, `llm-provider-integration`; for tests, `redamon-testing`.
   alone is also sent by text-to-cypher and accepted from the scanner key. On the agent side the seam
   reads only the session's settings context and falls back to the factory text
   ([skill_part_seam.py](../../agentic/prompts/skill_part_seam.py)); it never raises.
+  The one exception is `user_skill.text`: approving never makes it active, it saves a NEW user
+  skill (`adopted`), which is the person's own and travels the ordinary user-skill path
+  (`userAttackSkills` with `includeSkillContent`, which the scanner key can read too). Never deliver
+  a `user_skill.text` row's value any other way.
+- **ALWAYS gate saving a `user_skill.text` proposal on the proposer** (enabled, ready, not
+  revoked, granted `override:user_skill.text`, and `activeVersion === meta.pluginVersion`) in the
+  save transaction, failing closed ([userSkillAdoption.ts](../../webapp/src/lib/plugins/userSkillAdoption.ts)).
+  What a save creates outlives the plugin, so the catalog's revocation must reach it: reconcile
+  withdraws the revoked version's waiting proposals and quarantines the skills saved from them,
+  installed or not ([userSkillRevocation.ts](../../webapp/src/lib/plugins/userSkillRevocation.ts)),
+  and every toggle writer refuses `true` on a quarantined skill.
+- **NEVER hand a plugin a user skill outside its session or holding credentials.** The Gateway's
+  `user_skill.text` target ([userSkillOverrideOps.ts](../../webapp/src/lib/plugins/userSkillOverrideOps.ts))
+  requires the token's user as owner, a session whose turns used the skill
+  ([sessionSkills.ts](../../webapp/src/lib/plugins/sessionSkills.ts)) and no quarantine, answers
+  every refusal with the same 404 (no existence oracle), and refuses credential-shaped text with
+  422 `skill_contains_credentials`. The platform's meta keys (`PLATFORM_META_KEYS` in
+  [overrides.ts](../../webapp/src/lib/plugins/overrides.ts)) are stripped from a plugin's meta;
+  the proposer's version, conversation and job come from the call token.
 - **ALWAYS read time from `clock.ts` and never import the test doubles from production code.**
   [clock.ts](../../webapp/src/lib/plugins/clock.ts) is the only clock, so tests pin it;
   [noProductionImports.test.ts](../../webapp/src/lib/plugins/__testing__/noProductionImports.test.ts)
   fails when a production module imports `webapp/src/lib/plugins/__testing__/`.
-- **A new extension point, SDK call or UI primitive is a platform version bump** held equal in four
-  files by `platformVersion.parity.test.ts`. Follow the checklist in
+- **A new extension point, SDK call or UI primitive is a platform version bump** held equal in five
+  files by `platformVersion.parity.test.ts` (the runner's contract cases included). Follow the checklist in
   [README.DEV.md §6.6](../../docs/readmes/README.DEV.md#66-adding-a-plugin-extension-point).
 
 ---

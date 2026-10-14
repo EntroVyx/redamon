@@ -5,4 +5,4 @@ Must equal PLUGIN_PLATFORM_VERSION in webapp/src/lib/plugins/platformVersion.ts
 list whose platformVersion differs marks the runner out of date and starts no worker.
 """
 
-PLATFORM_VERSION = "1.0.0"
+PLATFORM_VERSION = "1.1.0"

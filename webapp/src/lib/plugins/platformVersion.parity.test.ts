@@ -29,4 +29,13 @@ describe('platform version parity', () => {
     const cases = JSON.parse(readFileSync(join(RUNNER, 'sdk/contract_cases.json'), 'utf8'))
     expect(cases.platformVersion).toBe(PLUGIN_PLATFORM_VERSION)
   })
+
+  // The webapp's fake runner answers health from this file, so a stale one passes here and
+  // fails only in the runner image's contract test.
+  test('the runner contract cases are for the same version', () => {
+    const cases = JSON.parse(readFileSync(join(RUNNER, 'tests/runner_contract_cases.json'), 'utf8'))
+    expect(cases.platformVersion).toBe(PLUGIN_PLATFORM_VERSION)
+    const health = cases.cases.find((c: { name: string }) => c.name === 'health with the key')
+    expect(health.expect.bodyIncludes.platformVersion).toBe(PLUGIN_PLATFORM_VERSION)
+  })
 })

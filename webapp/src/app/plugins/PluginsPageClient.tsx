@@ -56,7 +56,7 @@ export function PluginsPageClient() {
     else if (a === 'enable') await run(`${base}/enable`)
     else if (a === 'disable') {
       const ok = await confirm(
-        `${entry.displayName} stops for every user: its actions and screens disappear and its approved skill versions stop applying from the next message. Its code and data stay, so enabling it again restores everything.`,
+        `${entry.displayName} stops for every user: its actions and screens disappear and its approved skill versions stop applying from the next message. Its code and data stay, so enabling it again restores everything. Skills that people saved from its proposals as their own stay and keep working, unless the catalog revokes the version that made them.`,
         `Disable ${entry.displayName}?`,
         { confirmLabel: 'Disable' },
       )

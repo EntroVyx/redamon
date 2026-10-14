@@ -34,6 +34,7 @@ describe('the plugin audit action names (R-11)', () => {
       'plugin.override.reset',
       'plugin.override.delete',
       'plugin.override.stale',
+      'plugin.override.adopt',
     ])
   })
 

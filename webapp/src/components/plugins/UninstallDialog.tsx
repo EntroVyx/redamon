@@ -50,8 +50,9 @@ export function UninstallDialog({ isOpen, pluginId, pluginName, busy = false, ke
     >
       {keptOnly ? (
         <p>
-          {pluginName} is not installed. The data and approved skill versions kept when it was uninstalled are deleted
-          for every user and project. This cannot be undone.
+          {pluginName} is not installed. The data, approved skill versions and proposals waiting for review kept when it
+          was uninstalled are deleted for every user and project. Skills people saved from its proposals as their own
+          are not affected. This cannot be undone.
         </p>
       ) : (
         <p>The plugin&apos;s code is removed from this host. Its contributions disappear for everyone.</p>
@@ -62,12 +63,15 @@ export function UninstallDialog({ isOpen, pluginId, pluginName, busy = false, ke
             <input type="radio" name="uninstall-mode" checked={mode === 'keep'} onChange={() => setMode('keep')} />
             <span>
               Keep its data: the plugin&apos;s data and approved skill versions stay, unused, and come back if it is installed
-              again.
+              again. Skills people saved from its proposals as their own are not affected.
             </span>
           </label>
           <label>
             <input type="radio" name="uninstall-mode" checked={mode === 'purge'} onChange={() => setMode('purge')} />
-            <span>Delete all data for every user and project, including approved skill versions. This cannot be undone.</span>
+            <span>
+              Delete all data for every user and project, including approved skill versions and proposals waiting for
+              review. Skills people saved from its proposals as their own are not affected. This cannot be undone.
+            </span>
           </label>
         </div>
       )}
@@ -76,6 +80,7 @@ export function UninstallDialog({ isOpen, pluginId, pluginName, busy = false, ke
           <a href={`/api/plugins/${pluginId}/export`} download onClick={() => setExported(true)} className="textButton">
             Download the export of its data first
           </a>
+          <span className="formHint">Text that plugins proposed for people&apos;s own skills is not included.</span>
           <label className="formLabel" htmlFor="uninstall-confirm">
             Type {pluginId} to confirm
           </label>

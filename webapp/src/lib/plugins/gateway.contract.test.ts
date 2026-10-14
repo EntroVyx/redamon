@@ -29,6 +29,16 @@ vi.mock('@/lib/agentFetch', () => ({
     if (path.startsWith('/agent-sessions/live')) return Response.json({ session_ids: [] })
     if (path === '/plugins/skill-parts') return Response.json(h.registry)
     if (path === '/plugins/skill-parts/validate') return Response.json({ ok: true, parts: {}, skill: { errors: [], chars: 0, maxChars: 0 } })
+    if (path === '/plugins/text/validate') {
+      // The agent's reserved-heading rule for the one heading the contract uses, with its
+      // message: refused only when the text it replaces did not hold it already.
+      const { text, baseText } = JSON.parse(String(init?.body))
+      const letters = (t: string) => t.toLowerCase().replace(/[^a-z]/g, '')
+      const added = letters(text).includes('scopeguardrail') && !letters(baseText).includes('scopeguardrail')
+      return Response.json(added
+        ? { ok: false, errors: ["value contains the heading of the 'SCOPE GUARDRAIL' prompt section"] }
+        : { ok: true, errors: [] })
+    }
     if (path === '/plugins/llm/invoke') {
       const body = JSON.parse(String(init?.body))
       return Response.json({ content: h.llmReply, model_used: body.model, usage: { input_tokens: 0, output_tokens: 0, estimated: true } })
@@ -92,7 +102,7 @@ const ROUTES: Record<string, (r: NextRequest) => Promise<Response>> = {
 }
 
 const PLUGIN = 'test-plugin'
-const ALL = ['session:read', 'llm:invoke', 'override:skill.text']
+const ALL = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const T0 = Date.parse('2026-10-09T10:00:00.000Z')
 let db: FakePrisma
 let t = T0
@@ -147,6 +157,34 @@ function seed(permissions: string[]) {
   db.seed('userSettings', [{ userId: 'user-1', featureModels: { [`plugin:${PLUGIN}`]: 'scripted' } }])
 }
 
+interface SetupSkill { id: string; name: string; content: string; owner?: string; usedInSession?: boolean; description?: string; version?: number }
+
+/** `fake.setup.userSkills`: the skill rows, and a recorded turn of the session for each it used. */
+function seedUserSkills(skills: SetupSkill[]) {
+  db.seed('user', [{ id: 'user-2', name: 'Other', email: 'other@example.com' }])
+  skills.forEach((s, i) => {
+    db.seed('userAttackSkill', [{
+      id: s.id, userId: s.owner ?? 'user-1', name: s.name, content: s.content,
+      description: s.description ?? null, version: s.version ?? null,
+    }])
+    if (s.usedInSession === false) return
+    const ref = `user_skill:${s.id}`
+    db.seed('chatMessage', [{
+      conversationId: 'conv-1', sequenceNum: 10 + i, type: 'phase_update', createdAt: new Date(T0 - 60_000),
+      data: {
+        current_phase: 'informational', iteration_count: i + 1, attack_path_type: ref,
+        skill_workflow: { skillId: ref, kind: 'user', contentSha256: createHash('sha256').update(s.content, 'utf8').digest('hex').slice(0, 16) },
+      },
+    }])
+  })
+}
+
+/** The hashes the SDK sends back from a `based_on` answer (client.py _read_hashes). */
+function readHashes(basedOn: unknown): Record<string, string> | undefined {
+  const parts = (basedOn as { parts?: { partId: string; sha256: string }[] } | undefined)?.parts
+  return parts ? Object.fromEntries(parts.map((p) => [p.partId, p.sha256])) : undefined
+}
+
 async function tokenFor(ctx: ContractCase['context'] = {}, jid?: string) {
   return (
     await mintCallToken({
@@ -185,7 +223,11 @@ async function given(call: { method: string; args: unknown[]; kwargs: Record<str
     return post('data/put', { collection: a, key: b, value: c, owner: k.owner ?? 'user', ...(k.ttl_seconds ? { ttlSeconds: k.ttl_seconds } : {}) }, token)
   }
   if (call.method === 'override.propose') {
-    return post('override/propose', { point: a, targetGroup: b, parts: c, note: k.note, scope: k.scope ?? 'user', ...(k.meta ? { meta: k.meta } : {}) }, token)
+    const read = readHashes(k.based_on)
+    return post('override/propose', {
+      point: a, targetGroup: b, parts: c, note: k.note, scope: k.scope ?? 'user',
+      ...(k.meta ? { meta: k.meta } : {}), ...(read ? { readSha256: read } : {}),
+    }, token)
   }
   throw new Error(`no replay for given ${call.method}`)
 }
@@ -221,6 +263,7 @@ describe.each(REPLAYED.map((c) => [c.name, c] as const))('%s', (_name, c) => {
   test('the route answers as the contract says', async () => {
     const setup = (c.fake?.setup ?? {}) as Record<string, unknown>
     seed((setup.permissions as string[] | undefined) ?? ALL)
+    if (Array.isArray(setup.userSkills)) seedUserSkills(setup.userSkills as SetupSkill[])
     h.registry = agentRegistry((setup.registry as never) ?? defaultRegistry())
     if (Array.isArray(setup.llm)) h.llmReply = String(setup.llm[0])
     if (c.name.includes('no model chosen')) await db.userSettings.deleteMany({})

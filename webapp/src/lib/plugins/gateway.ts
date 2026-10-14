@@ -99,8 +99,11 @@ export interface GatewayOptions {
   /**
    * The permission the call needs; a function when the body names it (the override
    * operations: `override:<point>`). It returns null for a point that does not exist.
+   * `'in-handler'` when only the handler can know it (it reads a row first) and checks it
+   * with assertPermission; said explicitly, so a route that forgot the option is not read
+   * as one that needs none.
    */
-  permission?: PluginPermission | ((body: Record<string, unknown>) => PluginPermission | null)
+  permission?: PluginPermission | ((body: Record<string, unknown>) => PluginPermission | null) | 'in-handler'
   kinds?: readonly CallTokenKind[]
   /**
    * The largest body the operation takes: GATEWAY_SMALL_BODY_BYTES unless it carries a
@@ -293,6 +296,11 @@ function checkPermission(plugin: PluginInstall, permission: PluginPermission) {
   }
 }
 
+/** The permission check of a route declared `permission: 'in-handler'`. */
+export function assertPermission(ctx: Pick<GatewayContext, 'plugin'>, permission: PluginPermission): void {
+  checkPermission(ctx.plugin, permission)
+}
+
 const NOT_FOUND = () => new GatewayError(404, 'not_found', 'Not found')
 
 async function checkTenancy(claims: CallTokenClaims): Promise<GatewayConversation | null> {
@@ -433,7 +441,7 @@ async function run(
   } else {
     plugin = await checkPlugin(claims)
   }
-  if (opts.permission) {
+  if (opts.permission && opts.permission !== 'in-handler') {
     const permission = typeof opts.permission === 'function' ? opts.permission(body as Record<string, unknown>) : opts.permission
     if (!permission) throw new GatewayError(400, 'invalid_target', `unknown extension point ${JSON.stringify((body as Record<string, unknown>).point)}`)
     checkPermission(plugin, permission)

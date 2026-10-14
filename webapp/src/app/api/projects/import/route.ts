@@ -25,6 +25,7 @@ import { pickProjectColumns } from '@/lib/projectColumns'
 import { jevImportWarnings } from '@/lib/reconSettings/jevEngine'
 import { PROJECT_EXPORT_EXCLUDED, isPluginArchivePath } from '@/lib/projectExport/pluginExclusion'
 import { validateSerializedScanChange } from '@/lib/reconSettings/serializedScanGate'
+import { skillToggleWarnings, trimImportedSkillToggles } from '@/lib/userSkills'
 
 const MUTEABLE_LABELS = new Set<string>(MUTEABLE_FINDING_LABELS)
 
@@ -270,6 +271,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // The bundle's user-skill toggles name the EXPORTING account's skills: those this
+    // account does not have are dropped, then the rest cut to the enabled bound.
+    const skillToggleNotes: string[] = []
+    if ('attackSkillConfig' in projectFields) {
+      const trimmed = await trimImportedSkillToggles(prisma, userId, projectFields.attackSkillConfig)
+      if (trimmed.value) projectFields.attackSkillConfig = trimmed.value
+      else delete projectFields.attackSkillConfig
+      skillToggleNotes.push(...skillToggleWarnings(trimmed, 'project'))
+    }
+
     // Create new project under the specified user
     // The bundle's column values are not type-checked here (they never were);
     // pickProjectColumns has already removed everything that is not a column.
@@ -495,6 +506,13 @@ export async function POST(request: NextRequest) {
             if (!name || !stored.ok) {
               skipped++
               continue
+            }
+            const presetSettings = stored.settings as Record<string, unknown>
+            if ('attackSkillConfig' in presetSettings) {
+              const trimmed = await trimImportedSkillToggles(prisma, userId, presetSettings.attackSkillConfig)
+              if (trimmed.value) presetSettings.attackSkillConfig = trimmed.value
+              else delete presetSettings.attackSkillConfig
+              skillToggleNotes.push(...skillToggleWarnings(trimmed, `preset "${name}"`))
             }
             await prisma.userProjectPreset.create({
               data: {
@@ -772,6 +790,7 @@ export async function POST(request: NextRequest) {
       ...(pluginFiles.length
         ? [`This archive holds plugin files (${pluginFiles.slice(0, 3).join(', ')}${pluginFiles.length > 3 ? ', …' : ''}); plugin skill versions and plugin data are not imported.`]
         : []),
+      ...skillToggleNotes,
     ]
 
     return NextResponse.json({

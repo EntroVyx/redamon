@@ -25,7 +25,13 @@ describe('readActionAnswer', () => {
     expect(await readActionAnswer(json(200, { jobId: 'job_2', status: 'running', existing: true }))).toEqual({
       kind: 'job',
       jobId: 'job_2',
+      existing: true,
     })
+  })
+
+  test('an already running job names the skill it works on (platform 1.1.0)', async () => {
+    const res = json(200, { jobId: 'job_3', status: 'running', existing: true, pick: { kind: 'session.skill', ref: 'user_skill:c1', name: 'My flow' } })
+    expect(await readActionAnswer(res)).toEqual({ kind: 'job', jobId: 'job_3', existing: true, pick: { ref: 'user_skill:c1', name: 'My flow' } })
   })
 
   test('a failure the plugin reported, as an object or as text', async () => {

@@ -230,8 +230,10 @@ if docker image inspect "$IMG" >/dev/null 2>&1; then
        "$(docker run --rm --entrypoint stat "$IMG" -c '%u:%g %a' /plugins)" "1001:1001 755"
     eq "no file of the runner is writable by others" \
        "$(docker run --rm --entrypoint sh "$IMG" -c 'find /opt/runner -perm -o+w | head -3' | tr '\n' ' ')" ""
-    eq "the image reports platform 1.0.0" \
-       "$(docker run --rm --entrypoint python "$IMG" -c 'import platform_version; print(platform_version.PLATFORM_VERSION)')" "1.0.0"
+    # The source's version, so a rebuilt image is checked against the tree it was built from.
+    want_platform=$(sed -n 's/^PLATFORM_VERSION = "\(.*\)"$/\1/p' "$REPO_ROOT/services/plugin_runner/platform_version.py")
+    eq "the image reports platform $want_platform (services/plugin_runner/platform_version.py)" \
+       "$(docker run --rm --entrypoint python "$IMG" -c 'import platform_version; print(platform_version.PLATFORM_VERSION)')" "$want_platform"
 else
     echo "  SKIP  $IMG is not built (docker compose build plugin-runner)"
 fi

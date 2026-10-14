@@ -27,6 +27,7 @@
  *                         same values early as a courtesy, not as the control.
  */
 import type { RegistryField } from './registry'
+import { attackSkillConfigShapeError } from '@/lib/userSkills'
 
 /** Pipeline phases, mirroring ScanModulesSection's SCAN_MODULE_OPTIONS. */
 export const SCAN_MODULE_VALUES: readonly string[] = Object.freeze([
@@ -248,6 +249,10 @@ function checkScalar(validator: string, value: unknown, ctx: ValidationContext):
         : 'must be a container image reference with no whitespace'
     case 'json_object':
       return value !== null && typeof value === 'object' ? null : 'must be an object'
+    case 'attack_skill_config':
+      // The shape only: which user skills exist, and the owner's enabled bound, are
+      // checked against the database by every writer (reconSettings/crossField.ts).
+      return attackSkillConfigShapeError(value)
     case 'identifier':
       return typeof value === 'string' && /^[A-Za-z0-9._:-]{0,200}$/.test(value)
         ? null

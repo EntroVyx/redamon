@@ -43,7 +43,8 @@
         "enum": [
           "session:read",
           "llm:invoke",
-          "override:skill.text"
+          "override:skill.text",
+          "override:user_skill.text"
         ]
       }
     },
@@ -186,6 +187,12 @@
                 "enum": [
                   "skill.text.versions"
                 ]
+              },
+              "pick": {
+                "type": "string",
+                "enum": [
+                  "session.skill"
+                ]
               }
             },
             "required": [
@@ -241,5 +248,5 @@
   ],
   "additionalProperties": false,
   "title": "RedAmon plugin manifest (plugin.json)",
-  "description": "Generated from webapp/src/lib/plugins/schemas/manifest.ts for platform 1.0.0. Do not edit by hand."
+  "description": "Generated from webapp/src/lib/plugins/schemas/manifest.ts for platform 1.1.0. Do not edit by hand."
 }

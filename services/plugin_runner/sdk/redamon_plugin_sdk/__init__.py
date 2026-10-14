@@ -11,7 +11,7 @@ from .errors import PluginError
 
 # The platform contract this copy of the SDK implements; equal to the runner's
 # services/plugin_runner/platform_version.py (tests/test_sdk_contract.py).
-PLATFORM_VERSION = "1.0.0"
+PLATFORM_VERSION = "1.1.0"
 
 
 class _Delete:

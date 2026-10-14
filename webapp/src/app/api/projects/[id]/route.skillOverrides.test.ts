@@ -17,11 +17,16 @@ const SCANNER = 's'.repeat(40)
 const mockProjectFindUnique = vi.fn()
 const mockResolveForProject = vi.fn()
 const mockGetEffectiveUser = vi.fn()
+const SKILLS = [{ id: 'us-1', name: 'Mine', description: '', content: 'c', lineageRootId: null, version: null }]
+let userToggles: Record<string, boolean> = { 'us-1': true }
 
 vi.mock('@/lib/prisma', () => ({
   default: {
     project: { findUnique: (...a: unknown[]) => mockProjectFindUnique(...a) },
-    userAttackSkill: { findMany: async () => [{ id: 'us-1', name: 'Mine', description: '', content: 'c' }] },
+    userAttackSkill: {
+      findMany: async (a: { where?: { id?: { in?: string[] } } }) =>
+        SKILLS.filter((s) => !a?.where?.id?.in || a.where.id.in.includes(s.id)),
+    },
     userSettings: { findUnique: async () => ({ mcpServers: [] }) },
   },
 }))
@@ -53,7 +58,7 @@ function wireProject() {
       ? Promise.resolve({ id: 'proj-1', userId: 'owner-1' })
       : Promise.resolve({
           id: 'proj-1', userId: 'owner-1', name: 'P', targetDomain: 'example.com',
-          attackSkillConfig: { builtIn: {}, user: {} }, user: { id: 'owner-1' },
+          attackSkillConfig: { builtIn: {}, user: userToggles }, user: { id: 'owner-1' },
           authProfile: null, nodeFilter: null, nodeFilterExemptions: [],
         }),
   )
@@ -77,6 +82,7 @@ beforeEach(() => {
   vi.stubEnv('SCANNER_API_KEY', SCANNER)
   // Enforcement on (its default); unstubAllEnvs puts the caller's value back.
   vi.stubEnv('ACCESS_ENFORCE', undefined)
+  userToggles = { 'us-1': true }
   wireProject()
   mockResolveForProject.mockResolvedValue(OVERRIDES)
   mockGetEffectiveUser.mockResolvedValue({ userId: 'owner-1' })
@@ -91,6 +97,14 @@ describe('GET /api/projects/[id] skillTextOverrides', () => {
     const json = await body(BOTH, MASTER)
     expect(json.skillTextOverrides).toEqual(OVERRIDES)
     expect(json.userAttackSkills).toHaveLength(1)
+  })
+
+  test('a user skill is sent only when the project sets it to true: a missing toggle is off', async () => {
+    expect((await body(BOTH, MASTER)).userAttackSkills).toEqual([{ id: 'us-1', name: 'Mine', description: '', content: 'c', supersedes: [] }])
+    userToggles = {}
+    expect((await body(BOTH, MASTER)).userAttackSkills).toEqual([])
+    userToggles = { 'us-1': false }
+    expect((await body(BOTH, MASTER)).userAttackSkills).toEqual([])
   })
 
   test('the override flag alone is enough on the master key (the plain return path)', async () => {

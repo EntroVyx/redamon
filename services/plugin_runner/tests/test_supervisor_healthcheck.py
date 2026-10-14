@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from platform_version import PLATFORM_VERSION
 from tests.support import RUNNER_KEY, RUNNER_ROOT, SDK_ROOT, free_port, install_plugin, run_list, wait_until
 
 
@@ -34,7 +35,7 @@ def live(stub_server, plugins_dir):
     from tests.support import BOOTSTRAP, IS_ROOT, TEST_UID_RANGE
     started = []
 
-    def start(key=RUNNER_KEY, platform="1.0.0"):
+    def start(key=RUNNER_KEY, platform=PLATFORM_VERSION):
         import json
         body = json.dumps(run_list([install_plugin(plugins_dir)], platform=platform)).encode()
         stub_server.reply = lambda r: (200, {"Content-Type": "application/json"}, body)

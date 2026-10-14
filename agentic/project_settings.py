@@ -1015,12 +1015,38 @@ def get_enabled_builtin_skills() -> set[str]:
     return {k for k, v in config.get('builtIn', {}).items() if v}
 
 
+# Bounds what user skills add to the classifier prompt, the per-turn skill menu and the
+# settings payload. The webapp refuses a 21st enabled skill on every write; this cut is
+# the agent's own defence against a payload that slipped past it.
+MAX_ENABLED_USER_SKILLS = 20
+
+
 def get_enabled_user_skills() -> list[dict]:
-    """Return list of enabled user attack skills (id, name, content)."""
+    """The user attack skills this project turned on, ordered by (name, id).
+
+    Each entry is the webapp's {id, name, description, content}, plus `supersedes` (the
+    ids of turned-off versions this one replaces) when the webapp sent it. Only an
+    explicit `true` toggle counts: a skill with no key is off, as in the project form.
+    Entries without a string id, name and content are skipped, because every consumer
+    indexes them. At most MAX_ENABLED_USER_SKILLS are returned, the first by that order.
+    """
     config = get_setting('ATTACK_SKILL_CONFIG', {})
-    user_toggles = config.get('user', {})
-    return [s for s in get_setting('USER_ATTACK_SKILLS', [])
-            if user_toggles.get(s['id'], True)]
+    user_toggles = config.get('user') if isinstance(config, dict) else None
+    if not isinstance(user_toggles, dict):
+        user_toggles = {}
+    skills = get_setting('USER_ATTACK_SKILLS', [])
+    if not isinstance(skills, list):
+        skills = []
+    enabled = [s for s in skills
+               if isinstance(s, dict)
+               and all(isinstance(s.get(k), str) for k in ('id', 'name', 'content'))
+               and user_toggles.get(s['id']) is True]
+    enabled.sort(key=lambda s: (s['name'], s['id']))
+    if len(enabled) > MAX_ENABLED_USER_SKILLS:
+        logger.warning("%d user skills are enabled; the agent uses the first %d by name",
+                       len(enabled), MAX_ENABLED_USER_SKILLS)
+        enabled = enabled[:MAX_ENABLED_USER_SKILLS]
+    return enabled
 
 
 # =============================================================================

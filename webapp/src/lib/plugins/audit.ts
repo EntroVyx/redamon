@@ -25,6 +25,7 @@ export const PLUGIN_AUDIT_ACTIONS = [
   'plugin.override.reset',
   'plugin.override.delete',
   'plugin.override.stale',
+  'plugin.override.adopt',
 ] as const
 export type PluginAuditAction = (typeof PLUGIN_AUDIT_ACTIONS)[number]
 

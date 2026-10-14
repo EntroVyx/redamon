@@ -101,6 +101,11 @@ SELECT 'scope_user_mismatch:' || pg_temp.try(\$q\$ $OV ('o8','pdbt-a','skill.tex
 SELECT 'scope_project_with_user:' || pg_temp.try(\$q\$ $OV ('o9','pdbt-a','skill.text','project','pdbt-project','pdbt-user','pdbt-project','xss','xss/workflow','cs9','x','$H','proposed','t',now()) \$q\$);
 SELECT 'scope_unknown_type:' || pg_temp.try(\$q\$ $OV ('o10','pdbt-a','skill.text','team','pdbt-user','pdbt-user',NULL,'xss','xss/workflow','cs10','x','$H','proposed','t',now()) \$q\$);
 SELECT 'override_bad_status:' || pg_temp.try(\$q\$ $OV ('o11','pdbt-a','skill.text','user','pdbt-user','pdbt-user',NULL,'xss','xss/workflow','cs11','x','$H','deleted','t',now()) \$q\$);
+-- A user-skill proposal saved as a new skill ends 'adopted'; two of one source may coexist.
+SELECT 'override_adopted:' || pg_temp.try(\$q\$ $OV ('o11a','pdbt-a','user_skill.text','user','pdbt-user','pdbt-user',NULL,'cskill','cskill/body','cs11a','x','$H','adopted','t',now()) \$q\$);
+SELECT 'override_adopted_twice:' || pg_temp.try(\$q\$ $OV ('o11b','pdbt-a','user_skill.text','user','pdbt-user','pdbt-user',NULL,'cskill','cskill/body','cs11b','y','$H','adopted','t',now()) \$q\$);
+-- Out again, so the cascade counts below see the same rows as before.
+DELETE FROM plugin_overrides WHERE id IN ('o11a', 'o11b');
 -- A NULL makes a CHECK expression NULL, which Postgres lets through: the checks must
 -- say IS NOT NULL, or such a row would never cascade with its owner.
 SELECT 'scope_user_null_fk:' || pg_temp.try(\$q\$ $OV ('o12','pdbt-a','skill.text','user','pdbt-user',NULL,NULL,'xss','xss/workflow','cs12','x','$H','proposed','t',now()) \$q\$);
@@ -161,8 +166,8 @@ field() { printf '%s\n' "$OUT" | sed -n "s/^$1://p" | head -1; }
 expect_eq "the one-active index exists, unique and partial on status active" \
   "CREATE UNIQUE INDEX plugin_overrides_one_active ON public.plugin_overrides USING btree (extension_point, scope_type, scope_id, target_key) WHERE (status = 'active'::text)" \
   "$(field index_def)"
-expect_eq "the five CHECK constraints exist, owner and scope at version 2" \
-  "plugin_data_owner_ck2,plugin_installs_lease_ck1,plugin_installs_status_ck1,plugin_overrides_scope_ck2,plugin_overrides_status_ck1" \
+expect_eq "the five CHECK constraints exist, owner, scope and override status at version 2" \
+  "plugin_data_owner_ck2,plugin_installs_lease_ck1,plugin_installs_status_ck1,plugin_overrides_scope_ck2,plugin_overrides_status_ck2" \
   "$(field checks)"
 
 expect_eq "a first active override is accepted" "ok" "$(field active_first)"
@@ -177,6 +182,8 @@ expect_eq "a user-scope override whose user id is not its scope id is refused" "
 expect_eq "a project-scope override carrying a user id is refused" "23514" "$(field scope_project_with_user)"
 expect_eq "an unknown scope type is refused" "23514" "$(field scope_unknown_type)"
 expect_eq "an unknown override status is refused" "23514" "$(field override_bad_status)"
+expect_eq "an adopted user-skill proposal is accepted" "ok" "$(field override_adopted)"
+expect_eq "...and a second adopted one of the same skill too (adopted is never active)" "ok" "$(field override_adopted_twice)"
 expect_eq "an unknown install status is refused" "23514" "$(field install_bad_status)"
 expect_eq "a user-scope override with no user id is refused" "23514" "$(field scope_user_null_fk)"
 expect_eq "a project-scope override with no project id is refused" "23514" "$(field scope_project_null_fk)"

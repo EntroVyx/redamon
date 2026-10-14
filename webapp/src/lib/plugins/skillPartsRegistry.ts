@@ -156,3 +156,28 @@ export async function validateSkillParts(skillId: string, parts: Record<string, 
   if (!isObj(body) || typeof body.ok !== 'boolean' || !isObj(body.parts) || !isObj(body.skill)) throw outdated()
   return body as unknown as PartsValidation
 }
+
+export interface TextValidation {
+  ok: boolean
+  errors: string[]
+}
+
+/**
+ * The agent's verdict on a proposed plain text against the text it replaces
+ * (`POST /plugins/text/validate`): not empty, no NUL, at most `maxChars`, and no reserved
+ * marker, RoE heading or hidden character that `baseText` did not already hold.
+ */
+export async function validatePlainText(text: string, baseText: string, maxChars: number): Promise<TextValidation> {
+  const { status, body } = await call('/plugins/text/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, baseText, maxChars }),
+  })
+  if (status === 404) throw outdated()
+  if (status < 200 || status >= 300) {
+    console.warn(`[plugins] text validate: the agent answered HTTP ${status}`)
+    throw unreachable()
+  }
+  if (!isObj(body) || typeof body.ok !== 'boolean' || !Array.isArray(body.errors)) throw outdated()
+  return { ok: body.ok, errors: body.errors.filter((e): e is string => typeof e === 'string') }
+}

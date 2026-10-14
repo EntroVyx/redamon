@@ -27,6 +27,8 @@ import { overridesQualify } from './registry'
  * - Reads for the agent resolve PER SKILL: a project's own version of a skill replaces
  *   the owner's user-scope version of that skill as a whole, never part by part.
  */
+// `adopted` is terminal and only for `user_skill.text`: the proposal was saved as a new user
+// skill. It is never `active`, so delivery, reconciliation and the one-active index ignore it.
 export const OVERRIDE_STATUSES = [
   'proposed',
   'active',
@@ -35,6 +37,7 @@ export const OVERRIDE_STATUSES = [
   'superseded',
   'stale',
   'cleared',
+  'adopted',
 ] as const
 export type OverrideStatus = (typeof OVERRIDE_STATUSES)[number]
 
@@ -47,9 +50,16 @@ export const MAX_PARTS_PER_CHANGE_SET = 50
 export const PART_VALUE_MAX_CHARS = 100_000
 export const NOTE_MAX_CHARS = 4_000
 export const META_MAX_BYTES = 65_536
-// Keys of `meta` the platform writes itself; a plugin's values for them are dropped.
-// fromRevision and baseFactoryText come with the proposal (TD-19), staleReason later.
-const PLATFORM_META_KEYS = ['staleReason', 'fromRevision', 'baseFactoryText', 'basedOn']
+// Keys of `meta` the platform writes itself; a plugin's values for them are dropped, so a
+// plugin can never forge what a proposal was built on, which version proposed it, or what
+// it became. fromRevision, baseFactoryText, baseText, sourceName and the proposer's
+// version, conversation and job come with the proposal (TD-19); staleReason,
+// withdrawReason, adoptedSkillId and adoptedName later.
+export const PLATFORM_META_KEYS: readonly string[] = [
+  'staleReason', 'fromRevision', 'baseFactoryText', 'basedOn',
+  'baseText', 'sourceName', 'adoptedSkillId', 'adoptedName',
+  'pluginVersion', 'conversationId', 'jobId', 'withdrawReason',
+]
 
 const GROUP_RE = /^[a-z][a-z0-9_]{0,63}$/
 // Change set ids are crypto.randomUUID() values.
@@ -135,7 +145,7 @@ export function revisionCounterKey(point: string, scope: OverrideScope, group: s
   return `override.revision:${point}:${scope.type}:${scope.id}:${group}`
 }
 
-async function lockScope(tx: Tx, point: string, scope: OverrideScope, group: string) {
+export async function lockScope(tx: Tx, point: string, scope: OverrideScope, group: string) {
   const key = `override:${point}:${scope.type}:${scope.id}:${group}`
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`
 }
@@ -261,8 +271,21 @@ export interface ProposeInput {
     baseFactoryText?: Record<string, string>
     /** What the plugin was shown, when it is not its scope's active version (null: factory text). */
     basedOn?: { scope: ScopeType; changeSetId: string; revision: number | null } | null
+    /** user_skill.text: the source skill's text and name the proposal was built on. */
+    baseText?: string
+    sourceName?: string
+    /** From the call token: which version of the plugin proposed it, from where. */
+    pluginVersion?: string
+    conversationId?: string | null
+    jobId?: string | null
   }
   createdBy: string
+  /**
+   * Runs under the scope lock, before the rows are written; throwing refuses the proposal.
+   * What the caller checked before taking the lock may have changed since (user_skill.text:
+   * the skill deleted or edited meanwhile; its delete takes the same lock).
+   */
+  guard?: (tx: Tx) => Promise<void>
 }
 
 export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ changeSetId: string }> {
@@ -298,19 +321,17 @@ export async function propose(input: ProposeInput, db: Db = prisma): Promise<{ c
     meta = own
   }
   if (input.platformMeta) {
-    const { fromRevision, baseFactoryText, basedOn } = input.platformMeta
-    meta = {
-      ...meta,
-      ...(fromRevision !== undefined ? { fromRevision } : {}),
-      ...(baseFactoryText !== undefined ? { baseFactoryText } : {}),
-      ...(basedOn !== undefined ? { basedOn } : {}),
-    }
+    const own = Object.fromEntries(
+      Object.entries(input.platformMeta).filter(([k, v]) => v !== undefined && PLATFORM_META_KEYS.includes(k)),
+    )
+    meta = { ...meta, ...own }
   }
 
   const changeSetId = randomUUID()
   await db.$transaction(async (tx) => {
     // Under the lock, so two proposals cannot both take the last pending slot.
     await lockScope(tx, point, scope, targetGroup)
+    await input.guard?.(tx)
     if ((await countPending(tx, scope, point, targetGroup)) >= MAX_PENDING_CHANGE_SETS) {
       throw new PluginOverrideError(
         'too_many_pending',
@@ -376,6 +397,9 @@ export async function approve(
     }
     if (status !== 'proposed' && !reapproval) {
       throw new PluginOverrideError('wrong_state', `This change set is ${status}, not waiting for a decision`)
+    }
+    if (first.extensionPoint !== 'skill.text') {
+      throw new PluginOverrideError('wrong_state', 'A proposal for a user skill is saved as a new skill, never made active')
     }
     const stale = rows
       .filter((r) => !currentHashes[r.targetKey] || (!reapproval && currentHashes[r.targetKey] !== r.baseSha256))
@@ -538,6 +562,94 @@ export async function deleteChangeSet(changeSetId: string, db: Db = prisma): Pro
     const { count } = await tx.pluginOverride.deleteMany({ where: { changeSetId } })
     return { deleted: count }
   })
+}
+
+// ---------------------------------------------------------------------------
+// user_skill.text: a proposal is saved as a new user skill (adopted), never made active
+// ---------------------------------------------------------------------------
+
+export const USER_SKILL_POINT = 'user_skill.text' as const satisfies BehaviourExtensionPoint
+
+/**
+ * Takes the lock of a change set's scope and skill inside the caller's transaction and reads
+ * the set under it (throws not_found). For a user-skill set the caller holds the owner's
+ * user-skill lock first, the order every user-skill writer uses.
+ */
+export async function lockChangeSet(tx: Tx, changeSetId: string): Promise<PluginOverride[]> {
+  checkChangeSetId(changeSetId)
+  return lockedSet(tx, changeSetId)
+}
+
+/**
+ * Marks a proposed user-skill set `adopted`, recording the skill it became; `rows` were
+ * read by lockChangeSet in the same transaction.
+ */
+export async function markAdoptedIn(
+  tx: Tx,
+  rows: PluginOverride[],
+  decidedBy: string,
+  adopted: { skillId: string; name: string },
+): Promise<void> {
+  checkActor(decidedBy)
+  const first = rows[0]
+  if (first.extensionPoint !== USER_SKILL_POINT) {
+    throw new PluginOverrideError('wrong_state', 'Only a proposal for a user skill can be saved as a new skill')
+  }
+  if (setStatus(rows) !== 'proposed') {
+    throw new PluginOverrideError('wrong_state', `This change set is ${setStatus(rows)}, not waiting for a decision`)
+  }
+  const meta = { ...((first.meta as Record<string, unknown> | null) ?? {}), adoptedSkillId: adopted.skillId, adoptedName: adopted.name }
+  const { count } = await tx.pluginOverride.updateMany({
+    where: { changeSetId: first.changeSetId, status: 'proposed' },
+    data: { status: 'adopted', decidedBy, decidedAt: now(), meta: meta as Prisma.InputJsonValue },
+  })
+  if (count !== rows.length) throw new PluginOverrideError('wrong_state', 'This change set changed while it was saved')
+}
+
+/**
+ * Deletes every set proposed for one of the user's skills that did not become a skill, as
+ * part of deleting that skill. Adopted sets stay: they are the provenance of the skills
+ * saved from them. Returns the sets removed.
+ */
+export async function deleteUserSkillProposalsTx(
+  tx: Tx,
+  userId: string,
+  skillId: string,
+): Promise<{ changeSetId: string; pluginId: string; status: OverrideStatus }[]> {
+  const scope: OverrideScope = { type: 'user', id: userId }
+  if (typeof skillId !== 'string' || !GROUP_RE.test(skillId) || !userId) return []
+  await lockScope(tx, USER_SKILL_POINT, scope, skillId)
+  const rows = await tx.pluginOverride.findMany({
+    where: { ...scopeWhere(USER_SKILL_POINT, scope, skillId), status: { not: 'adopted' } },
+  })
+  if (rows.length === 0) return []
+  await tx.pluginOverride.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } })
+  return groupBySet(rows).map((set) => ({
+    changeSetId: set[0].changeSetId,
+    pluginId: set[0].pluginId,
+    status: set[0].status as OverrideStatus,
+  }))
+}
+
+/**
+ * Withdraws a proposed set because the catalog revoked the plugin version that made it,
+ * inside the caller's transaction; false when it is no longer waiting.
+ */
+export async function withdrawRevokedIn(tx: Tx, changeSetId: string): Promise<boolean> {
+  let rows: PluginOverride[]
+  try {
+    rows = await lockedSet(tx, changeSetId)
+  } catch (e) {
+    if (e instanceof PluginOverrideError && e.code === 'not_found') return false
+    throw e
+  }
+  if (setStatus(rows) !== 'proposed') return false
+  const meta = { ...((rows[0].meta as Record<string, unknown> | null) ?? {}), withdrawReason: 'revoked' }
+  await tx.pluginOverride.updateMany({
+    where: { changeSetId, status: 'proposed' },
+    data: { status: 'withdrawn', decidedAt: now(), meta: meta as Prisma.InputJsonValue },
+  })
+  return true
 }
 
 /**

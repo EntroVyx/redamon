@@ -19,6 +19,7 @@ Nothing here raises past the factory render.
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import logging
 from collections import OrderedDict
 from typing import Optional
@@ -31,9 +32,13 @@ FACTORY_REVISION = 1
 SETTINGS_KEY = "SKILL_TEXT_OVERRIDES"
 _ENTRY_STR_FIELDS = ("value", "baseSha256", "overrideId", "changeSetId", "pluginId")
 
-# {skillId, revision, changeSetId} of the workflow the last build rendered in this context,
-# or None. Revision numbers restart per scope (user, project), so the change set is what
-# identifies a version; it is None for factory text.
+# What the last build rendered in this context, or None:
+# - a built-in workflow: {skillId, revision, changeSetId}. Revision numbers restart per
+#   scope (user, project), so the change set is what identifies a version; it is None for
+#   factory text;
+# - a user skill: {skillId: "user_skill:<id>", kind: "user", contentSha256}. A user skill
+#   has no revisions (a new version is a new skill), so the record has no `revision` key
+#   and readers take revision with a default.
 # LangGraph runs each node in a copied context, so the root think node copies this into
 # its state update (_skill_workflow) for phase_update to carry; it never leaves the node
 # on its own.
@@ -192,3 +197,25 @@ def record_applied(skill_id: Optional[str]) -> None:
         return
     revision, change_set_id = effective_version(skill_id)
     applied_skill_workflow.set({"skillId": skill_id, "revision": revision, "changeSetId": change_set_id})
+
+
+# The webapp computes the same prefix with Node (sha256 of the UTF-8 content, hex), so a
+# session's record can be matched to the stored skill text without carrying the text.
+CONTENT_SHA256_CHARS = 16
+
+
+def record_applied_user(skill_id: str, content: str) -> None:
+    """Record the user skill whose text the build rendered. Never raises: on any doubt
+    the record is None, which reads as "no workflow recorded"."""
+    try:
+        if not isinstance(skill_id, str) or not skill_id or not isinstance(content, str):
+            raise ValueError("the skill has no string id and content")
+        # surrogatepass: a lone surrogate from JSON must not break the prompt build. Valid
+        # text encodes exactly as UTF-8, which is what the webapp hashes.
+        digest = hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest()
+        applied_skill_workflow.set({"skillId": f"user_skill:{skill_id}", "kind": "user",
+                                    "contentSha256": digest[:CONTENT_SHA256_CHARS]})
+    except Exception as exc:  # noqa: BLE001 - recording must never break a prompt
+        applied_skill_workflow.set(None)
+        logger.warning("[skill.text] user skill %s not recorded: %s",
+                       _for_log(skill_id), _for_log(exc))

@@ -21,7 +21,7 @@ import {
   type InstallView,
 } from './lifecycleCommon'
 import { MigrationFailure, migrationSteps, runMigrations, type MigrationStats } from './migrations'
-import { markStaleIn, type StaleReason } from './overrides'
+import { USER_SKILL_POINT, markStaleIn, type StaleReason } from './overrides'
 import { isPluginPermission } from './permissions'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
 import {
@@ -137,10 +137,18 @@ function busyOrNotInstalled(row: PluginInstall | null, pluginId: string): Lifecy
 }
 
 /** The plugin's own data rows (not the platform's `__` rows) that a reinstall would find. */
-/** What an uninstall with "keep data" left: data rows or approved skill versions. */
+/**
+ * What an uninstall with "keep data" left: data rows, approved skill versions, or proposals
+ * for people's own skills still waiting. A user-skill proposal that was saved, rejected or
+ * withdrawn is only the provenance of a decision: alone it must not keep an uninstalled
+ * plugin listed forever.
+ */
 export async function hasKeptAnything(pluginId: string): Promise<boolean> {
   if (await hasKeptData(pluginId)) return true
-  return !!(await prisma.pluginOverride.findFirst({ where: { pluginId }, select: { id: true } }))
+  return !!(await prisma.pluginOverride.findFirst({
+    where: { pluginId, OR: [{ extensionPoint: { not: USER_SKILL_POINT } }, { status: 'proposed' }] },
+    select: { id: true },
+  }))
 }
 
 export async function hasKeptData(pluginId: string): Promise<boolean> {

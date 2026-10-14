@@ -24,7 +24,15 @@ export interface ActionContext {
   sessionId?: string | null
 }
 
-export type ActionAnswer = { kind: 'result'; result: Record<string, unknown> } | { kind: 'job'; jobId: string }
+/** The skill a job works on, as the server recorded it (platform 1.1.0). */
+export interface JobPickView {
+  ref: string
+  name: string | null
+}
+
+export type ActionAnswer =
+  | { kind: 'result'; result: Record<string, unknown> }
+  | { kind: 'job'; jobId: string; existing?: boolean; pick?: JobPickView | null }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
@@ -50,7 +58,12 @@ export async function readActionAnswer(res: Response): Promise<ActionAnswer> {
       res.status,
     )
   }
-  if (isObj(body) && typeof body.jobId === 'string') return { kind: 'job', jobId: body.jobId }
+  if (isObj(body) && typeof body.jobId === 'string') {
+    const pick = isObj(body.pick) && typeof body.pick.ref === 'string'
+      ? { ref: body.pick.ref, name: typeof body.pick.name === 'string' ? body.pick.name : null }
+      : null
+    return { kind: 'job', jobId: body.jobId, ...(body.existing === true ? { existing: true } : {}), ...(pick ? { pick } : {}) }
+  }
   if (isObj(body) && body.ok === true && isObj(body.result)) return { kind: 'result', result: body.result }
   if (isObj(body) && body.ok === false) {
     const e = body.error

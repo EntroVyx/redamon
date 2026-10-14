@@ -38,13 +38,13 @@ import { POST as runActionRoute } from '@/app/api/plugins/[pluginId]/actions/[ac
 
 let db: FakePrisma
 let w: LifecycleWorld
-const FULL = ['session:read', 'llm:invoke', 'override:skill.text']
+const FULL = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const SHA = 'a'.repeat(64)
 
-// 1.0.0 asks for two permissions (no skill versions); 1.1.0 for all three.
+// 1.0.0 asks for two permissions (no skill versions, no skill pick); 1.1.0 for all of them.
 const contributesWithout = () => {
   const c = echoManifest().contributes as Record<string, unknown[]>
-  return { ...c, 'chat.session.actions': (c['chat.session.actions'] as Record<string, unknown>[]).filter((x) => !x.coreScreen) }
+  return { ...c, 'chat.session.actions': (c['chat.session.actions'] as Record<string, unknown>[]).filter((x) => !x.coreScreen && !x.pick) }
 }
 const RELEASES = [
   { manifest: { version: '1.0.0', permissions: ['session:read', 'llm:invoke'], contributes: contributesWithout() } },
@@ -127,7 +127,7 @@ describe('an update', () => {
     const out = await go('1.1.0', FULL)
     expect(out.plugin.grantedPermissions).toEqual(FULL)
     expect(h.audit.find((e) => e.action === 'plugin.permissions_granted')).toMatchObject({
-      after: { version: '1.1.0', permissions: FULL, added: ['override:skill.text'] },
+      after: { version: '1.1.0', permissions: FULL, added: ['override:skill.text', 'override:user_skill.text'] },
     })
   })
 

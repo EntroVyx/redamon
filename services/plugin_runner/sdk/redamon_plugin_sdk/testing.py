@@ -6,6 +6,11 @@ cases (sdk/contract_cases.json) run against both. It applies the Gateway's main 
 (permissions, owner, reserved collections, unknown parts, five pending proposals) but not
 every quota: passing here is necessary, not sufficient.
 
+The user's own skills (`user_skill.text`) are added with `FakeSdk.add_user_skill`. The fake
+checks a proposed text with a subset of the agent's rules (empty, NUL, length, the reserved
+headings and markers) and a skill's text for credentials with a subset of the Gateway's
+detector, with the same messages; the real ones refuse more.
+
     from redamon_plugin_sdk.testing import FakeSdk, ScriptedLlm, make_context
 
     llm = ScriptedLlm(['{"lessons": []}'])
@@ -28,8 +33,44 @@ from .client import Sdk, check_order, check_where, js_length
 from .context import Context
 from .errors import PluginError
 
-ALL_PERMISSIONS = ("session:read", "llm:invoke", "override:skill.text")
+ALL_PERMISSIONS = ("session:read", "llm:invoke", "override:skill.text", "override:user_skill.text")
 MAX_PENDING_CHANGE_SETS = 5
+USER_SKILL_POINT = "user_skill.text"
+USER_SKILL_PART = "body"
+# MAX_CONTENT_SIZE of webapp src/lib/userSkills.ts, in UTF-16 code units.
+USER_SKILL_MAX_CHARS = 51_200
+_GROUP_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\Z")
+_VERSION_SUFFIX = re.compile(r"^(.*\S)\s+v(\d{1,6})\Z", re.IGNORECASE)
+# agentic prompts/skill_parts.py RESERVED_HEADINGS and RESERVED_MARKERS.
+_RESERVED_HEADINGS = (
+    "SCOPE GUARDRAIL", "RULES OF ENGAGEMENT (MANDATORY)", "RoE TIMING WARNINGS",
+    "UNPRODUCTIVE STREAK DETECTED", "PRODUCTIVITY HINT", "Prior Productivity Claim Was Downgraded",
+    "USER GUIDANCE (IMPORTANT)", "SKILL FIT CHECK",
+)
+# agentic/prompts/skill_parts.py _MARKER_RES, on the raw text: the agent also folds look-alike
+# characters first, so it may refuse more, never less.
+_RESERVED_MARKERS = (
+    (re.compile(r"<<<\s*untrusted_", re.IGNORECASE), "<<<UNTRUSTED_"),
+    (re.compile(r"<<<\s*end_untrusted_", re.IGNORECASE), "<<<END_UNTRUSTED_"),
+    (re.compile(r"<<\s*redamon_cache_[a-z0-9_]*\s*>>", re.IGNORECASE), "<<REDAMON_CACHE_"),
+)
+# webapp lib/plugins/redact.ts SECRET_SHAPES (hasSecretKeyShape): key and token formats only,
+# so prose such as "Basic authentication" is not refused.
+_CREDENTIAL_RES = (
+    # "[ ]" keeps the key header itself out of this file, which repository scans look for.
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE[ ]KEY-----"),
+    re.compile(r"(?<!\w)eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\."),
+    re.compile(r"(?<!\w)(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    re.compile(r"(?<!\w)sk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"(?<!\w)AIza[0-9A-Za-z_-]{35}\b"),
+    re.compile(r"(?<!\w)(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})"),
+    re.compile(r"(?<!\w)glpat-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"(?<!\w)xox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"(?<!\w)hf_[A-Za-z0-9]{30,}\b"),
+    re.compile(r"(?<!\w)(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"),
+)
+_CREDENTIALS_MESSAGE = ("This skill holds a key or token (a private key, a JWT or an API token), so it is never "
+                        "given to a plugin. Remove it from the skill first.")
 _COLLECTION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}\Z")
 _KEY_MAX_CHARS = 512
 _VALUE_MAX_BYTES = 1_048_576
@@ -137,6 +178,7 @@ class FakeGateway:
         self.rows: dict = {}
         self.proposals: list = []
         self.active: dict = {}
+        self.user_skills: dict = {}
         self.progress: list = []
         self._seq = 0
         self._change_sets = 0
@@ -182,7 +224,7 @@ class FakeGateway:
 
     def _target(self, body: dict) -> tuple:
         point = body.get("point")
-        if point != "skill.text":
+        if point not in ("skill.text", USER_SKILL_POINT):
             raise PluginError("invalid_target", f"unknown extension point {point!r}")
         self._need(f"override:{point}")
         group = body.get("targetGroup")
@@ -314,7 +356,105 @@ class FakeGateway:
         row = self.rows.pop(ident, None)
         return {"deleted": row is not None and self._live(row)}
 
+    def _user_skill(self, group) -> dict:
+        """A user skill this session used, owned by the token's user; the Gateway's refusals,
+        in its order (webapp lib/plugins/userSkillOverrideOps.ts)."""
+        invalid = PluginError("invalid_target", "No such skill in this session.")
+        if not isinstance(group, str) or not _GROUP_RE.match(group):
+            raise invalid
+        if not self.session_id:
+            raise PluginError("no_session", "This action was not started from a session.")
+        skill = self.user_skills.get(group)
+        if not skill or skill["owner"] != self.user_id or not skill["usedInSession"] or skill["quarantined"]:
+            raise invalid
+        # Everything a plugin is given of the skill: its name, description and text.
+        given = "\n".join([skill["name"], skill.get("description") or "", skill["content"]])
+        if any(r.search(given) for r in _CREDENTIAL_RES):
+            raise PluginError("skill_contains_credentials", _CREDENTIALS_MESSAGE)
+        return skill
+
+    def _get_user_skill(self, body: dict) -> dict:
+        self._need(f"override:{USER_SKILL_POINT}")
+        skill = self._user_skill(body.get("targetGroup"))
+        m = _VERSION_SUFFIX.match(skill["name"])
+        root, n = (m.group(1), int(m.group(2))) if m else (skill["name"], None)
+        content = skill["content"]
+        return {"point": USER_SKILL_POINT, "targetGroup": skill["id"], "displayName": skill["name"],
+                "description": skill["description"],
+                "parts": [{"partId": USER_SKILL_PART, "text": content,
+                           "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                           "chars": js_length(content), "maxChars": USER_SKILL_MAX_CHARS,
+                           "kind": "plain", "placeholders": []}],
+                "active": None, "pendingCount": self._pending("user", skill["id"]),
+                "limits": {"skillMaxChars": USER_SKILL_MAX_CHARS, "parts": {USER_SKILL_PART: USER_SKILL_MAX_CHARS}},
+                "lineage": {"rootName": root, "version": skill["version"] or n or 1}}
+
+    @staticmethod
+    def _text_errors(text: str, base: str) -> list:
+        """A subset of the agent's /plugins/text/validate, with its messages."""
+        errors = []
+        if not text.strip():
+            errors.append("value is empty")
+        if "\x00" in text:
+            errors.append("value contains a NUL character")
+        if js_length(text) > USER_SKILL_MAX_CHARS:
+            errors.append(f"value is {js_length(text)} characters; the limit is {USER_SKILL_MAX_CHARS}")
+
+        def letters(t: str) -> str:
+            return re.sub(r"[^a-z]", "", t.casefold())
+        for pattern, marker in _RESERVED_MARKERS:
+            if pattern.search(text) and not pattern.search(base):
+                errors.append(f"value contains the reserved marker {marker!r}")
+        for heading in _RESERVED_HEADINGS:
+            if letters(heading) in letters(text) and letters(heading) not in letters(base):
+                errors.append(f"value contains the heading of the {heading!r} prompt section")
+        return errors
+
+    def _propose_user_skill(self, body: dict) -> dict:
+        self._need(f"override:{USER_SKILL_POINT}")
+        if body.get("scope") != "user":
+            raise PluginError("invalid_proposal", "A version of your own skill is proposed in the user scope only.")
+        skill = self._user_skill(body.get("targetGroup"))
+        if not isinstance(body.get("note"), str):
+            raise PluginError("invalid_proposal", "a note is required")
+        meta = body.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            raise PluginError("invalid_proposal", "meta must be an object")
+        sent = body.get("parts")
+        if not isinstance(sent, dict):
+            raise PluginError("invalid_proposal", "parts must be an object of part id to text")
+        if list(sent) != [USER_SKILL_PART]:
+            raise PluginError("invalid_proposal", f"A user skill has exactly one part, {USER_SKILL_PART}; "
+                                                  f"this proposal names {', '.join(sent) or 'none'}.")
+        text = sent[USER_SKILL_PART]
+        if not isinstance(text, str):
+            raise PluginError("invalid_proposal", f"the text of {skill['id']}/{USER_SKILL_PART} must be a string")
+        read = body.get("readSha256")
+        if not isinstance(read, dict) or not isinstance(read.get(USER_SKILL_PART), str):
+            raise PluginError("invalid_proposal", f"readSha256.{USER_SKILL_PART} is required: "
+                                                  "the sha256 of the text this proposal was built on")
+        if read[USER_SKILL_PART] != hashlib.sha256(skill["content"].encode("utf-8")).hexdigest():
+            raise PluginError("factory_changed", f'The text of "{skill["name"]}" changed since this plugin read it: '
+                                                 "read it again and redo the proposal.")
+        if text == skill["content"]:
+            raise PluginError("invalid_proposal", f'This proposal does not change "{skill["name"]}".')
+        errors = self._text_errors(text, skill["content"])
+        if errors:
+            raise PluginError("invalid_proposal", "; ".join(f"{skill['id']}/{USER_SKILL_PART}: {e}" for e in errors))
+        if self._pending("user", skill["id"]) >= MAX_PENDING_CHANGE_SETS:
+            raise PluginError("too_many_pending", f"There are already {MAX_PENDING_CHANGE_SETS} proposals waiting "
+                                                  f"for a decision on {skill['id']}")
+        self._change_sets += 1
+        cs = {"changeSetId": f"fake-cs-{self._change_sets}", "point": USER_SKILL_POINT, "targetGroup": skill["id"],
+              "parts": {USER_SKILL_PART: text}, "note": body["note"], "meta": meta, "scope": "user",
+              "status": "proposed", "fromRevision": None,
+              "baseText": skill["content"], "sourceName": skill["name"]}
+        self.proposals.append(cs)
+        return {"changeSetId": cs["changeSetId"], "fromRevision": None, "proposedRevisionLabel": None}
+
     def _override_get(self, body: dict) -> dict:
+        if body.get("point") == USER_SKILL_POINT:
+            return self._get_user_skill(body)
         point, group = self._target(body)
         reg = self.registry[group]
         active = self.active.get(("project", group)) if self.project_id else None
@@ -332,6 +472,8 @@ class FakeGateway:
 
     def _override_propose(self, body: dict) -> dict:
         # The Gateway's order and rules (webapp lib/plugins/overrideOps.ts, TD-19).
+        if body.get("point") == USER_SKILL_POINT:
+            return self._propose_user_skill(body)
         point, group = self._target(body)
         reg = self.registry[group]
         scope = body.get("scope")
@@ -403,10 +545,11 @@ class FakeGateway:
                               "(a RedAmon update): read it again and redo the proposal.")
 
     def _override_withdraw(self, body: dict) -> dict:
-        self._need("override:skill.text")
+        # The permission is that of the set's own point, checked once the set is found.
         cs_id = body.get("changeSetId")
         for cs in self.proposals:
             if cs["changeSetId"] == cs_id and cs["status"] == "proposed":
+                self._need(f"override:{cs['point']}")
                 cs["status"] = "withdrawn"
                 return {"withdrawn": True}
         raise PluginError("not_found", f"No proposal {cs_id} of this plugin.")
@@ -456,6 +599,16 @@ class FakeSdk(Sdk):
     @property
     def llm_script(self) -> ScriptedLlm:
         return self.gateway.llm
+
+    def add_user_skill(self, skill_id: str, name: str, content: str, *, used_in_session: bool = True,
+                       owner: Optional[str] = None, description: Optional[str] = None,
+                       version: Optional[int] = None, quarantined: bool = False) -> None:
+        """A user's own skill. `used_in_session` says the session's turns used it; `owner`
+        defaults to this fake's user (another owner's skill is never visible)."""
+        self.gateway.user_skills[skill_id] = {
+            "id": skill_id, "name": name, "content": content, "description": description,
+            "owner": owner or self.gateway.user_id, "usedInSession": used_in_session,
+            "version": version, "quarantined": quarantined}
 
     def set_active(self, target_group: str, *, revision: int, parts: dict, scope: str = "user") -> None:
         """Make a version active, as if a person had approved it."""

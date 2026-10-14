@@ -22,7 +22,7 @@ import { versionPath } from './staging'
 
 let db: FakePrisma
 let w: LifecycleWorld
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const USERS = ['user-a', 'user-b', 'user-c']
 const PROJECTS = ['project-1', 'project-2']
 

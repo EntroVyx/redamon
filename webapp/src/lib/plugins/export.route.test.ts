@@ -74,7 +74,7 @@ describe('export', () => {
     expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="redamon-plugin-echo-2026-10-10T10-00-00-000Z\.json"$/)
     expect(res.headers.get('cache-control')).toBe('no-store')
     const doc = await res.json()
-    expect(doc).toMatchObject({ format: EXPORT_FORMAT, exportVersion: 1, pluginId: 'echo', exportedAt: NOW.toISOString() })
+    expect(doc).toMatchObject({ format: EXPORT_FORMAT, exportVersion: 2, pluginId: 'echo', exportedAt: NOW.toISOString() })
     expect(doc.install).toMatchObject({ pluginId: 'echo', activeVersion: '1.0.0' })
     expect(doc.data.map((r: { key: string }) => r.key).sort()).toEqual(['a', 'b', 'j'])
     expect(doc.data.find((r: { key: string }) => r.key === 'b').value).toEqual([1, 2])

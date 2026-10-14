@@ -2290,13 +2290,38 @@ model UserAttackSkill {
   id          String   @id @default(cuid())
   userId      String   @map("user_id")
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Unique per user by a case- and space-insensitive key computed in SQL
+  // (src/lib/userSkillNames.ts); there is no index, every writer checks it under a lock.
   name        String
   description String?  @db.Text
   content     String   @db.Text
+  // A version saved from a plugin's proposal (README.PLUGINS.md §7.6). Never written by
+  // the skill's PUT, which reads only name, description and content.
+  derivedFromId       String?           @map("derived_from_id")
+  derivedFrom         UserAttackSkill?  @relation("UserAttackSkillLineage", fields: [derivedFromId], references: [id], onDelete: SetNull)
+  derivedVersions     UserAttackSkill[] @relation("UserAttackSkillLineage")
+  // No foreign key: the family outlives the skill it started from.
+  lineageRootId       String?           @map("lineage_root_id")
+  // null: never versioned; 1: the first of a family; 2 and up: saved versions.
+  version             Int?
+  // No foreign keys: override rows and plugin installs can be purged, the skill stays.
+  originChangeSetId   String?           @unique @map("origin_change_set_id")
+  originPluginId      String?           @map("origin_plugin_id")
+  originPluginVersion String?           @map("origin_plugin_version")
+  // Every `pluginId@version` whose proposed text this skill carries: its own origin and its
+  // source's chain, copied when it is saved, so deleting a version in between loses nothing.
+  originChain         String[]          @default([]) @map("origin_chain")
+  // Set when the catalog revokes a version in originChain (quarantinedFor); only the owner clears it.
+  quarantinedAt       DateTime?         @map("quarantined_at")
+  quarantineReason    String?           @map("quarantine_reason")
+  quarantinedFor      String?           @map("quarantined_for")
+  // The revocations its owner released it from after reading it; those never quarantine it again.
+  releasedFor         String[]          @default([]) @map("released_for")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@index([userId])
+  @@index([originPluginId, originPluginVersion])
   @@map("user_attack_skills")
 }
 

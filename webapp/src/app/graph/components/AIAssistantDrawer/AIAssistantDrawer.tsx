@@ -122,7 +122,7 @@ export function AIAssistantDrawer({
     scrollToBottom, checkIfAtBottom, resetScrollState,
   } = useScrollBehavior(chatItems)
 
-  const { skillData } = useAttackSkillData(userId, projectId)
+  const { skillData, refetch: refetchSkillData } = useAttackSkillData(userId, projectId)
 
   const {
     missingApiKeys,
@@ -152,14 +152,15 @@ export function AIAssistantDrawer({
 
   // Plugin chat-session actions from the gear menu (design §6.7): the review modal (step 6.5)
   // and the core versions modal (step 6.6). The versions modal opens on the session's skill
-  // when it is a built-in one (attackPathType), so the person lands on the right skill.
+  // (attackPathType), built-in or the person's own, so they land on the right skill.
   const [reviewChangeSetId, setReviewChangeSetId] = useState<string | null>(null)
   const [versionsFor, setVersionsFor] = useState<{ projectId: string | null; initialSkill?: string } | null>(null)
   const { run: runPluginChatAction, modals: pluginChatModals } = usePluginChatActions({
     onReviewProposal: (changeSetId) => setReviewChangeSetId(changeSetId),
     onCoreScreen: (screen, context) => {
       if (screen === 'skill.text.versions') {
-        setVersionsFor({ projectId: context.projectId ?? null, initialSkill: isBuiltinSkill(attackPathType) ? attackPathType : undefined })
+        const sessionSkill = attackPathType.startsWith('user_skill:') || isBuiltinSkill(attackPathType) ? attackPathType : undefined
+        setVersionsFor({ projectId: context.projectId ?? null, initialSkill: sessionSkill })
       }
     },
   })
@@ -483,8 +484,12 @@ export function AIAssistantDrawer({
         <OverrideReviewModal
           changeSetId={reviewChangeSetId}
           scopeOwnerId={userId}
+          projectId={projectId}
           onClose={() => setReviewChangeSetId(null)}
-          onDecided={() => setReviewChangeSetId(null)}
+          onDecided={(outcome) => {
+            setReviewChangeSetId(null)
+            if (outcome === 'saved') refetchSkillData()
+          }}
         />
       )}
 

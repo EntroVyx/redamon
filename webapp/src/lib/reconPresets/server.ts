@@ -380,10 +380,19 @@ export async function validateApplication(
     const problem = checkPresetValue(key, spec, application.data[key], projectId)
     if (problem) return { key, error: `'${key}' ${problem}` }
   }
-  const crossField = await validateCrossFieldRules(
-    { ...currentRow, ...application.data }, application.changed, actorUserId
-  )
+  // The user-skill toggles are judged against the project OWNER's skills, never the actor's.
+  let ownerUserId: string | null | undefined
+  if (application.changed.includes('attackSkillConfig')) {
+    try {
+      ownerUserId = (await prisma.project.findUnique({ where: { id: projectId }, select: { userId: true } }))?.userId ?? null
+    } catch {
+      return { key: '', error: 'The project owner could not be read to check its skill toggles; nothing was written' }
+    }
+  }
+  const nextRow: Record<string, unknown> = { ...currentRow, ...application.data }
+  const crossField = await validateCrossFieldRules(nextRow, application.changed, actorUserId, { ownerUserId })
   if (crossField) return { key: '', error: crossField }
+  if ('attackSkillConfig' in application.data) application.data.attackSkillConfig = nextRow.attackSkillConfig
 
   // A saved preset may name an engine flag. Switching a hook onto Jev needs a
   // token on the project OWNER's account, and the row selected for an apply is

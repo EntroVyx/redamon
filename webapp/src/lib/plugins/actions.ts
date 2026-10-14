@@ -9,10 +9,11 @@ import { CallTokenConfigError, mintCallToken } from './callToken'
 import { now } from './clock'
 import { isValidPluginId } from './ids'
 import { retireCallToken } from './gateway'
-import { failJob, markRunning, startJob, type JobContext } from './jobs'
+import { failJob, markRunning, startJob, type JobContext, type JobPick } from './jobs'
 import * as ov from './overrides'
 import { findInstall, hasPermission, servesActions } from './registry'
 import { RunnerError, RunnerUnavailableError, cancelJob, runAction } from './runnerClient'
+import { InvalidPickError, resolvePick } from './sessionPick'
 import { crossOriginResponse, sameOrigin } from './sameOrigin'
 import { ACTION_ID_RE } from './schemas/common'
 import { actionMaxTimeoutSeconds } from './settings'
@@ -109,7 +110,8 @@ function runnerFailure(e: unknown, extra: Json = {}): NextResponse | null {
   return refusal ? refuse(...refusal, extra) : null
 }
 
-async function strictContext(raw: unknown, userId: string): Promise<JobContext | NextResponse> {
+/** The context of an action or a picker, owned by `userId` by a strict check (never requireProjectAccess). */
+export async function strictContext(raw: unknown, userId: string): Promise<JobContext | NextResponse> {
   if (raw === undefined || raw === null) return { projectId: null, sessionId: null, conversationId: null }
   if (!isObj(raw)) return refuse(400, 'invalid_context', 'context must be an object')
   const { projectId, sessionId } = raw
@@ -172,6 +174,19 @@ async function act(request: NextRequest, pluginId: string, actionId: string): Pr
   const context = await strictContext(body.context, eff.userId)
   if (context instanceof NextResponse) return context
 
+  // A pick is re-derived from the session, never trusted: the plugin receives the
+  // server's {kind, point, target, ref}, and the job records it.
+  let pick: JobPick | null = null
+  if (params.pick !== undefined) {
+    try {
+      pick = await resolvePick(plugin, actionId, params.pick, context.conversationId, eff.userId)
+    } catch (e) {
+      if (e instanceof InvalidPickError) return refuse(400, 'invalid_pick', e.message)
+      throw e
+    }
+    params.pick = { kind: pick.kind, point: pick.point, target: pick.target, ref: pick.ref }
+  }
+
   if (action.llm && !(await readFeatureModel(eff.userId, pluginFeatureId(pluginId)))) {
     return refuse(409, 'model_required', 'Choose a model for this plugin in Models by feature.', { featureId: pluginFeatureId(pluginId) })
   }
@@ -211,8 +226,10 @@ async function act(request: NextRequest, pluginId: string, actionId: string): Pr
     }
 
     const deadline = new Date(now().getTime() + (timeoutSeconds + JOB_GRACE_SECONDS) * 1000)
-    const { job, created } = await startJob({ pluginId, userId: eff.userId, actionId, context, deadline })
-    if (!created) return NextResponse.json({ jobId: job.jobId, status: job.status, existing: true })
+    const { job, created } = await startJob({ pluginId, userId: eff.userId, actionId, context, deadline, pick })
+    // One job per session: the answer names the skill it works on, so a second pick is told
+    // why its choice did not start a job of its own.
+    if (!created) return NextResponse.json({ jobId: job.jobId, status: job.status, existing: true, pick: job.pick ?? null })
     try {
       const { token } = await mintCallToken({ ...tokenBase, kind: 'job', jid: job.jobId })
       const out = await runAction(pluginId, actionId, {

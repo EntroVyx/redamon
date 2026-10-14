@@ -23,6 +23,8 @@ export interface ChatSessionActionContribution {
   icon?: string
   action?: string
   coreScreen?: CoreScreen
+  /** What the core asks the person to pick first (the session's skills), platform 1.1.0. */
+  pick?: 'session.skill'
   llm: boolean
   async: boolean
 }
@@ -88,6 +90,7 @@ function chatActionsOf(
       ...(str(c.icon) ? { icon: str(c.icon) } : {}),
       ...(action ? { action } : {}),
       ...(coreScreen ? { coreScreen } : {}),
+      ...(action && c.pick === 'session.skill' ? { pick: 'session.skill' as const } : {}),
       llm: f?.llm ?? false,
       async: f?.async ?? false,
     })

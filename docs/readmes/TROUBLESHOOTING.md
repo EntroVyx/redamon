@@ -145,6 +145,20 @@ by hand, set `REDAMON_NO_AUTO_RESET=1`.
 | A stopped scan left noise the rules should have muted | A stopped scan exits without its end-of-run sweep | **Apply… → Current graph**, or let the next scan finish |
 | A rule-muted finding vanished from Muted Nodes after a scan | The scan no longer reported it, and a rule mute is pruned like any other finding (a person's mute is kept and marked stale) | Nothing to fix. Mute it by hand if it must stay on record |
 
+## Saving a plugin's proposal for one of your own skills is refused
+
+A plugin such as Skiller can propose a new version of one of your own Agent Skills; **Save as new
+skill** in the review window creates it. These are the refusals you may meet there.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `503 platform_not_ready`: "The database does not accept saved proposals yet" | The plugin tables' status check still predates the `adopted` status: the constraint script did not run at start (dev mode never runs it), or it failed. The webapp log has `ERROR [plugins] plugin_overrides has no status check listing every status` or `[plugins] constraint script failed` | Restart the webapp container (`docker compose restart webapp`): its entrypoint re-applies the constraints (`plugin_overrides_status_ck2`). In dev mode run `docker compose exec webapp node scripts/apply-plugin-constraints.mjs` once |
+| `409 proposer_unavailable` ("… is not available at the version that made this proposal") | The plugin that made the proposal is disabled, uninstalled, revoked, no longer allowed to propose versions of your skills, or was updated since | Run the plugin again on the session to get a proposal from the version installed now, or delete this proposal |
+| `409 risk_not_acknowledged` | The new text adds lines flagged for review (they send data out, name a host or URL, or drop a guard) | Read them and tick "I have read the flagged lines" |
+| `409 too_many_enabled_skills` | The project already uses 20 of your skills | Keep "instead of <source>" checked, untick "Use it in project", or turn a skill off in the project |
+| `409 name_taken` / `409 skill_limit` | Another of your skills has that name (case and spacing ignored) / you have 1,000 skills | Take the suggested name, or type another / delete a skill in Global Settings |
+| A skill is "Quarantined" in Global Settings and its toggle is disabled | The plugin catalog revoked the plugin version that proposed it, so it was turned off in every project | Read it (Download), then **Release** it to use it again, or delete it. Only its owner can release it |
+
 ## Host and Docker gotchas
 
 None of these errors out. Each one looks like a broken command or a broken feature.

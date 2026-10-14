@@ -12,8 +12,14 @@
  * `nextRow` is whatever the caller is about to hold: the PUT passes its body,
  * exactly as it always validated; the MCP tools pass the stored row with their
  * change applied, so a rule over two fields sees both.
+ *
+ * `attackSkillConfig` is the one rule that also NORMALIZES: it is replaced in `nextRow`
+ * by the form it may be stored in (lib/userSkills.ts normalizeUserSkillToggles: user ids
+ * the owner does not have dropped, at most 20 of the owner's skills on, none quarantined).
+ * A caller that writes an object other than `nextRow` copies it back.
  */
 import prisma from '@/lib/prisma'
+import { normalizeUserSkillToggles, UserSkillError } from '@/lib/userSkills'
 import { allowedGithubHosts } from '@/lib/github/ownerTarget'
 import { validateFireteamSettings } from '@/lib/validation/fireteamSettings'
 import { validateSupplyChainInput } from '@/lib/validation/supplyChainInput'
@@ -41,14 +47,29 @@ function pick(row: Record<string, unknown>, keys: readonly string[]): Record<str
  * over a value it did not change.
  *
  * `actorUserId` decides which GitHub Enterprise host is allowed: the allowlist
- * comes from that user's settings, never from the request.
+ * comes from that user's settings, never from the request. `ownerUserId` is whose skills
+ * the user-skill toggles may name: the project's owner (default: `nextRow.userId`, then
+ * the actor). Pass null for a project with no owner, which may name none.
  */
 export async function validateCrossFieldRules(
   nextRow: Record<string, unknown>,
   touchedKeys: Iterable<string>,
   actorUserId: string,
+  opts: { ownerUserId?: string | null } = {},
 ): Promise<string | null> {
   const touched = new Set(touchedKeys)
+
+  if (touched.has('attackSkillConfig') && Object.prototype.hasOwnProperty.call(nextRow, 'attackSkillConfig')) {
+    const owner = opts.ownerUserId !== undefined
+      ? opts.ownerUserId
+      : typeof nextRow.userId === 'string' ? nextRow.userId : actorUserId
+    try {
+      nextRow.attackSkillConfig = await normalizeUserSkillToggles(prisma, owner, nextRow.attackSkillConfig)
+    } catch (e) {
+      if (e instanceof UserSkillError) return e.message
+      throw e
+    }
+  }
 
   if (SUPPLY_CHAIN_INPUT_FIELDS.some(k => touched.has(k))) {
     const settings = await prisma.userSettings.findUnique({

@@ -29,7 +29,7 @@ import { SkillPartsRegistryError } from './skillPartsRegistry'
 
 let db: FakePrisma
 let w: LifecycleWorld
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 const OLD = 'a'.repeat(64)
 const NEW = 'b'.repeat(64)
 

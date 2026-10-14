@@ -61,6 +61,19 @@ export interface JobProgress {
   fields: Record<string, string>
 }
 
+/**
+ * What the person picked before an action started (platform 1.1.0), as the server
+ * re-derived it: the job window names the skill, a Retry replays the same pick, and a
+ * second start in the same session is told which skill the running job works on.
+ */
+export interface JobPick {
+  kind: 'session.skill'
+  point: string
+  target: string
+  ref: string
+  name: string | null
+}
+
 export interface Job {
   jobId: string
   pluginId: string
@@ -68,6 +81,7 @@ export interface Job {
   actionId: string
   status: JobStatus
   context: JobContext
+  pick?: JobPick | null
   progress: JobProgress | null
   result: Record<string, unknown> | null
   error: JobError | null
@@ -93,6 +107,7 @@ const valueOf = (j: Job): JobValue => ({
   status: j.status,
   actionId: j.actionId,
   context: j.context,
+  pick: j.pick ?? null,
   progress: j.progress,
   result: j.result,
   error: j.error,
@@ -180,6 +195,7 @@ export interface StartJobInput {
   actionId: string
   context: JobContext
   deadline: Date
+  pick?: JobPick | null
 }
 
 /** A new queued job, or the one already active for this action and session. */
@@ -191,6 +207,7 @@ export async function startJob(input: StartJobInput): Promise<{ job: Job; create
       status: 'queued',
       actionId: input.actionId,
       context: input.context,
+      pick: input.pick ?? null,
       progress: null,
       result: null,
       error: null,
@@ -406,6 +423,7 @@ export function jobView(job: Job) {
     pluginId: job.pluginId,
     actionId: job.actionId,
     status: job.status,
+    pick: job.pick ?? null,
     progress: job.progress,
     result: job.result,
     error: job.error,

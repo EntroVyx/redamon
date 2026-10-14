@@ -45,7 +45,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     pluginId: set.pluginId,
     targetType: 'plugin_change_set',
     targetId: id,
-    after: { point: set.point, targetGroup: set.targetGroup, scope: set.scope.type, scopeId: set.scope.id },
+    after: {
+      point: set.point,
+      targetGroup: set.targetGroup,
+      scope: set.scope.type,
+      scopeId: set.scope.id,
+      ...(session && session.userId !== eff.userId ? { onBehalfOf: eff.userId } : {}),
+    },
     source: 'ui',
   })
   return NextResponse.json({ rejected: true })

@@ -3,6 +3,7 @@ import { skillDisplayName } from './overrideOps'
 import { dormantReason, findInstall, type DormantReason } from './registry'
 import { addedRiskLines, type RiskLine } from './riskFlags'
 import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill, type RegistrySkill } from './skillPartsRegistry'
+import { buildUserSkillReviewModel, type UserSkillReviewModel } from './userSkillReviewModel'
 
 /**
  * What the core review modal shows for one change set (design §6 core override routes;
@@ -66,10 +67,18 @@ export function scopeText(type: ov.ScopeType): string {
   return type === 'user' ? 'Applies to every project you own' : 'Applies to this project only'
 }
 
-/** The review model of a change set, or null when there is no such set. */
-export async function buildReviewModel(changeSetId: string): Promise<ReviewModel | null> {
+/**
+ * The review model of a change set, or null when there is no such set. A `user_skill.text`
+ * set has its own model (userSkillReviewModel.ts), told apart by `kind`; `projectId` is the
+ * project the review was opened from, for its skill toggles.
+ */
+export async function buildReviewModel(
+  changeSetId: string,
+  opts: { projectId?: string | null } = {},
+): Promise<ReviewModel | UserSkillReviewModel | null> {
   const set = await ov.getChangeSet(changeSetId)
   if (!set) return null
+  if (set.point === ov.USER_SKILL_POINT) return buildUserSkillReviewModel(set, opts)
   const point = set.point
   const group = set.targetGroup
 

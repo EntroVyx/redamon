@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Optional
 
+from platform_version import PLATFORM_VERSION
+
 RUNNER_ROOT = Path(__file__).resolve().parents[1]
 SDK_ROOT = RUNNER_ROOT / "sdk"
 CONTRACT_CASES = SDK_ROOT / "contract_cases.json"
@@ -290,7 +292,7 @@ def install_plugin(plugins_dir: Path, plugin_id: str = "echo", version: str = "1
     return {"id": plugin_id, "version": version, "manifest": manifest, "root": str(root)}
 
 
-def run_list(entries: list, platform: str = "1.0.0") -> dict:
+def run_list(entries: list, platform: str = PLATFORM_VERSION) -> dict:
     return {"platformVersion": platform, "plugins": entries}
 
 

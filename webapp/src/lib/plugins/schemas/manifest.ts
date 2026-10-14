@@ -31,15 +31,28 @@ const action = z.strictObject({
   resultScreen: screenPath.optional(),
 })
 
+/**
+ * What the core asks the person to pick before a chat action starts (platform 1.1.0). The
+ * core draws the picker and re-derives the choice on the server; the action receives it as
+ * `params.pick`. `session.skill`: one of the skills the session used, of a point the
+ * plugin is granted.
+ */
+export const CHAT_ACTION_PICKS = ['session.skill'] as const
+
 const chatSessionAction = z
   .strictObject({
     label,
     icon: icon.optional(),
     action: actionId.optional(),
     coreScreen: z.enum(CORE_SCREENS).optional(),
+    pick: z.enum(CHAT_ACTION_PICKS).optional(),
   })
   .refine((c) => (c.action === undefined) !== (c.coreScreen === undefined), {
     message: 'give either action or coreScreen',
+  })
+  .refine((c) => c.pick === undefined || c.action !== undefined, {
+    message: 'pick goes with an action, not a core screen',
+    path: ['pick'],
   })
 
 const contributes = z.strictObject(
@@ -110,6 +123,13 @@ export const manifestSchema = z
     const refs: { path: (string | number)[]; action: string }[] = []
     m.contributes?.['chat.session.actions']?.forEach((c, i) => {
       if (c.action) refs.push({ path: ['contributes', 'chat.session.actions', i, 'action'], action: c.action })
+      if (c.pick === 'session.skill' && !(has('session:read') && (has('override:skill.text') || has('override:user_skill.text')))) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['contributes', 'chat.session.actions', i, 'pick'],
+          message: 'session.skill needs the session:read permission and override:skill.text or override:user_skill.text',
+        })
+      }
       if (c.coreScreen && !has(POINT_PERMISSION[CORE_SCREEN_POINT[c.coreScreen]])) {
         ctx.addIssue({
           code: 'custom',

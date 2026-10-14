@@ -16,13 +16,13 @@
     "`migrate` runs the rows through echo's migrations/NNNN_{up,down}.py `migrate_row` (TD-28)."
   ],
   "runnerKey": "contract-runner-key-0123456789abcdef",
-  "platformVersion": "1.0.0",
+  "platformVersion": "1.1.0",
   "cases": [
     {
       "name": "health with the key",
       "request": { "method": "GET", "path": "/runner/v1/health", "key": "valid" },
       "expect": { "status": 200, "keys": ["bootId", "platformVersion", "state", "workers"],
-                  "bodyIncludes": { "platformVersion": "1.0.0", "state": "ok" } }
+                  "bodyIncludes": { "platformVersion": "1.1.0", "state": "ok" } }
     },
     {
       "name": "health without a key",

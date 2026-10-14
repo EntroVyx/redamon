@@ -32,6 +32,21 @@ When performing these actions, ALWAYS invoke the corresponding skill FIRST:
      discover it from the file being edited. Component patterns belong in a
      scoped skill. See the root AGENTS.md for repo-wide rules. -->
 
+- **NEVER write a user's own agent skill (`UserAttackSkill`) except through
+  [userSkillWrites.ts](src/lib/userSkillWrites.ts).** It holds the per-user lock
+  that makes the unique-name check and the 1,000-skill cap exact, and writes the
+  audit row. Names are compared by a key computed IN SQL
+  ([userSkillNames.ts](src/lib/userSkillNames.ts)), never in JavaScript.
+- **ALWAYS pass a written `attackSkillConfig` through
+  `normalizeUserSkillToggles`** ([userSkills.ts](src/lib/userSkills.ts)), or
+  through `validateCrossFieldRules`, which applies it and replaces the value. A
+  user skill is on only when its toggle is `true` (missing is OFF, in the form,
+  the tooltip, the agent payload and the agent), at most 20 of the owner's
+  skills may be on, ids the owner does not have are dropped, and a quarantined
+  skill cannot be turned on. Write project rows that change toggles through
+  Prisma, never raw SQL, so `updatedAt` moves and an open form gets a stale
+  save instead of reverting the change.
+
 ---
 
 ## TECH STACK

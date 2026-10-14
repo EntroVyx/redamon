@@ -136,6 +136,17 @@ function withIotaStandIn(text: string, mask: (t: string) => string): string {
   return mask(text.replaceAll(IOTA_SUBSCRIPT, standIn)).replaceAll(standIn, IOTA_SUBSCRIPT)
 }
 
+/**
+ * True when `text` holds a key or token in a recognised format (SECRET_SHAPES: a private key,
+ * a JWT, a cloud or service API token). Narrower than redactSecretShapes on purpose: the masker
+ * also takes prose such as "Basic authentication" or "Token extraction" for a value, which is
+ * right for masking a transcript and wrong for refusing a person's own skill over it.
+ */
+export function hasSecretKeyShape(text: string): boolean {
+  // search() ignores the patterns' global flag and lastIndex.
+  return SECRET_SHAPES.some((pattern) => text.search(pattern) !== -1)
+}
+
 /** Every secret-shaped substring masked, keeping its first 4 characters. */
 export function redactSecretShapes(text: unknown): string {
   // Python's `str(text or "")`.

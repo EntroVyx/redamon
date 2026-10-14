@@ -516,6 +516,20 @@ def build_phase_definitions():
 
 
 
+UNCLASSIFIED_ATTACK_PATH_BEHAVIOR = (
+    "No mandatory workflow — use available tools based on the attack technique.\n"
+    "In informational phase: gather relevant target info with a SMALL number of probes, then act.\n"
+    "In exploitation: Use the generic exploitation workflow provided.\n"
+    "**Your skill is not yet specialized, and recon is budget-limited.** The instant the live "
+    "target reveals ANY concrete vulnerability class (a file/include parameter, a query parameter, "
+    "reflected input, a URL fetcher, a template/command sink, a login form), you MUST emit "
+    "action='switch_skill' with the matching to_skill to load that specialized workflow — do it "
+    "immediately, you do NOT need to change phase first. Then request transition to exploitation. "
+    "Continuing to scan or web-search after a vector is already visible wastes the engagement and "
+    "will be refused."
+)
+
+
 def build_attack_path_behavior(attack_path_type):
     """Build behavior rules for the ACTIVE attack path only.
 
@@ -615,23 +629,18 @@ def build_attack_path_behavior(attack_path_type):
             "proof unless the skill's settings enable Step 7."
         )
     elif attack_path_type.startswith("user_skill:"):
+        # Imported here: the package __init__ imports this module.
+        from . import resolve_user_skill
+        if resolve_user_skill(attack_path_type) is None:
+            # Turned off or deleted with no successor: get_phase_tools renders no skill
+            # text, so "follow the skill" would point at nothing.
+            return UNCLASSIFIED_ATTACK_PATH_BEHAVIOR
         return (
             "Follow the attack skill workflow guidance provided in the Available Tools section.\n"
             "The skill defines phase-specific steps — follow them for the current phase."
         )
     elif attack_path_type.endswith("-unclassified"):
-        return (
-            "No mandatory workflow — use available tools based on the attack technique.\n"
-            "In informational phase: gather relevant target info with a SMALL number of probes, then act.\n"
-            "In exploitation: Use the generic exploitation workflow provided.\n"
-            "**Your skill is not yet specialized, and recon is budget-limited.** The instant the live "
-            "target reveals ANY concrete vulnerability class (a file/include parameter, a query parameter, "
-            "reflected input, a URL fetcher, a template/command sink, a login form), you MUST emit "
-            "action='switch_skill' with the matching to_skill to load that specialized workflow — do it "
-            "immediately, you do NOT need to change phase first. Then request transition to exploitation. "
-            "Continuing to scan or web-search after a vector is already visible wastes the engagement and "
-            "will be refused."
-        )
+        return UNCLASSIFIED_ATTACK_PATH_BEHAVIOR
     elif not attack_path_type:
         return ""  # Not yet classified
     else:

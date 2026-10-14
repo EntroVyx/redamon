@@ -991,12 +991,22 @@ whose `platform` range excludes the new version incompatible ([README.PLUGINS.md
    `agentic/plugin_api.py`).
 5. **Bump the platform version** in every copy, which `platformVersion.parity.test.ts` holds
    equal: `webapp/src/lib/plugins/platformVersion.ts`, `services/plugin_runner/platform_version.py`,
-   `services/plugin_runner/sdk/redamon_plugin_sdk/__init__.py` and
-   `services/plugin_runner/sdk/contract_cases.json`. Rebuild the webapp and the runner image together:
+   `services/plugin_runner/sdk/redamon_plugin_sdk/__init__.py`,
+   `services/plugin_runner/sdk/contract_cases.json` and
+   `services/plugin_runner/tests/runner_contract_cases.json` (its `platformVersion` and the health
+   case), plus the pin in `services/plugin_runner/tests/test_sdk_contract.py`; the runner's other
+   tests read it from `platform_version.py`. Rebuild the webapp and the runner image together:
    a runner whose version differs from the webapp's reports itself out of date and starts no worker.
 6. **Test the empty slot** (with no plugin contributing to it the slot renders nothing), and
    **document** the point in README.PLUGINS.md §7.6 and in the author reference
    [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
+7. **A point whose approval creates something instead of overriding** (as `user_skill.text`
+   saves a new user skill) leaves a product that outlives the plugin, so it needs two more
+   things: a **proposer gate** at save time (the proposing plugin still serving at the version
+   that made the proposal, which the Gateway records from the call token) and a **revocation
+   path** (reconciliation withdrawing that version's waiting proposals and quarantining what was
+   saved from them, installed or not). Its rows end in a terminal status of their own, never
+   `active`, so delivery, reconciliation and the one-active index never see them.
 
 ---
 

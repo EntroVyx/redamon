@@ -31,7 +31,7 @@ import { GET as runList } from '@/app/api/plugin-runner/v1/run-list/route'
 
 let db: FakePrisma
 let w: LifecycleWorld
-const PERMS = ['session:read', 'llm:invoke', 'override:skill.text']
+const PERMS = ['session:read', 'llm:invoke', 'override:skill.text', 'override:user_skill.text']
 
 beforeEach(async () => {
   db = createFakePrisma()

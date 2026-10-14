@@ -1069,7 +1069,7 @@ Extension points are the named slots where a plugin may contribute. There are tw
 | Point | What a plugin contributes |
 |---|---|
 | `nav` | an **Open** entry on the Plugins page and the screen it opens (§7.5) |
-| `chat.session.actions` | a button on a chat session; its action receives that session |
+| `chat.session.actions` | a button on a chat session; its action receives that session. With `pick: "session.skill"` (platform 1.1.0) the core first asks the person to pick one of the skills the session used, and the action receives the pick as `params.pick` |
 | `project.skills.row` | a control next to each built-in skill in project settings; its action receives the project and skill |
 
 **Behaviour point: `skill.text`**
@@ -1152,7 +1152,8 @@ stateDiagram-v2
     [*] --> Proposed: plugin proposes, value validated
     Proposed --> Active: a person approves the comparison
     Proposed --> Rejected: a person rejects it
-    Proposed --> Withdrawn: the plugin withdraws it
+    Proposed --> Withdrawn: the plugin withdraws it,<br/>or its version was revoked
+    Proposed --> Adopted: user_skill.text only:<br/>a person saves it as a new skill
     Active --> Superseded: another proposal approved
     Active --> Stale: factory part changed
     Stale --> Active: a person re-approves
@@ -1161,7 +1162,101 @@ stateDiagram-v2
     Withdrawn --> [*]
     Superseded --> [*]
     Cleared --> [*]
+    Adopted --> [*]
 ```
+
+**Behaviour point: `user_skill.text`** (platform 1.1.0)
+
+The user's own skills (the `.md` workflows of Global Settings → Agent Skills, one
+`UserAttackSkill` row each) are the second behaviour point. Its difference from `skill.text`
+is the whole design: **approving never changes the skill**. It saves the proposed text as a
+**new user skill** of the person's, as if they had uploaded a new `.md`, and the change set ends
+`adopted`.
+
+- **What a plugin may read.** Only a user skill the call's **session** used, owned by the
+  token's user, and not quarantined. "Used" is read from the session's `phase_update` rows
+  ([sessionSkills.ts](../../webapp/src/lib/plugins/sessionSkills.ts)): the agent records the
+  user skill it rendered (`skill_workflow: {skillId: "user_skill:<id>", kind: "user",
+  contentSha256}`); older sessions count by the skill label. Every refusal is the same 404
+  `invalid_target`, so a plugin cannot learn whether an id it guessed exists, and `override.get`
+  outside a session is 400 `no_session`. A skill whose name, description or text holds a key or token in a
+  recognised format (a private key, a JWT, a cloud or API token: `hasSecretKeyShape` in
+  [redact.ts](../../webapp/src/lib/plugins/redact.ts)) is never handed to a plugin: 422
+  `skill_contains_credentials`, shown in the picker as not selectable. It is not the whole rule
+  set that masks transcripts, which also takes words such as "Basic authentication" for a value
+  and would refuse about half of the community skills; a password written in prose is the
+  person's to remove before they pick the skill. Session binding limits the **plugin**, not the person: an owner can write rows
+  into their own sessions, but only ever about their own skills.
+- **What `override.get` answers.** One plain part, `body` (the skill's text, used verbatim:
+  no placeholders), its SHA-256, `maxChars` 51,200 (UTF-16 code units, the upload limit),
+  `active: null`, the pending count, and `lineage {rootName, version}`.
+- **What `override.propose` takes.** `scope: "user"` only; parts exactly `{body}`;
+  `readSha256.body` **required** (the person can edit their skill at any time: 409
+  `factory_changed` when it changed since the read). The agent validates the text
+  (`POST /plugins/text/validate`, master key): not empty, no NUL, within the limit, different
+  from the source, and no reserved marker, Rules of Engagement heading or hidden character that
+  the source did not already hold (a set difference: what the person wrote stays theirs).
+  The answer is `{changeSetId, fromRevision: null, proposedRevisionLabel: null}`.
+- **Never active.** `adopted` is a terminal status of its own. A user-skill change set is never
+  `active`, so the one-active index, delivery to the agent, reconciliation and the reinstall plan
+  never see it; `approve` refuses it.
+- **Saving** (the approve route's user-skill branch,
+  [userSkillAdoption.ts](../../webapp/src/lib/plugins/userSkillAdoption.ts)). Body
+  `{scopeOwnerId, name, description?, projectId?, enableNew, disableSource,
+  acknowledgedRiskLines}`, answer `{skillId, name, version}`. One transaction holds the owner's
+  user-skill lock, then the set's scope lock:
+  - **the proposer gate** fails closed: the plugin must be enabled, `ready`, not revoked,
+    granted `override:user_skill.text`, and at **the version that made the proposal**
+    (`meta.pluginVersion`, recorded by the Gateway from the call token), else 409
+    `proposer_unavailable` with the reason. A proposal from a version that was disabled,
+    uninstalled, revoked or replaced is run again, not saved; Reject and Delete stay available;
+  - the platform's risk flags are recomputed, and a save must acknowledge exactly as many flagged
+    lines (409 `risk_not_acknowledged`);
+  - the name follows the uniqueness rule of every user-skill write (409 `name_taken` with a
+    `suggestion`; the default is the source's name with the next ` vN`), and the 1,000-skill
+    cap applies (409 `skill_limit`);
+  - the new skill records its lineage (`derivedFromId`, `lineageRootId`, `version`) and its
+    origin (`originChangeSetId`, `originPluginId`, `originPluginVersion`); a source without a
+    family becomes its version 1;
+  - with `projectId` (a project the scope owner owns, checked strictly), the project's toggles
+    become `user[new] = enableNew`, `user[source] = false` when `disableSource`, under the
+    20-enabled limit (409 `too_many_enabled_skills`); `builtIn` is kept exactly as stored. The
+    row is written with `update`, so `updatedAt` moves and every open form sees a stale save;
+  - a database CHECK refusing `adopted` (the constraint script did not run) is 503
+    `platform_not_ready`.
+  Audited as `plugin.override.adopt`, `user_attack_skill.create` and, for the toggles,
+  `project.update`.
+- **The saved skill is the person's.** It is an ordinary user skill: listed, toggled,
+  downloaded and deleted like any other, and it survives disabling, uninstalling and purging the
+  plugin. A session whose label names the old skill, when that skill is off and the new one on in
+  its project, renders the new one's text from its next message or resume (`supersedes` in the
+  agent payload); the label, the chain graph and the phase stay as they are.
+- **The kill switch reaches it.** When the verified catalog revokes a (plugin, version),
+  installed or not, reconciliation withdraws that version's waiting `user_skill.text`
+  proposals (`meta.withdrawReason: "revoked"`) and **quarantines** every skill whose
+  `originChain` holds that version. A saved version's chain is its own `pluginId@version` plus
+  its source's chain, copied when it is saved, so it reaches the skills saved from the revoked
+  version's proposals and every version saved from those since, by any plugin version
+  (`quarantineReason: "derived_from_revoked"`), also when a version in between was deleted.
+  Quarantined skills are turned off in every project of their owner, kept out of the agent's
+  payload, and refused as `true` by every writer (409 `skill_quarantined`) until the owner
+  reads and releases them (`POST /api/users/[id]/attack-skills/[skillId]/release`, the owner
+  only, never an admin acting for them). A release is from that revocation only
+  (`releasedFor` gains the `quarantinedFor` pair): the next reconciliation, which still sees
+  it, leaves the skill alone, a later revocation of another version in its chain quarantines
+  it again, and a version saved from a released skill inherits its releases. No version can
+  be saved from a quarantined skill (409 `skill_quarantined`), so a proposal built on it before
+  the revocation cannot carry its text out. A catalog that cannot load revokes nothing; the
+  proposer gate still stops new saves.
+- **Deleting the source** deletes its proposals still waiting, in the same transaction; adopted
+  sets stay as the provenance of the skills saved from them.
+
+**Platform meta.** The keys the platform writes on a proposal are its own and stripped from a
+plugin's `meta`: `fromRevision`, `baseFactoryText`, `basedOn`, `staleReason`,
+`withdrawReason`, and, from platform 1.1.0, `pluginVersion`, `conversationId`, `jobId` (from
+the call token, on every proposal), `baseText`, `sourceName` (what a user-skill proposal was
+built on) and `adoptedSkillId`, `adoptedName` (what it became). The review of a user-skill
+proposal is built from them, so it needs neither the session nor the source skill to exist.
 
 New points are added deliberately, by the platform, when a real plugin needs one. The base
 repo still grows, but only in **generic capability**, never in plugin logic.
@@ -1189,8 +1284,22 @@ plugin UI, and where the skill-version decisions live:
   with the plugin badge, then its `chat.session.actions`, disabled until the first message
   creates the conversation. An `llm` action asks for a model first; an async one opens the
   job modal (progress, Cancel, Retry after a model failure).
+- **The skill picker** (`SessionSkillPicker`, `GET /api/plugins/[pluginId]/session-skills`,
+  platform 1.1.0) opens before the model gate for a chat item with `pick: "session.skill"`: the
+  skills the session used, of the points the plugin is granted and declares, built-in and the
+  person's own, with turns, the built-in version, and why a row cannot be picked (deleted,
+  holds a key or token, quarantined). The action route re-derives the pick and refuses one not in the
+  list (400 `invalid_pick`); the job records it, the job window names the skill, Retry replays
+  it, and a start while a job already runs in the session answers that job's pick. Start waits
+  while the agent runs in the session, or while RedAmon cannot confirm it stopped (`running:
+  "unverified"`). An unknown plugin is 404 `plugin_not_found`, so the picker tells it from a
+  session that has no conversation yet (404 `not_found`).
 - **Review** (`OverrideReviewModal`, routes under `/api/plugins/overrides/change-sets/[id]`)
-  is core UI. The review model is built on the server from the store and the agent registry
+  is core UI. A `user_skill.text` proposal opens the save-as-new-skill review instead
+  (`UserSkillReview`): the diff against the text it was built on, what changed since (source
+  deleted, renamed or edited; the session ran an older text; the proposer unavailable), the
+  flagged-lines acknowledgement, the name with its live check, the description, and, opened
+  from a project, "use it in this project instead of the source" (on by default). The review model is built on the server from the store and the agent registry
   read without its cache, with each part's before/after, parts that revert to factory, the
   warnings (session older than the active version, outdated base, replacement, factory
   changed, not applied now) and risk flags on added lines that move data out, name a URL or
@@ -1756,6 +1865,8 @@ sequenceDiagram
   **Delete kept data**, on the card of such a plugin, removes them later behind the same
   export and typed confirmation as a purge, in one transaction that rolls back if an install
   starts meanwhile.
+- **Skills people saved from the plugin's proposals stay** whatever the choice: they are user
+  skills of their own (§7.6, `user_skill.text`). A purge deletes only the proposal records.
 - **Reinstall** goes through the normal install (§9.3). It finds the existing row and data and
   runs data migrations if the stored `dataVersion` is older. It then **asks the admin** whether
   to restore the plugin's previous overrides. Restored overrides whose factory part has changed
@@ -1785,6 +1896,22 @@ JSON export downloaded first (audited as `plugin.export`) is the only copy that 
 
 While a plugin is uninstalled with its data kept, **Reset to factory** still works on its old
 overrides, because it is core UI: nobody has to reinstall the plugin to clear them.
+
+#### Exporting a plugin's data
+
+**Export data** (the plugin's details, or the purge dialog) downloads one JSON document,
+`exportVersion` 2 ([exportData.ts](../../webapp/src/lib/plugins/exportData.ts), audited as
+`plugin.export`): the install row, every data row and every override row, for every user and
+project. An admin downloads it, so the text proposed for people's **own** skills is not in it:
+for a `user_skill.text` row the value, the note, the plugin's own meta and the platform's
+copies of the source text and names (`baseText`, `sourceName`, `adoptedName`) are each replaced
+by `{redacted: true, sha256, chars}`. So is, in a job row that worked on a person's own skill
+(its pick was one, or it was started without a pick by a plugin allowed to read them, which then
+chose a skill itself), the picked name and everything the plugin wrote into the job (progress,
+result message and fields, error message), which can name or quote the skill; its status,
+timings, error code and reported change set stay. Which plugin version proposed it, from which conversation and job, and
+which skill it became stay, so the record of what happened is whole.
+Built-in skill versions are RedAmon's own text and are exported as they are.
 
 A crash during an uninstall leaves the row in `uninstalling` with the admin's choice in
 `operationArgs` (for example `{"mode": "purge"}`), so reconciliation finishes the uninstall the
@@ -2022,7 +2149,7 @@ The rules:
 
 ### 11.2 Where the platform version lives
 
-The platform version is `PLUGIN_PLATFORM_VERSION` (1.0.0) in
+The platform version is `PLUGIN_PLATFORM_VERSION` (1.1.0) in
 [platformVersion.ts](../../webapp/src/lib/plugins/platformVersion.ts), with copies in the
 Runner (`platform_version.py`), the SDK and its contract cases that
 `platformVersion.parity.test.ts` holds equal. The Runner image reports the platform version it
@@ -2030,6 +2157,20 @@ was built with. If the two differ, for example after a partial rebuild, the Runn
 itself out of date and runs no worker until they match. All range checks use one semver
 evaluator, in the webapp ([semver.ts](../../webapp/src/lib/semver.ts)); `redamon-plugins` has a
 second one for its CI (`tools/semver.py`), held equal by shared cases.
+
+**1.1.0** (minor) added the `user_skill.text` behaviour point and its permission
+`override:user_skill.text`, the optional `pick: "session.skill"` of a chat action, the `adopted`
+change-set status, and the platform meta keys of §7.6. A plugin written for 1.0.0 runs unchanged;
+a plugin that needs these declares `>=1.1.0`, and the catalog keeps its 1.0.0 release for
+instances that are not there yet. An update that adds a permission needs the admin's consent to
+the new set, so an instance stays on the old version until an admin accepts it.
+
+**Downgrading RedAmon below 1.1.0** drops the lineage, provenance and quarantine columns of
+`user_attack_skills` through `db push --accept-data-loss`: skills, names and texts stay, but
+version badges, family numbering and quarantine marks are lost, and no export holds them.
+Check first that no skill is quarantined (the banner in Global Settings). An older image keeps
+the newer status CHECK (`plugin_overrides_status_ck2`, lower numbers only are dropped), so
+`adopted` rows do not block its start.
 
 ### 11.3 Libraries available to plugins
 

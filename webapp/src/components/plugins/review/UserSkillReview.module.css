@@ -1,0 +1,53 @@
+.body {
+  overflow-wrap: anywhere;
+}
+
+.diff {
+  min-width: 0;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.indent {
+  margin-left: var(--space-5, 20px);
+}
+
+.swap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5, 6px);
+}
+
+/* A phone: the fields stack under the diff, its lines wrap, and the buttons stay in view
+   because the footer is outside the scrolling body. */
+@media (max-width: 640px) {
+  .sheet {
+    max-width: none;
+  }
+
+  .diff :global(pre),
+  .diff :global(code) {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .footer {
+    flex-wrap: wrap;
+  }
+
+  .footer > button {
+    flex: 1 1 auto;
+  }
+}

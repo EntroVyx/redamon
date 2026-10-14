@@ -1048,9 +1048,13 @@ class StreamingCallback:
                               skill_workflow: Optional[dict] = None):
         """Called when phase changes.
 
-        skill_workflow is {skillId, revision} of the built-in playbook the last think
-        turn rendered (revision 1 = factory text), or None when it rendered none. A
-        skill label alone does not prove its playbook was in the prompt.
+        skill_workflow is what the last think turn rendered, or None when it rendered
+        none: {skillId, revision, changeSetId} for a built-in playbook (revision 1 and
+        changeSetId None = factory text), or {skillId: "user_skill:<id>", kind: "user",
+        contentSha256} for a user skill's text (first 16 hex of the SHA-256 of its UTF-8
+        content; no revision key). skillId names the skill actually rendered, which for a
+        user skill can be the version that supersedes the label's. A skill label alone
+        does not prove its playbook was in the prompt.
         """
         payload = {
             "current_phase": current_phase,
