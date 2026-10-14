@@ -231,7 +231,7 @@ const ROE_SECTION = readFileSync(
 
 const PARSE_PATH = [
   { rel: 'RoeSection.tsx (its parse handlers)', text: handlersOf(ROE_SECTION) },
-  ...['../../app/api/roe/parse/route.ts', './roeParse.ts'].map(rel => ({
+  ...['../../app/api/roe/parse/route.ts', './roeParse.ts', '../roe/roeReplace.ts'].map(rel => ({
     rel,
     text: readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'),
   })),

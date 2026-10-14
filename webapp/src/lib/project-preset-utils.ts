@@ -95,7 +95,7 @@ export const KEPT_WHEN_ABSENT: ReadonlySet<string> = new Set([
   'serializedScanJevRank',
 ])
 
-type Lookup = { found: true; value: unknown } | { found: false }
+export type Lookup = { found: true; value: unknown } | { found: false }
 
 const hasOwn = (obj: Record<string, unknown>, key: string) =>
   Object.prototype.hasOwnProperty.call(obj, key)
@@ -132,7 +132,7 @@ function registryDefault(key: string): Lookup {
  * fills the rest. Without that fallback those columns would keep whatever the
  * previous configuration had, and settings would stick across presets.
  */
-function defaultFor(key: string, backendDefaults: Record<string, unknown>): Lookup {
+export function defaultFor(key: string, backendDefaults: Record<string, unknown>): Lookup {
   if (hasOwn(backendDefaults, key)) return { found: true, value: backendDefaults[key] }
   return registryDefault(key)
 }

@@ -1,0 +1,143 @@
+/**
+ * Does a change WIDEN the engagement: more traffic, more targets, more time,
+ * more permission?
+ *
+ * A widening row is flagged in the review, pauses every enabled scan schedule
+ * (a schedule has no fingerprint guard, so it would silently run under the new
+ * terms), and on a third-party engagement needs an authorization first.
+ *
+ * Most rules follow from the registry: a rate field's unit, a tool's `*Enabled`
+ * flag, a `roeAllow*` permission, a `tighten_only` safety switch. The engagement
+ * limits each mean something different (removing an excluded host widens,
+ * removing a scanning day narrows), so they are a table, and a test fails if a
+ * limit is added without a row here.
+ */
+import { field, type RegistryField } from '@/lib/reconSettings/registry'
+import { sameValue } from '@/lib/reconSettings/roeParse'
+
+export type Direction =
+  /** A ceiling: 0 means none, so dropping it to 0 or raising it widens. */
+  | 'ceiling'
+  /** A list of exclusions: an entry removed widens. */
+  | 'removal'
+  /** A list of allowances: an entry added widens. */
+  | 'addition'
+  | 'disable'
+  | 'enable'
+  /** A time of day or a date: moving earlier (or clearing it) widens. */
+  | 'earlier'
+  | 'later'
+  | 'any'
+  /** Moving up the field's ordered `values` widens. */
+  | 'higher'
+  | 'never'
+
+export const ENGAGEMENT_DIRECTIONS: Readonly<Record<string, Direction>> = {
+  roeGlobalMaxRps: 'ceiling',
+  roeExcludedHosts: 'removal',
+  roeExcludedHostReasons: 'never',
+  roeTimeWindowEnabled: 'disable',
+  roeTimeWindowDays: 'addition',
+  roeTimeWindowStartTime: 'earlier',
+  roeTimeWindowEndTime: 'later',
+  roeTimeWindowTimezone: 'any',
+  roeForbiddenTools: 'removal',
+  roeForbiddenCategories: 'removal',
+  roeMaxSeverityPhase: 'higher',
+  roeEngagementStartDate: 'earlier',
+  roeEngagementEndDate: 'later',
+  scanModules: 'addition',
+  stealthMode: 'disable',
+}
+
+/** The window's own switch: its days, hours and zone only matter while it is on. */
+const WINDOW_SWITCH = 'roeTimeWindowEnabled'
+const WINDOW_PARTS = new Set(['roeTimeWindowDays', 'roeTimeWindowStartTime', 'roeTimeWindowEndTime', 'roeTimeWindowTimezone'])
+
+/** How a change to `key` is judged, or undefined when it can never widen. */
+export function directionOf(key: string, spec: RegistryField | undefined = field(key)): Direction | undefined {
+  if (Object.prototype.hasOwnProperty.call(ENGAGEMENT_DIRECTIONS, key)) return ENGAGEMENT_DIRECTIONS[key]
+  if (!spec) return undefined
+  if (spec.type === 'boolean' && (key.startsWith('roeAllow') || key.endsWith('Enabled'))) return 'enable'
+  if (spec.unit === 'rps') return 'ceiling'
+  return undefined
+}
+
+const asList = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
+const asText = (v: unknown): string => (typeof v === 'string' ? v.trim() : v == null ? '' : String(v))
+
+/**
+ * Why `before -> after` widens the engagement, or null.
+ *
+ * `beforeRow` and `afterRow` are the whole project before and after the change,
+ * for the rules that depend on another field (the window parts).
+ */
+export function wideningReason(
+  key: string,
+  before: unknown,
+  after: unknown,
+  beforeRow: Record<string, unknown> = {},
+  afterRow: Record<string, unknown> = {},
+): string | null {
+  if (sameValue(before, after)) return null
+  const spec = field(key)
+  if (!spec) return null
+
+  if (spec.roe_parse === 'tighten_only') {
+    return sameValue(after, spec.roe_safe_value) ? null : 'relaxes a safety control'
+  }
+  if (WINDOW_PARTS.has(key) && !(beforeRow[WINDOW_SWITCH] === true && afterRow[WINDOW_SWITCH] === true)) {
+    // Turning the window off is flagged on the switch itself; turning it on, or
+    // editing a window that is not in force, cannot widen anything.
+    return null
+  }
+
+  const direction = directionOf(key, spec)
+  return direction ? byDirection(direction, spec, before, after) : null
+}
+
+function byDirection(direction: Direction, spec: RegistryField, before: unknown, after: unknown): string | null {
+  switch (direction) {
+    case 'ceiling': {
+      const b = Number(before ?? 0)
+      const a = Number(after ?? 0)
+      if (!(b > 0)) return null
+      // 0 is no ceiling at all (effectiveCeiling), unless the field says it
+      // switches the tool off.
+      if (a === 0) return spec.zero_means === 'disabled' ? null : 'removes a rate ceiling'
+      return a > b ? 'raises a rate ceiling' : null
+    }
+    case 'removal': {
+      const gone = asList(before).filter(v => !asList(after).includes(v))
+      return gone.length ? `removes ${gone.join(', ')}` : null
+    }
+    case 'addition': {
+      const added = asList(after).filter(v => !asList(before).includes(v))
+      return added.length ? `adds ${added.join(', ')}` : null
+    }
+    case 'disable':
+      return before === true && after !== true ? 'turns off a restriction' : null
+    case 'enable':
+      return before !== true && after === true ? 'turns on something the engagement had off' : null
+    case 'earlier': {
+      const b = asText(before)
+      const a = asText(after)
+      if (!b) return null
+      return !a || a < b ? 'moves earlier' : null
+    }
+    case 'later': {
+      const b = asText(before)
+      const a = asText(after)
+      if (!b) return null
+      return !a || a > b ? 'moves later' : null
+    }
+    case 'any':
+      return 'changes the window'
+    case 'higher': {
+      const order = spec.values ?? []
+      return order.indexOf(asText(after)) > order.indexOf(asText(before)) ? 'allows a later phase' : null
+    }
+    case 'never':
+      return null
+  }
+}
