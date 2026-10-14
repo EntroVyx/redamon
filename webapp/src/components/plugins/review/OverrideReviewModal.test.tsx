@@ -82,6 +82,12 @@ describe('what it shows', () => {
     expect(within(header).getByTitle('RedAmon plugin').textContent).toContain('Skiller')
   })
 
+  test('the dialog is the wider review size', async () => {
+    draw()
+    await screen.findByText(/Server-Side Request Forgery/)
+    expect(screen.getByRole('dialog').className).toContain('modalXLarge')
+  })
+
   test('the scope sentence and the note', async () => {
     draw()
     expect(await screen.findByText('Applies to every project you own')).toBeInTheDocument()

@@ -36,6 +36,8 @@ describe('OfflineInstallDialog', () => {
     pick(1, 'catalog.json', catalog(SHA))
     pick(2, 'catalog.json.sig', '{"keyId":"k","sig":"x"}')
     expect(await screen.findByText('Read chat sessions')).toBeTruthy()
+    expect(screen.getByText('echo-1.0.0.tar.gz')).toBeTruthy()
+    expect(screen.getAllByText('Change')).toHaveLength(3)
     const install = screen.getByRole('button', { name: /^Install Echo 1\.0\.0/ }) as HTMLButtonElement
     expect(install.disabled).toBe(true)
     fireEvent.click(screen.getByRole('checkbox'))

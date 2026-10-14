@@ -1,7 +1,6 @@
 import type { PluginInstall } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { contributionsUpdating, showsContributions } from './registry'
-import { pluginsEnabled } from './switch'
 import type { CoreScreen } from './extensionPoints'
 
 /**
@@ -135,9 +134,8 @@ export function rowContributions(row: Row): PluginContributions | null {
   }
 }
 
-/** Every enabled plugin's contributions, by plugin id; empty while the switch is off. */
+/** Every enabled plugin's contributions, by plugin id. */
 export async function listContributions(db: Db = prisma): Promise<PluginContributions[]> {
-  if (!pluginsEnabled()) return []
   const rows = await db.pluginInstall.findMany({ orderBy: { pluginId: 'asc' } })
   return rows.map(rowContributions).filter((c): c is PluginContributions => c !== null)
 }

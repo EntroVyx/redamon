@@ -6,7 +6,6 @@ import { isBuiltinSkill } from '@/lib/plugins/builtinSkills'
 import { bodyOwnerMatches, ownsScope } from '@/lib/plugins/changeSetAccess'
 import * as ov from '@/lib/plugins/overrides'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * POST /api/plugins/overrides/reset: the scope's active version of a skill becomes `cleared`,
@@ -21,7 +20,6 @@ export const dynamic = 'force-dynamic'
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
 export async function POST(request: NextRequest) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const parsed = await readJsonBody(request)
   if (parsed instanceof NextResponse) return parsed

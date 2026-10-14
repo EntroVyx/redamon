@@ -51,9 +51,9 @@ src/types/        shared TS types                 src/middleware.ts  edge middle
 server_actions/   Next.js server actions          prisma/schema.prisma  data model
 ```
 
-The optional plugin platform (off unless `PLUGINS_ENABLED=true`) is `src/lib/plugins/`, its
-routes `src/app/api/{plugins,plugin-gateway,plugin-runner,internal/plugins}/`, its UI
-`src/components/plugins/` and `src/app/plugins/`; the `plugin-platform` skill holds its rules.
+The plugin platform (always on; plugins themselves are installed on demand) is
+`src/lib/plugins/`, its routes `src/app/api/{plugins,plugin-gateway,plugin-runner,internal/plugins}/`,
+its UI `src/components/plugins/` and `src/app/plugins/`; the `plugin-platform` skill holds its rules.
 
 ## COMMANDS
 

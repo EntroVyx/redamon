@@ -47,8 +47,9 @@ First build takes **30-60 minutes** (Kali + agent images). When it finishes, log
 recommended and needs nothing extra.
 
 **The server:** a fresh Ubuntu 22.04/24.04 box. You install **nothing** on it by hand -
-`deploy.sh` detects and installs every prerequisite (Docker Engine + Compose v2, nginx,
-certbot, ufw, fail2ban, swap, ...) idempotently. See "How the host is bootstrapped" below.
+`deploy.sh` detects and installs every prerequisite (Docker Engine 28.0.0 or newer + Compose
+v2, nginx, certbot, ufw, fail2ban, swap, ...) idempotently. See "How the host is bootstrapped"
+below.
 
 ## Server sizing
 
@@ -137,7 +138,6 @@ intend to use supply-chain SCA.
 | `ENABLE_KB` | `--kbase` | Bakes ML embedding models (+~4.4 GB image). The real KB switch. |
 | `ENABLE_KB_REFRESH` | kb-refresh sidecar | |
 | `ENABLE_ZRAM` | `REDAMON_ENABLE_ZRAM=1` | Compressed-RAM cushion. |
-| `PLUGINS_ENABLED` | `PLUGINS_ENABLED` in the server `.env` | Off by default; needs Docker Engine >= 28.0.0. See "The plugin platform" below. |
 
 `SKIP_KB` is intentionally **not** an input: redamon.sh derives it from the `.kbase-enabled`
 flag it manages. Control KB with `ENABLE_KB` only.
@@ -294,22 +294,29 @@ Repeated 401s are banned by the `redamon-mcp-auth` fail2ban jail.
 In `https-ip` with a self-signed certificate most MCP clients reject the connection. Use a
 real certificate (`TLS_MODE=provided`) or a domain.
 
-## The plugin platform (off by default)
+## The plugin platform
 
-`PLUGINS_ENABLED=true` in the deploy `.env` turns on RedAmon plugins: optional features
-installed from the signed `redamon-plugins` catalog and run in the `plugin-runner`
-container, on an internal network with no internet access. `deploy.sh init` and `update`
-seed the switch into the server `.env` before `redamon.sh` runs, and set
-`PLUGINS_ALLOWED_ORIGIN` from the same derived origin as `MCP_ALLOWED_ORIGIN` (nginx
-forwards `Host $host` without the port).
+Every deploy runs the RedAmon plugin platform: the Plugins page, where an admin installs
+optional features from the signed `redamon-plugins` catalog, and the `plugin-runner` and
+`plugin-gateway` containers that run them on an internal network with no internet access.
+There is nothing to turn on. `deploy.sh init` and `update` set `PLUGINS_ALLOWED_ORIGIN` in the
+server `.env` from the same derived origin as `MCP_ALLOWED_ORIGIN` (nginx forwards
+`Host $host` without the port), and the update's explicit webapp recreate passes
+`-f docker-compose.plugins.yml` so the webapp keeps its plugin network and volume.
 
 - **Docker Engine 28.0.0 or newer is required on the server.** The plugin networks use
-  `gateway_mode_ipv4: isolated`, which older engines refuse. Check with
-  `docker version --format '{{.Server.Version}}'`.
-- **A failed preflight never takes the stack down.** If the server cannot run the platform
-  (an older engine, a missing secret, a runner image that does not build), `redamon.sh`
-  prints the reason, starts everything else with plugins off, and `./redamon.sh status`
-  repeats the reason.
+  `gateway_mode_ipv4: isolated`, which older engines refuse, and `redamon.sh` stops on an
+  older engine before building anything. `init`, `harden` and `update` (before its pull)
+  install Docker from Docker's apt repo when the engine is older than 28.0.0 and fail if it
+  is still older afterwards, so `./deploy.sh update` brings an existing server's Docker up to
+  date by itself. Check with `docker version --format '{{.Server.Version}}'`.
+- **A server that cannot run the platform is refused.** `redamon.sh` generates
+  `PLUGIN_RUNNER_KEY` and `PLUGIN_CALL_TOKEN_SECRET`, then a preflight checks them, the
+  internal key, the engine, the runner image and the plugin networks before any service is
+  (re)created; a failure stops the deploy with `The plugin platform cannot run on this host:
+  <reason>.`, and `./redamon.sh status` repeats the reason.
+- **The secrets gate covers both plugin secrets**: an unset, known-default or shorter than 24
+  characters `PLUGIN_RUNNER_KEY` or `PLUGIN_CALL_TOKEN_SECRET` fails the deploy.
 - **The plugin-internal routes are denied at nginx** in both templates, before
   `location /api/`: `/api/plugin-gateway/` (plugin code's Gateway), `/api/plugin-runner/`
   (the runner's run list) and `/api/internal/plugins/` (reconciliation) answer 404 at the
@@ -419,16 +426,19 @@ its session gate. The browser reaches the agent's WebSockets at `wss://<domain>/
 
 ## How the host is bootstrapped
 
-`init` (and `harden`) run a dynamic detect-and-install matrix - each item is probed and
+`init` (and `harden`) run a dynamic detect-and-install matrix (`update` runs its Docker
+Engine + Compose step only, before the pull) - each item is probed and
 installed only if missing or too old, idempotently: base apt packages (git, openssl, curl,
-jq, expect, ...), **Docker Engine + Compose v2 from Docker's official repo** (purging any old
-`docker.io`/v1 compose first), the docker service + group membership, nginx, certbot (only
+jq, expect, ...), **Docker Engine 28.0.0 or newer + Compose v2.24 or newer from Docker's
+official repo** (purging any old `docker.io`/v1 compose first; an older engine or Compose is
+upgraded, and the bootstrap fails if either is still too old afterwards), the docker service + group membership, nginx, certbot (only
 when letsencrypt is used), ufw, fail2ban, unattended-upgrades, a swapfile sized at `SWAP_PCT` of RAM
 hosts, optional Docker DNS, and inotify limits. Nothing is assumed pre-present.
 
 ## Update and rollback
 
-`update` is a thin wrapper around `redamon.sh update`: `git pull --ff-only` + diff-driven
+`update` first upgrades Docker Engine and Compose when they are too old (a no-op on a current
+host), then wraps `redamon.sh update`: `git pull --ff-only` + diff-driven
 selective rebuild + secret regen (all via redamon.sh, which preserves DB passwords by volume
 detection), then re-renders nginx. No source patches are applied: the single-origin agent WS
 URL is a first-class `ARG NEXT_PUBLIC_AGENT_WS_URL` in the base `webapp/Dockerfile`, baked from

@@ -4,7 +4,6 @@ import { readJsonBody } from '@/lib/jsonBody'
 import { cancelJobRow, findUserJob, isTerminal, jobView, refreshJob } from '@/lib/plugins/jobs'
 import { cancelJob } from '@/lib/plugins/runnerClient'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * POST /api/plugins/jobs/[jobId]/cancel: the owner stops an async plugin action. The job
@@ -16,7 +15,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const parsed = await readJsonBody(request)
   if (parsed instanceof NextResponse) return parsed

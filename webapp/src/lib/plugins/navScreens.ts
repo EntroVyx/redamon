@@ -6,7 +6,6 @@ import { screenPathFromSegments } from './navPaths'
 import { findInstall } from './registry'
 import { SCREEN_PATH_RE } from './schemas/common'
 import { versionPath } from './staging'
-import { pluginsEnabled } from './switch'
 
 /**
  * What a plugin's nav page draws (design §6 `nav` point): the nav screen, or another screen
@@ -27,7 +26,7 @@ export type NavScreen = (NavHeader & { kind: 'ok'; screen: unknown }) | (NavHead
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
 export async function resolveNavScreen(pluginId: string, segments: readonly string[] | undefined): Promise<NavScreen | null> {
-  if (!pluginsEnabled() || !isValidPluginId(pluginId)) return null
+  if (!isValidPluginId(pluginId)) return null
   const row = await findInstall(pluginId)
   if (!row || !row.activeVersion) return null
   const c = rowContributions(row)

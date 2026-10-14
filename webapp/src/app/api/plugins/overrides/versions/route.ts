@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getEffectiveUser } from '@/lib/session'
 import { buildVersionsModel } from '@/lib/plugins/versionsModel'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugins/overrides/versions?point=skill.text&group=<skill>&projectId=<id>: the
@@ -12,7 +11,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const eff = await getEffectiveUser()
   if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

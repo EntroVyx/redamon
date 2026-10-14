@@ -296,7 +296,6 @@ export function overridesQualify(row: RowFacts): boolean {
 }
 
 export const DORMANT_REASONS = [
-  'switch_off',
   'uninstalled',
   'revoked',
   'disabled',
@@ -312,9 +311,8 @@ export type DormantReason = (typeof DORMANT_REASONS)[number]
  */
 export function dormantReason(
   row: RowFacts | null | undefined,
-  env: { switchOn: boolean; agentSupportsSeam: boolean },
+  env: { agentSupportsSeam: boolean },
 ): DormantReason | null {
-  if (!env.switchOn) return 'switch_off'
   if (!row || row.status === 'available' || row.status === 'uninstalling') return 'uninstalled'
   if (isRevoked(row)) return 'revoked'
   if (!row.enabled) return 'disabled'

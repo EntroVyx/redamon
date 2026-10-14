@@ -36,7 +36,6 @@ beforeEach(async () => {
   seedWorld(db)
   db.seed('project', [{ id: 'project-admin', userId: 'user-admin', name: 'admin' }])
   h.audits = []
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   vi.spyOn(console, 'log').mockImplementation(() => {})

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { reconcile } from '@/lib/plugins/reconcile'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 import { isInternalRequest } from '@/lib/session'
 
 /**
@@ -13,7 +12,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!isInternalRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized', code: 'unauthorized' }, { status: 401 })
   }

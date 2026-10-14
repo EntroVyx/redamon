@@ -1,0 +1,135 @@
+/* Install from files: one even column, so the pickers and the review never touch. */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Shared plugin classes carry their own margins; the column's gap spaces them here. */
+.body > p,
+.body > div,
+.review > p,
+.review > ul,
+.review > div,
+.review > label {
+  margin: 0;
+}
+
+.intro {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-default);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.introIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-tertiary);
+}
+
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pick {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-default);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pick:hover {
+  border-color: var(--text-tertiary);
+  background: var(--bg-hover);
+}
+
+.pick:focus-within {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.picked {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--status-success) 45%, var(--border-default));
+}
+
+.pickDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Visually hidden, still focusable: the whole row is the picker. */
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pickIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-default);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.picked .pickIcon {
+  color: var(--status-success);
+}
+
+.pickText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pickLabel {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+
+.pickName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.picked .pickName {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
+  font-size: var(--text-sm);
+}

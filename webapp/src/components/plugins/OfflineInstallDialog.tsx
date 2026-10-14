@@ -1,9 +1,11 @@
 'use client'
 
 import { useRef, useState, type ChangeEvent } from 'react'
+import { FileJson, FileKey, Package, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { Modal } from '@/components/ui'
 import { PERMISSION_TEXT, isPluginPermission } from '@/lib/plugins/permissions'
-import styles from './plugins.module.css'
+import shared from './plugins.module.css'
+import styles from './OfflineInstallDialog.module.css'
 
 interface Found {
   pluginId: string
@@ -34,6 +36,33 @@ async function sha256Hex(file: File): Promise<string> {
   // Copied into this realm's typed array: jsdom (the tests) hands out ArrayBuffers WebCrypto refuses.
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(new Uint8Array(await file.arrayBuffer())))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+interface FilePickProps {
+  icon: LucideIcon
+  label: string
+  hint: string
+  accept: string
+  file: File | null
+  disabled: boolean
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void
+}
+
+function FilePick({ icon: Icon, label, hint, accept, file, disabled, onChange }: FilePickProps) {
+  const cls = [styles.pick, file ? styles.picked : '', disabled ? styles.pickDisabled : ''].filter(Boolean).join(' ')
+  return (
+    <label className={cls}>
+      <input type="file" className={styles.fileInput} accept={accept} onChange={onChange} disabled={disabled} />
+      <span className={styles.pickIcon}>
+        <Icon size={16} />
+      </span>
+      <span className={styles.pickText}>
+        <span className={styles.pickLabel}>{label}</span>
+        <span className={styles.pickName}>{file ? file.name : hint}</span>
+      </span>
+      <span className="secondaryButton">{file ? 'Change' : 'Choose file'}</span>
+    </label>
+  )
 }
 
 /**
@@ -131,76 +160,98 @@ export function OfflineInstallDialog({ isOpen, busy = false, installed = {}, res
         </>
       }
     >
-      <p className={styles.notice}>
-        The same checks as a download apply: the catalog&apos;s signature must come from a trusted key, and the archive must be
-        the one it lists.
-      </p>
-      <label className={styles.fileRow}>
-        <span>Plugin archive (.tar.gz)</span>
-        <input type="file" accept=".gz,.tgz,application/gzip" onChange={onArchive} disabled={busy} />
-      </label>
-      <label className={styles.fileRow}>
-        <span>Catalog (catalog.json)</span>
-        <input type="file" accept=".json,application/json" onChange={onCatalog} disabled={busy} />
-      </label>
-      <label className={styles.fileRow}>
-        <span>Signature (catalog.json.sig)</span>
-        <input type="file" accept=".sig" onChange={onSignature} disabled={busy} />
-      </label>
-      {problem && <div className={styles.error}>{problem}</div>}
-      {found && (
-        <>
-          {current && (
+      <div className={styles.body}>
+        <div className={styles.intro}>
+          <ShieldCheck size={15} className={styles.introIcon} />
+          <span>
+            The same checks as a download apply: the catalog&apos;s signature must come from a trusted key, and the archive
+            must be the one it lists.
+          </span>
+        </div>
+        <div className={styles.files}>
+          <FilePick
+            icon={Package}
+            label="Plugin archive"
+            hint="The release's .tar.gz"
+            accept=".gz,.tgz,application/gzip"
+            file={archive}
+            disabled={busy}
+            onChange={onArchive}
+          />
+          <FilePick
+            icon={FileJson}
+            label="Catalog"
+            hint="catalog.json"
+            accept=".json,application/json"
+            file={catalog}
+            disabled={busy}
+            onChange={onCatalog}
+          />
+          <FilePick
+            icon={FileKey}
+            label="Signature"
+            hint="catalog.json.sig"
+            accept=".sig"
+            file={signature}
+            disabled={busy}
+            onChange={onSignature}
+          />
+        </div>
+        {problem && <div className={shared.error}>{problem}</div>}
+        {found && (
+          <div className={styles.review}>
+            {current && (
+              <p>
+                This updates {found.displayName} from {current.version} to {found.version}.
+              </p>
+            )}
             <p>
-              This updates {found.displayName} from {current.version} to {found.version}.
+              {found.displayName} {found.version}{' '}
+              {found.permissions.length ? 'asks for these permissions:' : 'asks for no permission beyond keeping its own data.'}
             </p>
-          )}
-          <p>
-            {found.displayName} {found.version}{' '}
-            {found.permissions.length ? 'asks for these permissions:' : 'asks for no permission beyond keeping its own data.'}
-          </p>
-          <ul className={styles.permissionList}>
-            {found.permissions.map((p) => (
-              <li key={p}>
-                <div className={styles.permissionTitle}>
-                  <span>{isPluginPermission(p) ? PERMISSION_TEXT[p].title : p}</span>
-                  {newPermissions.includes(p) && <span className={`chip chipWarning ${styles.newTag}`}>New</span>}
-                </div>
-                <p className={styles.permissionText}>{isPluginPermission(p) ? PERMISSION_TEXT[p].consent : 'Unknown to this RedAmon.'}</p>
-              </li>
-            ))}
-          </ul>
-          {migratesData && (
-            <div className="alert alertWarning">
-              <div className="alertContent">
-                <div className="alertMessage">
-                  This update moves the plugin&apos;s data to a new format. Rolling back later needs this release to ship a
-                  way back; if it does not, a rollback will be refused.
+            <ul className={shared.permissionList}>
+              {found.permissions.map((p) => (
+                <li key={p}>
+                  <div className={shared.permissionTitle}>
+                    <span>{isPluginPermission(p) ? PERMISSION_TEXT[p].title : p}</span>
+                    {newPermissions.includes(p) && <span className={`chip chipWarning ${shared.newTag}`}>New</span>}
+                  </div>
+                  <p className={shared.permissionText}>{isPluginPermission(p) ? PERMISSION_TEXT[p].consent : 'Unknown to this RedAmon.'}</p>
+                </li>
+              ))}
+            </ul>
+            {migratesData && (
+              <div className="alert alertWarning">
+                <div className="alertContent">
+                  <div className="alertMessage">
+                    This update moves the plugin&apos;s data to a new format. Rolling back later needs this release to ship a
+                    way back; if it does not, a rollback will be refused.
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          {restoreCount > 0 && (
-            <div className={styles.choice} role="radiogroup" aria-label="Approved skill versions">
-              <span>
-                This plugin left {restoreCount} approved skill version{restoreCount === 1 ? '' : 's'} from an earlier install.
-              </span>
-              <label>
-                <input type="radio" name="offline-restore" checked={restore} onChange={() => setRestore(true)} />
-                <span>Restore them (one whose built-in text has changed since comes back for review, not active)</span>
-              </label>
-              <label>
-                <input type="radio" name="offline-restore" checked={!restore} onChange={() => setRestore(false)} />
-                <span>Start from the factory text</span>
-              </label>
-            </div>
-          )}
-          <label className={styles.consentLine}>
-            <input type="checkbox" className="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-            <span>I have read what this plugin may do, and I allow it for every user of this RedAmon.</span>
-          </label>
-        </>
-      )}
+            )}
+            {restoreCount > 0 && (
+              <div className={shared.choice} role="radiogroup" aria-label="Approved skill versions">
+                <span>
+                  This plugin left {restoreCount} approved skill version{restoreCount === 1 ? '' : 's'} from an earlier install.
+                </span>
+                <label>
+                  <input type="radio" name="offline-restore" checked={restore} onChange={() => setRestore(true)} />
+                  <span>Restore them (one whose built-in text has changed since comes back for review, not active)</span>
+                </label>
+                <label>
+                  <input type="radio" name="offline-restore" checked={!restore} onChange={() => setRestore(false)} />
+                  <span>Start from the factory text</span>
+                </label>
+              </div>
+            )}
+            <label className={shared.consentLine}>
+              <input type="checkbox" className="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+              <span>I have read what this plugin may do, and I allow it for every user of this RedAmon.</span>
+            </label>
+          </div>
+        )}
+      </div>
     </Modal>
   )
 }

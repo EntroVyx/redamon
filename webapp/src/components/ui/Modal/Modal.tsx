@@ -17,7 +17,7 @@ interface ModalProps {
   /** Footer content (typically buttons) */
   footer?: ReactNode
   /** Size variant */
-  size?: 'small' | 'default' | 'large' | 'full'
+  size?: 'small' | 'default' | 'large' | 'xlarge' | 'full'
   /** Whether clicking overlay closes the modal */
   closeOnOverlayClick?: boolean
   /** Whether pressing Escape closes the modal */
@@ -111,6 +111,7 @@ export function Modal({
     small: styles.modalSmall,
     default: '',
     large: styles.modalLarge,
+    xlarge: styles.modalXLarge,
     full: styles.modalFull,
   }[size]
 

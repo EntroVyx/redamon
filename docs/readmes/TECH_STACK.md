@@ -26,7 +26,7 @@
 | **SSE (Server-Sent Events)** | Real-time log streaming from recon pipeline and GVM scans to the webapp |
 | **WebSocket** | Bidirectional real-time communication between the agent and the webapp chat |
 
-## Plugin Platform (optional, off by default)
+## Plugin Platform
 
 | Technology | Role |
 |-----------|------|
@@ -111,7 +111,7 @@ See [README.PLUGINS.md](README.PLUGINS.md) for the design and [README.PLUGIN_SDK
 
 | Technology | Role |
 |-----------|------|
-| **Docker** | Container runtime — every component runs containerized with zero host dependencies |
+| **Docker** (Engine 28.0.0+) | Container runtime — every component runs containerized with zero host dependencies |
 | **Docker Compose** (v2) | Multi-container orchestration — defines and manages the entire 12+ container stack |
 | **Docker-in-Docker (DinD)** | Architecture pattern allowing the Recon Orchestrator to spawn ephemeral scan containers |
 | **Python** (3.11) | Core language for all backend services — recon pipeline, agent, orchestrator, GVM scanner, GitHub hunter |

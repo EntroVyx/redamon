@@ -5,7 +5,6 @@ import { auditPlugin } from '@/lib/plugins/audit'
 import { bodyOwnerMatches, ownsScope } from '@/lib/plugins/changeSetAccess'
 import * as ov from '@/lib/plugins/overrides'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /** POST /api/plugins/overrides/change-sets/[id]/reject: a pending proposal is rejected (design §6). */
 export const runtime = 'nodejs'
@@ -14,7 +13,6 @@ export const dynamic = 'force-dynamic'
 const notFound = () => NextResponse.json({ error: 'Not found', code: 'not_found' }, { status: 404 })
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const parsed = await readJsonBody(request)
   if (parsed instanceof NextResponse) return parsed

@@ -12,7 +12,6 @@ import { hasPermission, servesActions, showsContributions } from './registry'
 import { gatewayCallsPerToken } from './settings'
 import { SkillPartsRegistryError } from './skillPartsRegistry'
 import { isStorableJson } from './storableText'
-import { pluginsDisabledResponse, pluginsEnabled } from './switch'
 
 /**
  * The Gateway frame (README.PLUGINS.md §7.3, TD-06): every SDK call from plugin code
@@ -20,7 +19,7 @@ import { pluginsDisabledResponse, pluginsEnabled } from './switch'
  * call, because an admin may disable the plugin, revoke a permission or delete the user
  * while a 900 s action still holds a valid token.
  *
- * Per call: the switch; JSON only; the token; its call budget; for a job's token, the job
+ * Per call: JSON only; the token; its call budget; for a job's token, the job
  * still active (a token outlives neither its job nor, for a sync action, its action);
  * the body (64 KB, up to 8 MB for the operations that carry data, bounded in depth and
  * containers, its text storable); the install row (enabled, ready, not revoked, at the
@@ -368,7 +367,6 @@ async function run(
   handler: Handler,
   identify: (pluginId: string) => void,
 ): Promise<NextResponse> {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!isJsonContentType(request.headers.get('content-type'))) {
     return gatewayError(415, 'unsupported_media_type', 'Content-Type must be application/json')
   }

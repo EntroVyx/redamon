@@ -123,17 +123,10 @@ describe('chips and controls', () => {
   })
 })
 
-describe('create mode / switch off', () => {
+describe('create mode', () => {
   test('no plugin controls without a projectId (create mode)', async () => {
     h.summary = summaryWith(APPLIED)
     draw(null)
-    await screen.findByText('Server-Side Request Forgery')
-    await waitFor(() => expect(screen.queryByTestId('plugin-skill-row-ssrf')).toBeNull())
-  })
-
-  test('switch off: the summary 404s and nothing extra renders', async () => {
-    h.summary = null // 404
-    draw()
     await screen.findByText('Server-Side Request Forgery')
     await waitFor(() => expect(screen.queryByTestId('plugin-skill-row-ssrf')).toBeNull())
   })

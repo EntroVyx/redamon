@@ -87,7 +87,6 @@ beforeEach(() => {
   validateAnswer = () => Response.json(VALID)
   h.agent = async (path) => (path === '/plugins/skill-parts' ? Response.json(REGISTRY) : validateAnswer())
   clearSkillPartsCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   t = Date.parse('2026-10-09T10:00:00.000Z')

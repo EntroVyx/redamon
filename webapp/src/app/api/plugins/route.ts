@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { requireEffectiveUser } from '@/lib/access'
 import { buildPluginsPage, viewerIsAdmin } from '@/lib/plugins/pageModel'
 import { getSession } from '@/lib/session'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugins: the Plugins page model (lib/plugins/pageModel.ts) for any signed-in
@@ -12,7 +11,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const user = await requireEffectiveUser()
   if (user instanceof NextResponse) return user
   const session = await getSession()

@@ -43,7 +43,6 @@ beforeEach(() => {
   h.db = db as unknown as Record<string, unknown>
   seedWorld(db)
   db.seed('pluginInstall', [echoInstall({ pluginId: 'other', manifest: echoManifest({ id: 'other' }) })])
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   t = Date.parse('2026-10-09T10:00:00.000Z')

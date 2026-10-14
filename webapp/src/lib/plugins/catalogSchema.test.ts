@@ -91,6 +91,42 @@ describe('shape checks', () => {
   })
 })
 
+describe('the listing', () => {
+  const icon = { url: 'https://raw.githubusercontent.com/o/r/master/echo/icon.jpg', sha256: 'a'.repeat(64), size: 4096, type: 'image/jpeg' }
+  const listed = (c: Doc) => {
+    c.plugins[0].icon = clone(icon)
+    c.plugins[0].docsUrl = 'https://github.com/o/r/wiki/Plugin-Echo'
+  }
+
+  test('an icon and a docs URL are kept', () => {
+    const c = clone(valid) as Doc
+    listed(c)
+    const r = parseCatalog(c)
+    expect(r.ok ? [] : r.errors).toEqual([])
+    expect(r.ok && r.value.plugins[0].icon).toEqual(icon)
+    expect(r.ok && r.value.plugins[0].docsUrl).toBe('https://github.com/o/r/wiki/Plugin-Echo')
+  })
+
+  test('both are optional', () => {
+    const r = parseCatalog(clone(valid))
+    expect(r.ok && r.value.plugins[0].icon).toBeUndefined()
+    expect(r.ok && r.value.plugins[0].docsUrl).toBeUndefined()
+  })
+
+  test('a docs URL is https only: it becomes a link on the card', () => {
+    for (const docsUrl of ['http://github.com/o/r/wiki', 'javascript:alert(1)']) {
+      expect(refusal((c) => (listed(c), (c.plugins[0].docsUrl = docsUrl)))).toMatch(/docsUrl: must be an https URL/)
+    }
+  })
+
+  test('an icon of another type, too large, over http or without its hash is refused', () => {
+    expect(refusal((c) => (listed(c), (c.plugins[0].icon.type = 'image/svg+xml')))).toMatch(/icon\.type/)
+    expect(refusal((c) => (listed(c), (c.plugins[0].icon.size = 262_145)))).toMatch(/icon\.size/)
+    expect(refusal((c) => (listed(c), (c.plugins[0].icon.url = 'http://example.org/i.jpg')))).toMatch(/icon\.url: must be an https URL/)
+    expect(refusal((c) => (listed(c), delete c.plugins[0].icon.sha256))).toMatch(/icon\.sha256/)
+  })
+})
+
 describe('forward compatibility', () => {
   test('a field a later CI adds is ignored, not refused', () => {
     const r = parseCatalog(clone(valid))

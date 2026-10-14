@@ -52,7 +52,8 @@
   border-right: 1px solid var(--border-default);
 }
 
-.row[data-current='true'] {
+.row[data-current='true'],
+.unified > [data-current='true'] {
   outline: 1px solid var(--accent-primary, #3b82f6);
   outline-offset: -1px;
 }

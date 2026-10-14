@@ -108,7 +108,7 @@ export function SkillVersionsModal({
   const title = model ? `Versions · ${model.skillDisplayName}` : 'Skill versions'
 
   return (
-    <Modal isOpen onClose={onClose} title={title} size="large" closeOnOverlayClick={false}>
+    <Modal isOpen onClose={onClose} title={title} size="xlarge" closeOnOverlayClick={false}>
       <div className={styles.body}>
         <label className={styles.selector}>
           Skill

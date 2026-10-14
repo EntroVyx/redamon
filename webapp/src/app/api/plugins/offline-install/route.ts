@@ -3,7 +3,6 @@ import { archiveMaxBytes } from '@/lib/plugins/fetchRemote'
 import { offlineInstall } from '@/lib/plugins/lifecycle'
 import { errorResponse, lifecycleErrorResponse, requirePluginAdmin } from '@/lib/plugins/lifecycleRoutes'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * POST /api/plugins/offline-install (admin, same origin, multipart: `archive`, `catalog`,
@@ -31,7 +30,6 @@ async function bytesOf(form: FormData, name: string): Promise<Buffer | null> {
 }
 
 export async function POST(request: NextRequest) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const admin = await requirePluginAdmin()
   if (admin instanceof NextResponse) return admin
   if (!sameOrigin(request)) return crossOriginResponse()

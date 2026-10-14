@@ -583,8 +583,7 @@ services:
       # Wired HERE because recon-orchestrator has NO env_file: a value set only
       # in .env is silently inert (the documented 6.2.7 class of bug).
       MCP_TOKEN_PRUNE_INTERVAL: ${MCP_TOKEN_PRUNE_INTERVAL:-86400}
-      # Plugin reconciliation tick (TD-20): skipped entirely unless the platform is on.
-      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}
+      # Plugin reconciliation tick (TD-20).
       PLUGIN_RECONCILE_INTERVAL: ${PLUGIN_RECONCILE_INTERVAL:-300}
       # D3: global + per-user concurrent-scan ceilings enforced at admission.
       # SAFE, GENEROUS DEFAULTS so unset resolves to a real limit (never "no cap").
@@ -1108,13 +1107,10 @@ services:
       # Empty locally: the route then falls back to deriving it from the request,
       # which is correct when nothing sits in front of the app.
       MCP_ALLOWED_ORIGIN: ${MCP_ALLOWED_ORIGIN:-}
-      # Plugin platform switch, DEFAULT OFF: plugin code is third-party code, so the
-      # platform is turned on deliberately. Listed here because the webapp has NO env_file.
-      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}
-      # The rest of the plugin platform's settings. Inert while the switch is off; the
+      # Plugin platform settings, listed here because the webapp has NO env_file. The
       # volume and the network they refer to come from docker-compose.plugins.yml, which
-      # redamon.sh loads only while the switch is on. The two secrets are generated into
-      # .env by redamon.sh; empty, every plugin route fails closed.
+      # redamon.sh loads on every install, update and up. The two secrets are generated
+      # into .env by redamon.sh; empty, every plugin route fails closed.
       PLUGINS_DIR: /data/plugins
       PLUGIN_RUNNER_URL: http://plugin-gateway:7072
       PLUGIN_RUNNER_KEY: ${PLUGIN_RUNNER_KEY:-}
@@ -1355,8 +1351,8 @@ services:
 
   # ===========================================================================
   # Plugin platform (README.PLUGINS.md §5). Both services are in the `plugins`
-  # profile and are started or removed only by redamon.sh's plugins_converge,
-  # while PLUGINS_ENABLED is on; a plain `docker compose up` never starts them.
+  # profile and are started only by redamon.sh's plugins_converge, on every
+  # install, update and up; a plain `docker compose up` never starts them.
   # plugin-runner runs third-party plugin code, one worker process per plugin
   # version under its own UID. plugin-gateway is the only door between the
   # plugins network and the rest of the stack: workers reach the webapp's
@@ -1480,7 +1476,7 @@ networks:
     name: redamon-codefix-net
     driver: bridge
   # Plugin platform. Used only by the `plugins` profile and the overlay
-  # docker-compose.plugins.yml, so compose creates neither while plugins are off.
+  # docker-compose.plugins.yml, so a plain `docker compose up` creates neither.
   # `internal`: no route out. `gateway_mode_ipv4: isolated` (Docker Engine >= 28.0.0)
   # removes the bridge's own address on the host, without which a worker reaches every
   # host service listening on all interfaces (experiment E1).
@@ -1593,5 +1589,5 @@ volumes:
   supply_chain_uploads:
     name: redamon_supply_chain_uploads
   # Installed plugin versions: the webapp writes (through the overlay), the runner reads.
-  # Kept when plugins are switched off; removed by `./redamon.sh purge`.
+  # Removed only by `./redamon.sh purge`.
   plugins:

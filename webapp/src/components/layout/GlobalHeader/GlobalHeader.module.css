@@ -5,7 +5,7 @@
   padding: var(--space-1) var(--space-4);
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-default);
-  height: 36px;
+  height: 38px;
   flex-shrink: 0;
 }
 

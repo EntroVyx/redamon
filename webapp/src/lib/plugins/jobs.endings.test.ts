@@ -47,7 +47,6 @@ beforeEach(async () => {
   t = Date.parse('2026-10-09T10:00:00.000Z')
   setNowForTests(() => new Date(t))
   clearRunnerBootIdCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   vi.spyOn(console, 'log').mockImplementation(() => {})

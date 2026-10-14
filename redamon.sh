@@ -56,6 +56,12 @@ RUNTIME_TRACKED_PATHS="recon/main_recon_modules/data/mitre_db recon/main_recon_m
 # its changed-file -> service map from this, not from the commit it threw away.
 UPDATE_BASE_HEAD=""
 
+# The pre-pull commit of an update that has pulled but not yet finished. A stopped
+# update has already moved HEAD, so without it a rerun would find nothing new and
+# rebuild nothing. Written by the re-exec'd copy, removed when an update or install
+# completes. Gitignored.
+UPDATE_PENDING_FILE="$SCRIPT_DIR/.update-pending"
+
 # Orchestrator-spawned containers that docker compose does NOT manage (they are
 # created at runtime via the Docker API, so `compose down` leaves them behind and
 # they must be wiped explicitly):
@@ -347,24 +353,11 @@ preflight_ram_gate() {
         if allocate_memory; then
             return 0
         fi
-        # The plugin platform is optional: a host short only by the runner's minimum runs
-        # without it for this run, like any host that cannot run it (R-78).
-        if [[ -z "${PLUGINS_EFFECTIVE:-}" ]] && _plugins_effective_on 2>/dev/null; then
-            PLUGINS_EFFECTIVE=off
-            if allocate_memory; then
-                PLUGINS_OFF_REASON="the ~$(( ${BUILD_MEM_MB:-0} / 1024 ))GB of memory available to Docker cannot also cover the plugin runner's minimum"
-                export PLUGINS_ENABLED=false
-                error "Plugins stay off for this run: $PLUGINS_OFF_REASON."
-                return 0
-            fi
-            PLUGINS_EFFECTIVE=""
-        fi
         error "Insufficient memory: ~$(( ${BUILD_MEM_MB:-0} / 1024 ))GB available to Docker (source: ${BUILD_RES_SOURCE:-unknown}),"
         error "  which cannot cover the minimums of the services this profile starts"
         error "  (short by ~$(( _ALLOC_SHORTFALL_MB / 1024 + 1 ))GB)."
         is_gvm_enabled 2>/dev/null && error "  The --gvm profile roughly doubles the requirement; try without it."
         is_kbase_enabled 2>/dev/null && error "  The Knowledge Base profile also adds to it."
-        _plugins_effective_on 2>/dev/null && error "  The plugin platform (PLUGINS_ENABLED) also adds to it."
         error "Free up memory, raise the Docker VM memory, or set REDAMON_SKIP_RAM_GATE=1 to override."
         return 1
     fi
@@ -543,9 +536,9 @@ _GVM_DATA_CONTAINERS=8
 # one-shot containers that exit before any scan is admitted.
 _GVM_DATA_MIN_MB=512
 _MEM_SPEC_KB="KB_REFRESH:150:512:b"
-# The plugin runner (supervisor + one worker per plugin version), budgeted only while the
-# plugin platform is on. Its floor fits the supervisor and one worker at rest; workers are
-# also capped one by one with RLIMIT_AS (PLUGIN_WORKER_MEM_MB).
+# The plugin runner (supervisor + one worker per plugin version). Its floor fits the
+# supervisor and one worker at rest; workers are also capped one by one with RLIMIT_AS
+# (PLUGIN_WORKER_MEM_MB).
 _MEM_SPEC_PLUGINS="PLUGIN_RUNNER:60:256:b"
 
 # Results, published as parallel indexed arrays (NOT associative: redamon.sh
@@ -654,10 +647,9 @@ _burst_pct() {
 
 # The specs for the profiles that are actually enabled.
 _mem_specs() {
-    local specs="$_MEM_SPECS_BASE"
+    local specs="$_MEM_SPECS_BASE $_MEM_SPEC_PLUGINS"
     is_gvm_enabled 2>/dev/null && specs="$specs $_MEM_SPEC_GVM"
     is_kbase_enabled 2>/dev/null && specs="$specs $_MEM_SPEC_KB"
-    _plugins_effective_on 2>/dev/null && specs="$specs $_MEM_SPEC_PLUGINS"
     printf '%s' "$specs"
 }
 
@@ -1981,17 +1973,15 @@ ensure_auth_secrets() {
         echo "MCP_SERVER_ENABLED=false" >> "$env_file"
         info "Initialized MCP_SERVER_ENABLED=false (inbound MCP server off by default)"
     fi
-    # Plugin platform. Written explicitly as false for the same reason: plugin code
-    # is third-party code, so the platform is switched on deliberately, never by
-    # upgrading. Also listed in the webapp's compose `environment` block.
-    if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?PLUGINS_ENABLED=' "$env_file" 2>/dev/null; then
-        echo "PLUGINS_ENABLED=false" >> "$env_file"
-        info "Initialized PLUGINS_ENABLED=false (plugin platform off by default)"
+    # The plugin platform always runs, so a PLUGINS_ENABLED line left by an older
+    # release only misleads whoever reads .env. Nothing reads it.
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?PLUGINS_ENABLED=' "$env_file" 2>/dev/null; then
+        _env_strip_var "$env_file" '(export[[:space:]]+)?PLUGINS_ENABLED'
+        info "Removed PLUGINS_ENABLED from .env (the plugin platform is always on)"
     fi
-    # Plugin platform secrets, generated whatever the switch says so that turning it on
-    # needs no other step. The runner key authenticates the webapp and the plugin runner
-    # to each other; the token secret signs plugin call tokens and never reaches the
-    # runner (a compromised runner must not mint tokens). Both stateless. An empty
+    # Plugin platform secrets. The runner key authenticates the webapp and the plugin
+    # runner to each other; the token secret signs plugin call tokens and never reaches
+    # the runner (a compromised runner must not mint tokens). Both stateless. An empty
     # value (a .env copied from an older .env.example) counts as missing; compose
     # reads the last assignment, so that is the one checked.
     local key
@@ -2032,26 +2022,24 @@ mcp_server_preflight() {
 # ---------------------------------------------------------------------------
 # Plugin platform (README.PLUGINS.md, master plan TD-02, TD-05)
 # ---------------------------------------------------------------------------
-# The platform is optional and off by default. With PLUGINS_ENABLED off, nothing below
-# creates a container, network or volume, and nothing can make install, update or up
-# fail. With it on, _plugins_prepare decides the EFFECTIVE switch for this run: a host
-# that cannot run the platform (old Docker Engine, weak internal key, missing secret,
-# runner image that does not build) gets plugins off for this run, with the cause named,
-# and the rest of RedAmon starts as usual (design principle 1; owner request 2026-10-09).
+# The platform always runs. install, update and up stop, naming the cause, on a host
+# that cannot run it (old Docker Engine, weak internal key, missing secret, a runner image
+# that does not build, too little memory) rather than start a RedAmon whose Plugins page
+# has nothing behind it (owner decision 2026-10-12).
 PLUGINS_RUNNER_IMAGE="redamon-plugin-runner:latest"
 PLUGINS_OVERLAY="docker-compose.plugins.yml"
 # Both plugin networks use `gateway_mode_ipv4: isolated` (experiment E1: without it a
 # worker reaches the host itself), which Docker Engine accepts from 28.0.0 on.
 PLUGINS_MIN_ENGINE="28.0.0"
-PLUGINS_EFFECTIVE=""        # "", on or off; empty until _plugins_prepare has decided
-PLUGINS_OFF_REASON=""
+PLUGINS_READY=false         # true once _plugins_prepare has passed in this run
+PLUGINS_FAIL_REASON=""
 PLUGINS_COMPOSE_ARGS=""     # -f overlay, for call sites with explicit -f (up dev)
 PLUGINS_IMAGE_REBUILT=false
 
 # The value compose gives a variable: the shell's when set, else the LAST assignment in
 # .env, read with compose's .env syntax (an `export ` prefix, single or double quotes, an
 # inline comment after whitespace). Reading .env any other way lets this script and the
-# containers disagree on the plugin switch or a secret.
+# containers disagree on a secret.
 _env_compose_value() {
     local key="$1" file="${2:-$SCRIPT_DIR/.env}"
     if [[ -n "${!key+x}" ]]; then
@@ -2077,25 +2065,6 @@ _env_compose_value() {
         }' "$file"
 }
 
-# The switch as compose hands it to the webapp, parsed like the webapp's
-# pluginsEnabled(): trimmed, any case, `true` or `1`. bash 3.2 (macOS) has no
-# case-changing expansion, hence tr.
-plugins_switch_on() {
-    local v
-    v="$(_env_compose_value PLUGINS_ENABLED | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-    [[ "$v" == "true" || "$v" == "1" ]]
-}
-
-# The switch the memory governor and the RAM gate see: the effective one once
-# _plugins_prepare has decided, the .env one before (they run before the secrets exist).
-_plugins_effective_on() {
-    case "${PLUGINS_EFFECTIVE:-}" in
-        on) return 0 ;;
-        off) return 1 ;;
-    esac
-    plugins_switch_on
-}
-
 # True when the daemon's Engine version is at least $1. Unreadable counts as too old.
 _docker_engine_at_least() {
     local have want="$1" a b c x y z
@@ -2107,26 +2076,74 @@ _docker_engine_at_least() {
     (( a > x || (a == x && (b > y || (b == y && c >= z))) ))
 }
 
-# Builds the runner image. Never fatal: the image is optional until plugins are on.
+# Every update past the pull is the re-exec'd copy (REDAMON_UPDATE_FROM is set), and it
+# records its pre-pull commit in UPDATE_PENDING_FILE before anything can stop it.
+_update_resume_hint() {
+    [[ -n "${REDAMON_UPDATE_FROM:-}" ]] || return 0
+    error "  The code is already updated but not rebuilt. Once fixed, run ./redamon.sh update"
+    error "  again: it finishes this update."
+}
+
+# The pre-pull commit of an unfinished update, when it is still an ancestor of $1 (the
+# commit about to be applied). A marker that no longer is (a reset, a re-clone) is
+# dropped, since diffing from it would map changes the checkout never had. Called in a
+# command substitution, so anything but the commit goes to stderr.
+_update_pending_base() {
+    local head="$1" base
+    [[ -f "$UPDATE_PENDING_FILE" ]] || return 0
+    base="$(tr -d '[:space:]' < "$UPDATE_PENDING_FILE")"
+    if [[ -n "$base" ]] && git -C "$SCRIPT_DIR" merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
+        printf '%s' "$base"
+        return 0
+    fi
+    warn "Ignoring a stale unfinished-update marker (${base:-empty}); it is not in this checkout's history." >&2
+    rm -f "$UPDATE_PENDING_FILE"
+}
+
+# `up` starts whatever images exist, so after a stopped update it would run the new
+# compose file on images that predate it.
+_warn_update_pending() {
+    [[ -f "$UPDATE_PENDING_FILE" ]] || return 0
+    warn "An update stopped before it finished, so some images may be older than the code."
+    warn "  Run ./redamon.sh update to finish it."
+}
+
+# Stops install, update and up on an engine the plugin networks cannot run on, before
+# anything is built: an old engine then costs seconds, not a build.
+require_plugin_engine() {
+    _docker_engine_at_least "$PLUGINS_MIN_ENGINE" && return 0
+    local have
+    have="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || have=""
+    if [[ -z "$have" ]]; then
+        error "Could not read the Docker Engine version. Is the Docker daemon running? Check: docker version"
+    else
+        error "RedAmon needs Docker Engine $PLUGINS_MIN_ENGINE or newer; this host runs $have."
+        error "  The plugin platform's isolated networks need it. Upgrade: https://docs.docker.com/engine/install/"
+    fi
+    _update_resume_hint
+    return 1
+}
+
+# Builds the runner image. The caller decides whether a failure stops the command.
 _plugins_build_runner() {
     info "Building the plugin runner image ($PLUGINS_RUNNER_IMAGE)..."
     if compose_build build plugin-runner; then
         PLUGINS_IMAGE_REBUILT=true
         return 0
     fi
-    warn "The plugin runner image did not build; plugins stay as they were. Retry later: docker compose build plugin-runner"
+    error "The plugin runner image did not build. See: docker compose build plugin-runner"
     return 1
 }
 
-# Can this host run the platform now? Sets PLUGINS_OFF_REASON on failure. With
+# Can this host run the platform now? Sets PLUGINS_FAIL_REASON on failure. With
 # --no-build a missing image is a reason (status); without, it is built once now.
 plugins_preflight() {
     local build=true env_file="$SCRIPT_DIR/.env" internal
     [[ "${1:-}" == "--no-build" ]] && build=false
-    PLUGINS_OFF_REASON=""
+    PLUGINS_FAIL_REASON=""
     internal="$(_env_compose_value INTERNAL_API_KEY "$env_file")"
     if [[ -z "$internal" || "$internal" == "changeme" ]]; then
-        PLUGINS_OFF_REASON="INTERNAL_API_KEY is unset or 'changeme' (run ./redamon.sh install to generate it)"
+        PLUGINS_FAIL_REASON="INTERNAL_API_KEY is unset or 'changeme' (delete the line; the next ./redamon.sh up generates it)"
         return 1
     fi
     # What the webapp refuses at runtime (run-list/route.ts, callToken.ts), refused here
@@ -2135,36 +2152,36 @@ plugins_preflight() {
     for k in PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET; do
         v="$(_env_compose_value "$k" "$env_file" | tr -d '[:space:]')"
         if [[ -z "$v" || "$v" == "changeme" ]]; then
-            PLUGINS_OFF_REASON="$k is empty or 'changeme' (delete the line; the next ./redamon.sh up generates it)"
+            PLUGINS_FAIL_REASON="$k is empty or 'changeme' (delete the line; the next ./redamon.sh up generates it)"
             return 1
         fi
     done
     secret="$(_env_compose_value PLUGIN_CALL_TOKEN_SECRET "$env_file" | tr -d '[:space:]')"
     if [[ "${#secret}" -lt 32 ]]; then
-        PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET has fewer than 32 characters (delete the line; the next ./redamon.sh up generates it)"
+        PLUGINS_FAIL_REASON="PLUGIN_CALL_TOKEN_SECRET has fewer than 32 characters (delete the line; the next ./redamon.sh up generates it)"
         return 1
     fi
     # The runner holds PLUGIN_RUNNER_KEY: a runner escape must not yield the token key.
     for k in AUTH_SECRET PLUGIN_RUNNER_KEY INTERNAL_API_KEY AGENT_WS_TICKET_SECRET; do
         if [[ "$secret" == "$(_env_compose_value "$k" "$env_file" | tr -d '[:space:]')" ]]; then
-            PLUGINS_OFF_REASON="PLUGIN_CALL_TOKEN_SECRET equals $k (delete its line; the next ./redamon.sh up generates another)"
+            PLUGINS_FAIL_REASON="PLUGIN_CALL_TOKEN_SECRET equals $k (delete its line; the next ./redamon.sh up generates another)"
             return 1
         fi
     done
     if ! _docker_engine_at_least "$PLUGINS_MIN_ENGINE"; then
         local have
         have="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || have=""
-        PLUGINS_OFF_REASON="Docker Engine ${have:-of unknown version} is older than $PLUGINS_MIN_ENGINE, which the plugin networks need (upgrade Docker)"
+        PLUGINS_FAIL_REASON="Docker Engine ${have:-of unknown version} is older than $PLUGINS_MIN_ENGINE, which the plugin networks need (upgrade Docker)"
         return 1
     fi
     if ! docker image inspect "$PLUGINS_RUNNER_IMAGE" >/dev/null 2>&1; then
         if [[ "$build" == false ]]; then
-            PLUGINS_OFF_REASON="the runner image is not built yet (./redamon.sh up builds it)"
+            PLUGINS_FAIL_REASON="the runner image is not built yet (./redamon.sh up builds it)"
             return 1
         fi
-        info "Plugins are on: building the plugin runner image (first time only)..."
+        info "Building the plugin runner image (first time only)..."
         if ! _plugins_build_runner; then
-            PLUGINS_OFF_REASON="the plugin runner image could not be built (docker compose build plugin-runner shows why)"
+            PLUGINS_FAIL_REASON="the plugin runner image could not be built (docker compose build plugin-runner shows why)"
             return 1
         fi
     fi
@@ -2189,78 +2206,57 @@ _plugins_compose_overlay() {
 
 # Creates the plugin networks, the volume and the two containers (not started) before
 # the core `up` would create them through the overlay: a daemon that refuses them (an
-# exhausted address pool) then turns plugins off instead of failing the core `up`.
+# exhausted address pool) then stops the command with that cause, before any core
+# service is recreated, instead of failing halfway through the core `up`.
 _plugins_create() {
     # shellcheck disable=SC2068
     if docker compose $@ --profile plugins up --no-start --no-deps plugin-runner plugin-gateway >/dev/null 2>&1; then
         return 0
     fi
-    PLUGINS_OFF_REASON="Docker could not create the plugin networks, volume or containers (docker compose --profile plugins up --no-start plugin-runner plugin-gateway shows why)"
+    PLUGINS_FAIL_REASON="Docker could not create the plugin networks, volume or containers (docker compose --profile plugins up --no-start plugin-runner plugin-gateway shows why)"
     return 1
 }
 
-# Decides the effective switch for this run. Runs once per command, after the secrets
-# exist and before the first `docker compose up`. Leading args are compose file
-# selectors (up dev). The decision is exported either way: compose reads the shell
-# before .env, so the webapp starts with exactly what was decided here.
+# Readies the platform for this run: the preflight, the plugin networks, then the overlay.
+# Runs once per command, after the secrets exist and before the first `docker compose up`.
+# Leading args are compose file selectors (up dev). Fails when the host cannot run it.
 _plugins_prepare() {
-    if [[ -n "${PLUGINS_EFFECTIVE:-}" ]]; then
-        [[ "$PLUGINS_EFFECTIVE" == on ]] && _plugins_compose_overlay
-        return 0
+    if [[ "$PLUGINS_READY" != true ]]; then
+        if ! plugins_preflight || ! _plugins_create "$@"; then
+            error "The plugin platform cannot run on this host: $PLUGINS_FAIL_REASON."
+            _update_resume_hint
+            return 1
+        fi
+        PLUGINS_READY=true
     fi
-    if ! plugins_switch_on; then
-        PLUGINS_EFFECTIVE=off
-        export PLUGINS_ENABLED=false
-        return 0
-    fi
-    if plugins_preflight && _plugins_create "$@"; then
-        PLUGINS_EFFECTIVE=on
-        export PLUGINS_ENABLED=true
-        _plugins_compose_overlay
-        info "Plugin platform: on"
-        return 0
-    fi
-    PLUGINS_EFFECTIVE=off
-    export PLUGINS_ENABLED=false
-    error "Plugins stay off for this run: $PLUGINS_OFF_REASON."
-    return 0
+    _plugins_compose_overlay
 }
 
-# Starts or removes the two plugin services: the ONLY place that names them in an up
-# or an rm, because `docker compose up -d --no-deps <profile service>` starts a profile
-# service even without --profile. Leading args are compose file selectors (up dev).
+# Starts the two plugin services, recreating them when the runner image was rebuilt.
+# The only place that names them in an `up`, so the recreate decision lives in one
+# place. Leading args are compose file selectors (up dev).
 plugins_converge() {
     local recreate=()
     [[ "$PLUGINS_IMAGE_REBUILT" == true ]] && recreate=(--force-recreate)
-    if [[ "${PLUGINS_EFFECTIVE:-}" == on ]]; then
-        # shellcheck disable=SC2068
-        if ! docker compose $@ --profile plugins up -d ${recreate[@]+"${recreate[@]}"} plugin-runner plugin-gateway; then
-            warn "The plugin services did not start; RedAmon runs without plugins. See: docker compose --profile plugins logs plugin-runner"
-        fi
+    # shellcheck disable=SC2068
+    if docker compose $@ --profile plugins up -d ${recreate[@]+"${recreate[@]}"} plugin-runner plugin-gateway; then
         return 0
     fi
-    # shellcheck disable=SC2068
-    docker compose $@ --profile plugins rm -sf plugin-runner plugin-gateway >/dev/null 2>&1 || true
-    # rm leaves networks behind; one still in use (a webapp not yet recreated) is refused.
-    docker network rm redamon-plugins-net redamon-plugins-edge >/dev/null 2>&1 || true
-    return 0
+    error "The plugin services did not start. See: docker compose --profile plugins logs plugin-runner"
+    return 1
 }
 
-# One status line: the platform's state and, when the switch is on but it cannot run,
-# why. Read-only: builds nothing, changes nothing.
+# One status line: the services' state or, when the host cannot run the platform, why.
+# Read-only: builds nothing, changes nothing.
 _status_plugins_report() {
-    if ! plugins_switch_on; then
-        echo -e "  ${CYAN}PLUGINS:${NC}       off"
-        return 0
-    fi
     if ! plugins_preflight --no-build; then
-        echo -e "  ${CYAN}PLUGINS:${NC}       ${YELLOW}off (PLUGINS_ENABLED=true, but ${PLUGINS_OFF_REASON})${NC}"
+        echo -e "  ${CYAN}PLUGINS:${NC}       ${RED}cannot run (${PLUGINS_FAIL_REASON})${NC}"
         return 0
     fi
     local runner gateway
     runner="$(docker compose --profile plugins ps -a --format '{{.Status}}' plugin-runner 2>/dev/null | head -1)"
     gateway="$(docker compose --profile plugins ps -a --format '{{.Status}}' plugin-gateway 2>/dev/null | head -1)"
-    echo -e "  ${CYAN}PLUGINS:${NC}       ${GREEN}on${NC} (runner: ${runner:-not running}; gateway: ${gateway:-not running})"
+    echo -e "  ${CYAN}PLUGINS:${NC}       runner: ${runner:-not running}; gateway: ${gateway:-not running}"
 }
 
 # Compose project name (used to resolve the data-volume names). Must match
@@ -3281,6 +3277,7 @@ cmd_install() {
 
     print_banner
     check_prerequisites
+    require_plugin_engine || exit 1
     # A fresh install cannot pull, so this cannot block anything here - but a
     # `sudo ./redamon.sh install` is exactly what creates the root-owned files
     # that break the NEXT update. Say so at the point the mistake is made.
@@ -3359,9 +3356,7 @@ cmd_install() {
     # guarantees a fresh install can start capture without any extra step.
     info "Building all images (this may take a while on first run)..."
     compose_build --profile tools --profile capture build
-    # The plugin runner is optional and in its own profile: built in a separate call
-    # whose failure only warns, so it can never fail an install.
-    _plugins_build_runner || true
+    _plugins_build_runner || exit 1
 
     # Reap the images the build just orphaned. A rebuild does not replace an image
     # in place: it builds a new one and MOVES the tag, leaving the previous image
@@ -3391,9 +3386,8 @@ cmd_install() {
         pull_gvm_images
     fi
 
-    # Decide the plugin platform before the first `up`: it loads the overlay into
-    # COMPOSE_FILE, or turns the switch off for this run with the reason.
-    _plugins_prepare
+    # Before the first `up`: it loads the plugins overlay into COMPOSE_FILE.
+    _plugins_prepare || exit 1
 
     # Start services (force-recreate ensures compose changes like command: are applied)
     info "Starting services..."
@@ -3411,7 +3405,9 @@ cmd_install() {
     if ! verify_core_running; then
         exit 1
     fi
-    plugins_converge
+    plugins_converge || exit 1
+    # Every image was just built from this checkout, which finishes any stopped update.
+    rm -f "$UPDATE_PENDING_FILE"
 
     # Show "ready" banner before the KB prompt so the user knows the app
     # is already usable (they can Ctrl+C the KB question and start working).
@@ -3537,6 +3533,25 @@ _map_baked_graph_db() {
     done
 }
 
+# The webapp reaches the plugin services only through the overlay's network and volume,
+# which it gets when it is created, but update recreates only what it rebuilds or
+# restarts. A running webapp created without the overlay (a plain `docker compose up`, or
+# a release that loaded the overlay only on request) would stay unwired, and an
+# overlay-only release would never reach it. Runs after _plugins_prepare; appends to the
+# CALLER's `restart_only` like _map_core_changes. Reads the running webapp, so a stack
+# that is down is left down.
+_map_plugin_consumers() {
+    local changed_files="$1" id nets
+    _service_running webapp || return 0
+    id="$(docker compose ps -q webapp 2>/dev/null | head -1)" || id=""
+    nets="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$id" 2>/dev/null)" || nets=""
+    if grep -qx 'redamon-plugins-edge' <<<"$nets" \
+        && ! grep -qx 'docker-compose\.plugins\.yml' <<<"$changed_files"; then
+        return 0
+    fi
+    [[ " ${rebuild_core[*]-} ${restart_only[*]-} " == *" webapp "* ]] || restart_only+=(webapp)
+}
+
 cmd_update() {
     # --gpu / --cpu are accepted here too, so switching the PyTorch variant does
     # not require a full `install`. Unlike install, omitting them PRESERVES the
@@ -3551,6 +3566,11 @@ cmd_update() {
         esac
         shift
     done
+    # The re-exec'd copy: the pull already happened, so whatever stops this run from
+    # here on must leave the next `update` a way to finish it.
+    if [[ -n "${REDAMON_UPDATE_FROM:-}" ]]; then
+        printf '%s\n' "$REDAMON_UPDATE_FROM" > "$UPDATE_PENDING_FILE"
+    fi
     if [[ "$gpu_mode" == "on" ]]; then
         info "Switching to a GPU PyTorch build (--gpu)"
         touch "$GPU_ENABLED_FLAG_FILE"; rm -f "$GPU_DISABLED_FLAG_FILE"
@@ -3572,6 +3592,9 @@ cmd_update() {
 
     print_banner
     check_prerequisites
+    # Before the pull on a current copy. The re-exec'd copy of an update from an older
+    # release runs it after its predecessor pulled, hence the resume hint inside.
+    require_plugin_engine || exit 1
 
     local old_version
     old_version="$(get_version)"
@@ -3607,6 +3630,15 @@ cmd_update() {
         fi
 
         new_head="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
+
+        # An earlier update pulled but did not finish: diff from where it started, so
+        # its changes are rebuilt too, whether or not this pull brought anything new.
+        local pending_base
+        pending_base="$(_update_pending_base "$new_head")"
+        if [[ -n "$pending_base" ]]; then
+            info "Finishing the update that started at ${pending_base:0:8}..."
+            old_head="$pending_base"
+        fi
 
         if [[ "$old_head" == "$new_head" ]]; then
             success "Already up to date (v$(get_version))."
@@ -3724,9 +3756,8 @@ cmd_update() {
         rebuild_capture=true
     fi
     # The plugin runner image: rebuilt when its sources or a compose file it depends on
-    # changed, built when missing. Never in rebuild_core or restart_only: that build is
-    # fatal, and those services are restarted with `up -d --no-deps`, which starts a
-    # profile service even with plugins off. Only plugins_converge starts the runner.
+    # changed, built when missing. Never in rebuild_core or restart_only: plugins_converge
+    # alone starts the runner and the gateway, and recreates both after this rebuild.
     local rebuild_plugins=false
     if echo "$changed_files" | grep -qE "^(docker-compose(\.plugins)?\.yml$|services/plugin_runner/)"; then
         rebuild_plugins=true
@@ -3812,13 +3843,14 @@ cmd_update() {
         info "Rebuilding service images: ${rebuild_core[*]}"
         compose_build build "${rebuild_core[@]}"
     fi
-    # After the core build, and never fatal: the platform is optional.
-    if [[ "$rebuild_plugins" == "true" ]]; then
-        _plugins_build_runner || true
+    if [[ "$rebuild_plugins" == "true" ]] && ! _plugins_build_runner; then
+        _update_resume_hint
+        exit 1
     fi
 
-    # The plugin platform's effective switch, before any service is recreated.
-    _plugins_prepare
+    # Before any service is recreated: it loads the plugins overlay into COMPOSE_FILE.
+    _plugins_prepare || exit 1
+    _map_plugin_consumers "$changed_files"
 
     # Clean up dangling images left by rebuilds
     if [[ ${#rebuild_core[@]} -gt 0 || ${#rebuild_tools[@]} -gt 0 ]]; then
@@ -3927,7 +3959,13 @@ cmd_update() {
         done
     fi
 
-    plugins_converge
+    # Only beside a running webapp: an update must not start half a stack someone stopped.
+    # The next `up` starts the pair, and compose recreates it onto a rebuilt image.
+    if _service_running webapp; then
+        plugins_converge || exit 1
+    fi
+    # Everything the release changed is built and applied; what remains is a health check.
+    rm -f "$UPDATE_PENDING_FILE"
 
     # An update that leaves the stack down must not report success. This is the
     # exact gap the v6.1.1 -> v6.4.1 field report hit: the update finished, said
@@ -4169,6 +4207,8 @@ verify_core_running() {
 }
 
 cmd_up_dev() {
+    require_plugin_engine || exit 1
+    _warn_update_pending
     _migrate_reorg_layout
     _migrate_legacy_kbase_flag
     _kb_export_env
@@ -4188,7 +4228,7 @@ cmd_up_dev() {
     ensure_auth_secrets
     mcp_server_preflight || exit 1
     # Explicit -f files ignore COMPOSE_FILE, so the dev calls pass PLUGINS_COMPOSE_ARGS.
-    _plugins_prepare
+    _plugins_prepare || exit 1
     ensure_volume_ownership
     ensure_osv_db
     ensure_sca_intel
@@ -4210,7 +4250,7 @@ cmd_up_dev() {
         exit 1
     fi
     # shellcheck disable=SC2086
-    plugins_converge $DEV_COMPOSE $GPU_COMPOSE_ARGS $PLUGINS_COMPOSE_ARGS
+    plugins_converge $DEV_COMPOSE $GPU_COMPOSE_ARGS $PLUGINS_COMPOSE_ARGS || exit 1
 
     # Show "ready" banner before the KB prompt so the user knows the app
     # is already usable (they can Ctrl+C the KB question and start working).
@@ -4246,6 +4286,8 @@ cmd_up_dev() {
 }
 
 cmd_up() {
+    require_plugin_engine || exit 1
+    _warn_update_pending
     _migrate_reorg_layout
     _migrate_legacy_kbase_flag
     _kb_export_env
@@ -4293,9 +4335,8 @@ cmd_up() {
     ensure_tool_images
     ensure_auth_secrets
     mcp_server_preflight || exit 1
-    # Decide the plugin platform before the first `up`: it loads the overlay into
-    # COMPOSE_FILE, or turns the switch off for this run with the reason.
-    _plugins_prepare
+    # Before the first `up`: it loads the plugins overlay into COMPOSE_FILE.
+    _plugins_prepare || exit 1
     ensure_volume_ownership
     ensure_osv_db
     ensure_sca_intel
@@ -4319,7 +4360,7 @@ cmd_up() {
     if ! verify_core_running; then
         exit 1
     fi
-    plugins_converge
+    plugins_converge || exit 1
 
     # Show "ready" banner before the KB prompt so the user knows the app
     # is already usable (they can Ctrl+C the KB question and start working).

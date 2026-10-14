@@ -46,7 +46,6 @@ beforeEach(async () => {
     { id: 'user-a', email: 'a@example.com', role: 'standard' },
   ])
   w = await startLifecycleWorld(() => db)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGINS_EXTRA_TRUSTED_KEYS', JSON.stringify([{ keyId: dev.keyId, publicKey: dev.publicKeyRawB64 }]))
 })
 
@@ -192,10 +191,7 @@ describe('the body', () => {
 })
 
 describe('who', () => {
-  test('404 with the switch off; 403 for a standard user; 403 cross-origin', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    expect((await offlineInstall(await request(form(trio())))).status).toBe(404)
-    vi.stubEnv('PLUGINS_ENABLED', 'true')
+  test('403 for a standard user; 403 cross-origin', async () => {
     h.session = { userId: 'user-a', role: 'standard' }
     expect((await offlineInstall(await request(form(trio())))).status).toBe(403)
     h.session = { userId: ADMIN, role: 'admin' }

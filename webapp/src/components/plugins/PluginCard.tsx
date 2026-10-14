@@ -1,5 +1,8 @@
 'use client'
 
+import { useState } from 'react'
+import { Puzzle } from 'lucide-react'
+import { WikiInfoButton } from '@/components/ui'
 import type { CardState, PluginEntry } from '@/lib/plugins/pageModel'
 import { PERMISSION_TEXT, isPluginPermission } from '@/lib/plugins/permissions'
 import { PluginBadge } from './PluginBadge'
@@ -40,6 +43,19 @@ interface PluginCardProps {
   onAction: (action: CardAction, entry: PluginEntry) => void
 }
 
+/** The catalog's image for the plugin, or a placeholder when it names none or it cannot be served. */
+function PluginAvatar({ src, name }: { src?: string; name: string }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  if (!src || failedSrc === src) {
+    return (
+      <div className={`${styles.avatar} ${styles.avatarPlaceholder}`} data-testid="plugin-avatar-placeholder" aria-hidden>
+        <Puzzle size={40} />
+      </div>
+    )
+  }
+  return <img className={styles.avatar} src={src} alt={`${name} icon`} onError={() => setFailedSrc(src)} />
+}
+
 /** One plugin on the Plugins page; the actions an admin may take depend on its state. */
 export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCardProps) {
   const { state } = entry
@@ -65,7 +81,7 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
   }
 
   return (
-    <div className="card" data-testid={`plugin-card-${entry.id}`}>
+    <div className={`card ${styles.pluginCard}`} data-testid={`plugin-card-${entry.id}`}>
       <div className="cardHeader">
         <div className={styles.cardHead}>
           <div>
@@ -74,68 +90,76 @@ export function PluginCard({ entry, isAdmin, busy = false, onAction }: PluginCar
               <PluginBadge />
             </div>
           </div>
-          <span className={`chip ${chip}`} data-testid="plugin-state">
-            {TRANSIENT.includes(state) ? (
-              <span className={styles.busy} role="status">
-                <span className="spinner spinnerSmall" aria-hidden />
-                {label}
-              </span>
-            ) : (
-              label
+          <div className={styles.headEnd}>
+            <span className={`chip ${chip}`} data-testid="plugin-state">
+              {TRANSIENT.includes(state) ? (
+                <span className={styles.busy} role="status">
+                  <span className="spinner spinnerSmall" aria-hidden />
+                  {label}
+                </span>
+              ) : (
+                label
+              )}
+            </span>
+            {entry.docsUrl && (
+              <WikiInfoButton target={entry.docsUrl} title={`Open the ${entry.displayName} documentation`} size={15} />
             )}
-          </span>
+          </div>
         </div>
       </div>
-      <div className="cardBody">
-        {entry.description && <p className={styles.description}>{entry.description}</p>}
-        <div className={styles.meta}>
-          <span>
-            {entry.installed?.version ? `Installed ${entry.installed.version}` : 'Not installed'}
-            {entry.update ? ` · ${entry.update.version} available` : !entry.installed && entry.available ? ` · ${entry.available.version} available` : ''}
-            {entry.inCatalog === false && ' · no longer in the catalog'}
-            {entry.keptData && ' · data kept from an earlier install'}
-          </span>
-          {permissions.length > 0 && (
-            <span className={styles.permissions}>
-              {permissions.map((p) => (
-                <span key={p} className="chip chipSecondary">
-                  {isPluginPermission(p) ? PERMISSION_TEXT[p].title : p}
-                </span>
-              ))}
+      <div className={`cardBody ${styles.cardBody}`}>
+        <div className={styles.cardMain}>
+          {entry.description && <p className={styles.description}>{entry.description}</p>}
+          <div className={styles.meta}>
+            <span>
+              {entry.installed?.version ? `Installed ${entry.installed.version}` : 'Not installed'}
+              {entry.update ? ` · ${entry.update.version} available` : !entry.installed && entry.available ? ` · ${entry.available.version} available` : ''}
+              {entry.inCatalog === false && ' · no longer in the catalog'}
+              {entry.keptData && ' · data kept from an earlier install'}
             </span>
+            {permissions.length > 0 && (
+              <span className={styles.permissions}>
+                {permissions.map((p) => (
+                  <span key={p} className="chip chipSecondary">
+                    {isPluginPermission(p) ? PERMISSION_TEXT[p].title : p}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+          {state === 'revoked' && entry.installed?.revokedReason && (
+            <div className={styles.error}>Revoked by the catalog: {entry.installed.revokedReason}</div>
+          )}
+          {isAdmin && entry.installed?.lastError && <div className={styles.error}>{entry.installed.lastError}</div>}
+          {isAdmin && !entry.installed && entry.lastAttemptError && (
+            <div className={styles.error}>Last attempt: {entry.lastAttemptError}</div>
+          )}
+          {isAdmin && state === 'not_installed' && entry.installBlocked && <div className={styles.notice}>{entry.installBlocked}</div>}
+          {buttons.length > 0 && (
+            <div className={styles.actions}>
+              {buttons.map((b) => (
+                <button
+                  key={b.label}
+                  type="button"
+                  className={
+                    b.danger
+                      ? `secondaryButton ${styles.danger}`
+                      : b.action === 'install' || b.action === 'update'
+                        ? 'primaryButton'
+                        : b.action === 'details'
+                          ? 'textButton'
+                          : 'secondaryButton'
+                  }
+                  disabled={busy || b.disabled}
+                  onClick={act(b.action)}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
           )}
         </div>
-        {state === 'revoked' && entry.installed?.revokedReason && (
-          <div className={styles.error}>Revoked by the catalog: {entry.installed.revokedReason}</div>
-        )}
-        {isAdmin && entry.installed?.lastError && <div className={styles.error}>{entry.installed.lastError}</div>}
-        {isAdmin && !entry.installed && entry.lastAttemptError && (
-          <div className={styles.error}>Last attempt: {entry.lastAttemptError}</div>
-        )}
-        {isAdmin && state === 'not_installed' && entry.installBlocked && <div className={styles.notice}>{entry.installBlocked}</div>}
-        {buttons.length > 0 && (
-          <div className={styles.actions}>
-            {buttons.map((b) => (
-              <button
-                key={b.label}
-                type="button"
-                className={
-                  b.danger
-                    ? `secondaryButton ${styles.danger}`
-                    : b.action === 'install' || b.action === 'update'
-                      ? 'primaryButton'
-                      : b.action === 'details'
-                        ? 'textButton'
-                        : 'secondaryButton'
-                }
-                disabled={busy || b.disabled}
-                onClick={act(b.action)}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <PluginAvatar src={entry.icon} name={entry.displayName} />
       </div>
     </div>
   )

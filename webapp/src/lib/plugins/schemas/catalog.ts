@@ -30,11 +30,30 @@ const release = z.object({
   permissions: z.array(z.string().regex(/^[a-z][a-z0-9.:_-]{0,63}$/)).max(20),
 })
 
+export const ICON_MAX_BYTES = 262_144
+export const ICON_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+const httpsUrl = z.url({ protocol: /^https$/, error: 'must be an https URL' }).regex(/^https:\/\//, 'must be an https URL')
+
+/**
+ * The plugin's listing (the plugin repository's `listing.json`): presentation only, never part of
+ * the manifest, so a catalog carrying it still installs on a platform that predates it. The icon
+ * is fetched by the webapp and shown only when its bytes match `sha256`; the URL is a branch file
+ * that can change after signing.
+ */
+const icon = z.object({
+  url: httpsUrl,
+  sha256,
+  size: z.number().int().min(1).max(ICON_MAX_BYTES),
+  type: z.enum(ICON_TYPES),
+})
+
 const plugin = z
   .object({
     id: pluginId,
     displayName: z.string().min(1).max(60),
     description: z.string().min(1).max(500),
+    icon: icon.optional(),
+    docsUrl: httpsUrl.max(500).optional(),
     releases: z.array(release).min(1).max(200),
   })
   .refine((p) => new Set(p.releases.map((r) => r.version)).size === p.releases.length, {

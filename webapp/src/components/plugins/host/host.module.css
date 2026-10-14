@@ -32,6 +32,12 @@
   animation: spin 1s linear infinite;
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .error,
 .screenError {
   padding: var(--space-2) var(--space-3);

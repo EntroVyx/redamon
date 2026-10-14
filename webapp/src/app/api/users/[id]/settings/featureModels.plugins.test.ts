@@ -7,7 +7,7 @@
  *
  * @vitest-environment node
  */
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { NextRequest, NextResponse } from 'next/server'
 
 const m = vi.hoisted(() => ({
@@ -73,7 +73,6 @@ function applied() {
 }
 
 beforeEach(() => {
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   m.pluginRows = [plugin('skiller')]
   m.findUnique.mockReset().mockResolvedValue({ userId: USER, featureModels: {} })
   m.upsert.mockReset().mockResolvedValue({})
@@ -84,7 +83,6 @@ beforeEach(() => {
   m.getSession.mockReset().mockResolvedValue({ userId: USER, role: 'standard' })
   m.requireEff.mockReset().mockResolvedValue({ userId: USER })
 })
-afterEach(() => vi.unstubAllEnvs())
 
 describe('PUT featureModels with plugin keys', () => {
   test('a qualifying plugin: saved under plugin:<id> on the user', async () => {
@@ -119,12 +117,6 @@ describe('PUT featureModels with plugin keys', () => {
     const res = await put({ 'plugin:gone': '' })
     expect(res.status).toBe(200)
     expect(applied()).toEqual({ set: {}, removed: ['plugin:gone'] })
-  })
-
-  test('with the switch off no plugin qualifies, and clearing still works', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    expect((await put({ 'plugin:skiller': 'claude-haiku-4-5' })).status).toBe(400)
-    expect((await put({ 'plugin:skiller': '' })).status).toBe(200)
   })
 
   test.each([['plugin:'], ['plugin:Skiller'], ['plugin:x'], ['plugin:../a'], ['plugins:skiller']])(

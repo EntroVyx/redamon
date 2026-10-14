@@ -5,7 +5,6 @@ import { getSession } from '@/lib/session'
 import { LifecycleError } from './lifecycleCommon'
 import { PluginConflictError } from './registry'
 import { crossOriginResponse, sameOrigin } from './sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from './switch'
 
 /**
  * The guard of every plugin lifecycle route. These routes put code on the host, so the
@@ -37,13 +36,12 @@ export function lifecycleErrorResponse(e: unknown, what: string): NextResponse {
   return errorResponse(500, 'internal_error', 'The plugin operation failed; see the webapp log.')
 }
 
-/** A state-changing route: switch, admin, same origin, a JSON object body, then `run`. */
+/** A state-changing route: admin, same origin, a JSON object body, then `run`. */
 export async function lifecyclePost(
   request: NextRequest,
   what: string,
   run: (body: Record<string, unknown>, adminId: string) => Promise<unknown>,
 ): Promise<NextResponse> {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const admin = await requirePluginAdmin()
   if (admin instanceof NextResponse) return admin
   if (!sameOrigin(request)) return crossOriginResponse()
@@ -61,9 +59,8 @@ export async function lifecyclePost(
   }
 }
 
-/** A read-only admin route: switch, admin, then `run`. */
+/** A read-only admin route: admin, then `run`. */
 export async function lifecycleGet(what: string, run: (adminId: string) => Promise<NextResponse>): Promise<NextResponse> {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const admin = await requirePluginAdmin()
   if (admin instanceof NextResponse) return admin
   try {

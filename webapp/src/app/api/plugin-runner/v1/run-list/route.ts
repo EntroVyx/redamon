@@ -4,7 +4,6 @@ import { constantTimeEqual } from '@/lib/constantTimeEqual'
 import { PLUGIN_PLATFORM_VERSION } from '@/lib/plugins/platformVersion'
 import { showsContributions } from '@/lib/plugins/registry'
 import { RUNNER_KEY_HEADER } from '@/lib/plugins/runnerClient'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugin-runner/v1/run-list: the plugin versions the runner must run
@@ -27,7 +26,6 @@ function refuse(status: number, code: string, error: string) {
 }
 
 export async function GET(request: NextRequest) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const expected = (process.env.PLUGIN_RUNNER_KEY || '').trim()
   if (!expected || expected === 'changeme') {
     console.error('[plugins] run-list refused: PLUGIN_RUNNER_KEY is not configured')

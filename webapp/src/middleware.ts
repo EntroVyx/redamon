@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jwtVerify } from 'jose'
 import { constantTimeEqual } from './lib/constantTimeEqual'
-import { pluginsEnabled } from './lib/plugins/switch'
 
 const AUTH_COOKIE_NAME = 'redamon-auth'
 
@@ -231,12 +230,6 @@ export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-user-id', payload.sub)
   requestHeaders.set('x-user-role', payload.role)
-
-  // The page's own notFound() shows the 404 screen with status 200, because the root
-  // layout renders the page inside a Suspense boundary. Next's not-found route answers 404.
-  if ((pathname === '/plugins' || pathname.startsWith('/plugins/')) && !pluginsEnabled()) {
-    return NextResponse.rewrite(new URL('/_not-found', request.url))
-  }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } })
   if (isPluginPage(pathname)) response.headers.set('Content-Security-Policy', pluginPagesCsp())

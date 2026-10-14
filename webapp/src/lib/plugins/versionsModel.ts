@@ -5,7 +5,6 @@ import { skillDisplayName } from './overrideOps'
 import * as ov from './overrides'
 import { dormantReason, findInstall, type DormantReason } from './registry'
 import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill } from './skillPartsRegistry'
-import { pluginsEnabled } from './switch'
 
 /**
  * What the core versions modal shows for one built-in skill (design §6 SkillVersionsModal):
@@ -70,7 +69,7 @@ function toRow(set: ov.ChangeSet, displayName: string): VersionRow {
 async function scopeVersions(
   scope: ov.OverrideScope,
   group: string,
-  env: { switchOn: boolean; agentSupportsSeam: boolean },
+  env: { agentSupportsSeam: boolean },
   names: Map<string, Promise<string>>,
 ): Promise<ScopeVersions> {
   const [list, last] = await Promise.all([ov.listVersions(scope, POINT, group), ov.lastRevision(scope, POINT, group)])
@@ -123,7 +122,7 @@ export async function buildVersionsModel(effectiveUserId: string, group: string,
     else throw e
   }
 
-  const env = { switchOn: pluginsEnabled(), agentSupportsSeam: registryError !== 'agent_outdated' }
+  const env = { agentSupportsSeam: registryError !== 'agent_outdated' }
   const names = new Map<string, Promise<string>>()
   const scopes: ScopeVersions[] = [await scopeVersions({ type: 'user', id: effectiveUserId }, group, env, names)]
   if (projectId && (await ownsScope({ type: 'project', id: projectId }, effectiveUserId))) {

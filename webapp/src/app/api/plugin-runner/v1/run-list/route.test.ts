@@ -39,20 +39,12 @@ function req(headers: Record<string, string> = {}) {
 beforeEach(() => {
   fake = createFakePrisma()
   db.current = fake
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_RUNNER_KEY', KEY)
   vi.stubEnv('INTERNAL_API_KEY', 'i'.repeat(64))
 })
 afterEach(() => vi.unstubAllEnvs())
 
 describe('refusals', () => {
-  test('switch off: 404 plugins_disabled, whatever the key', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    const res = await GET(req({ 'x-plugin-runner-key': KEY }))
-    expect(res.status).toBe(404)
-    expect((await res.json()).code).toBe('plugins_disabled')
-  })
-
   test.each(['', 'changeme', '   '])('no runner key configured (%j): 503 runner_not_configured', async (configured) => {
     vi.stubEnv('PLUGIN_RUNNER_KEY', configured)
     for (const given of [configured, KEY, '']) {

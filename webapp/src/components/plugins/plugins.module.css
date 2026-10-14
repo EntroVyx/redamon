@@ -142,10 +142,56 @@
   margin-bottom: var(--space-4);
 }
 
-.fileRow {
+.headEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pluginCard {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: var(--space-3);
-  font-size: var(--text-sm);
+}
+
+.cardBody {
+  flex: 1;
+  display: flex;
+  gap: var(--space-4);
+}
+
+/* A column as tall as the avatar, so the actions sit level with the image's bottom edge. */
+.cardMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cardMain .actions {
+  margin-top: auto;
+  padding-top: var(--space-3);
+}
+
+.avatar {
+  flex: none;
+  align-self: flex-start;
+  width: 176px;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-default);
+  border: 1px solid var(--border-default);
+  background: var(--bg-tertiary);
+}
+
+.avatarPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 640px) {
+  .avatar {
+    width: 88px;
+  }
 }

@@ -1,7 +1,5 @@
-import { notFound } from 'next/navigation'
 import { ExternalLink } from 'lucide-react'
 import { safeExternalUrl } from '@/lib/plugins/externalLink'
-import { pluginsEnabled } from '@/lib/plugins/switch'
 import styles from './page.module.css'
 
 /**
@@ -14,7 +12,6 @@ export default async function ExternalLinkPage({
 }: {
   searchParams: Promise<{ url?: string | string[] }>
 }) {
-  if (!pluginsEnabled()) notFound()
   const { url: raw } = await searchParams
   const url = typeof raw === 'string' ? safeExternalUrl(raw) : null
 

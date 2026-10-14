@@ -1,7 +1,6 @@
 /**
  * GET /api/plugins/overrides/summary (design §6): per built-in skill, what governs this
- * project and whether it applies. Only the project's owner; another's project is a 404; 404
- * while the switch is off.
+ * project and whether it applies. Only the project's owner; another's project is a 404.
  *
  * @vitest-environment node
  */
@@ -36,12 +35,6 @@ beforeEach(() => {
   h.db = db as unknown as Record<string, unknown>
   seedWorld(db)
   h.effective = 'alice'
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
-})
-
-test('switch off: 404', async () => {
-  vi.stubEnv('PLUGINS_ENABLED', 'false')
-  expect((await get('p-alice')).status).toBe(404)
 })
 
 test('missing projectId: 400', async () => {

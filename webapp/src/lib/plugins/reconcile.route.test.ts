@@ -1,8 +1,8 @@
 /**
  * POST /api/internal/plugins/reconcile (TD-20): driven by the recon orchestrator's reaper
  * with the master internal key, the only credential it honours (re-checked in the route;
- * the middleware allowlist is not the control). 404 with the switch off, 202
- * `{skipped: 'busy'}` while another reconcile holds the lease, 200 with the report.
+ * the middleware allowlist is not the control). 202 `{skipped: 'busy'}` while another
+ * reconcile holds the lease, 200 with the report.
  *
  * @vitest-environment node
  */
@@ -30,7 +30,6 @@ const call = (key?: string) =>
 beforeEach(() => {
   h.calls = 0
   h.result = { recovered: [], healed: [] }
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('INTERNAL_API_KEY', KEY)
   vi.spyOn(console, 'log').mockImplementation(() => {})
 })
@@ -41,14 +40,6 @@ afterEach(() => {
 })
 
 describe('the reconcile route', () => {
-  test('404 with the switch off, before the key is looked at', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    const res = await call(KEY)
-    expect(res.status).toBe(404)
-    expect((await res.json()).code).toBe('plugins_disabled')
-    expect(h.calls).toBe(0)
-  })
-
   test.each([undefined, 'wrong', 'changeme'])('401 without the master key (%s)', async (key) => {
     expect((await call(key)).status).toBe(401)
     expect(h.calls).toBe(0)

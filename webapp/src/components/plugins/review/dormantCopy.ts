@@ -6,7 +6,6 @@ import type { DormantReason } from '@/lib/plugins/registry'
  * entry has copy here (a test pins that), so a new reason cannot ship without words.
  */
 export const DORMANT_COPY: Record<DormantReason, string> = {
-  switch_off: 'the plugin platform is switched off',
   uninstalled: 'the plugin is uninstalled',
   revoked: 'this version of the plugin was revoked',
   disabled: 'the plugin is disabled',

@@ -34,9 +34,25 @@ _docker_compose_v2_ok() {
   return 1
 }
 
+# The plugin networks use `gateway_mode_ipv4: isolated`, which Docker Engine accepts
+# from 28.0.0 on, and redamon.sh refuses to run below it. Unreadable counts as too old.
+# Through sudo: the deploy user joins the docker group only in the next step.
+_docker_engine_version() {
+  run_sudo docker version --format '{{.Server.Version}}' 2>/dev/null
+}
+
+_docker_engine_ok() {
+  have docker || return 1
+  local v major
+  v=$(_docker_engine_version) || return 1
+  [[ "$v" =~ ^[0-9]+\. ]] || return 1
+  major=${v%%.*}
+  [[ "$major" -ge 28 ]]
+}
+
 bootstrap_docker() {
   step "Host bootstrap: Docker Engine + Compose v2"
-  if _docker_compose_v2_ok; then
+  if _docker_compose_v2_ok && _docker_engine_ok; then
     success "Docker Engine + Compose v2 already present ($(docker compose version 2>/dev/null | head -1))"
   else
     info "Installing Docker Engine + Compose v2 from Docker's official apt repo"
@@ -65,6 +81,10 @@ bootstrap_docker() {
   # Hard-fail if compose is still not >= 2.24 (needed for the overlay's !override tag)
   if ! _docker_compose_v2_ok; then
     err "docker compose is still < 2.24 after install -- the prod overlay's !override tag needs >= 2.24"
+    exit 1
+  fi
+  if ! _docker_engine_ok; then
+    err "Docker Engine is still < 28.0.0 after install ($(_docker_engine_version || echo unreadable)) -- the plugin networks need >= 28.0.0"
     exit 1
   fi
   success "Docker Compose: $(docker compose version 2>/dev/null | head -1)"

@@ -74,6 +74,21 @@ describe('while it runs', () => {
     expect(screen.getByText('0:42')).toBeInTheDocument()
   })
 
+  test('shows the moving progress bar while running, gone once terminal', async () => {
+    stubJob([view({ status: 'running' }), view({ status: 'succeeded', result: { message: 'Done.' } })])
+    draw({ pollMs: 1 })
+    expect(await screen.findByRole('progressbar', { name: 'Working' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument())
+  })
+
+  test('a "N of M" Stage field renders that many step dots', async () => {
+    stubJob([view({ status: 'running', progress: { message: 'Writing the new version', fields: { Stage: '2 of 3' } } })])
+    draw()
+    await screen.findByText('Writing the new version')
+    expect(document.querySelectorAll('[class*="jobStep"]:not([class*="jobSteps"])')).toHaveLength(3)
+    expect(document.querySelectorAll('[class*="jobStepActive"]')).toHaveLength(1)
+  })
+
   test('Cancel stops the job and reports it cancelled', async () => {
     stubJob([view({ status: 'running' })])
     draw()

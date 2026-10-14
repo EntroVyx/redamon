@@ -296,37 +296,14 @@ describe('plugin token-auth prefixes (RV-33)', () => {
     })
 })
 
-describe('the /plugins page while the platform is off (TD-02)', () => {
-  // The page's own notFound() shows the 404 screen but answers 200: the middleware
-  // gives the status by rewriting to Next's not-found route.
-  const rewriteOf = (res: Response) => res.headers.get('x-middleware-rewrite')
-
-  test.each(['/plugins', '/plugins/echo'])('%s is the not-found route with the switch off', async (path) => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    const res = await middleware(makeRequest(path, { cookie: await createTestToken('user-1', 'admin') }))
-    expect(new URL(rewriteOf(res) ?? 'http://x/').pathname).toBe('/_not-found')
-    vi.stubEnv('PLUGINS_ENABLED', '')
-  })
-
-  test('the switch on: the page itself', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'true')
+describe('the /plugins page', () => {
+  test('signed in: the page itself', async () => {
     const res = await middleware(makeRequest('/plugins', { cookie: await createTestToken('user-1', 'admin') }))
-    expect(rewriteOf(res)).toBeNull()
-    vi.stubEnv('PLUGINS_ENABLED', '')
+    expect(res.headers.get('x-middleware-rewrite')).toBeNull()
   })
 
-  test.each(['/pluginsx', '/api/plugins', '/api/plugins/status', '/graph'])(
-    '%s is not rewritten (the API answers its own 404)', async (path) => {
-      vi.stubEnv('PLUGINS_ENABLED', 'false')
-      const res = await middleware(makeRequest(path, { cookie: await createTestToken('user-1', 'admin') }))
-      expect(rewriteOf(res)).toBeNull()
-      vi.stubEnv('PLUGINS_ENABLED', '')
-    })
-
-  test('signed out, the switch off: the login redirect as for any page', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
+  test('signed out: the login redirect as for any page', async () => {
     const res = await middleware(makeRequest('/plugins'))
     expect(res.headers.get('location')).toContain('/login')
-    vi.stubEnv('PLUGINS_ENABLED', '')
   })
 })

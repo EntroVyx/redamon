@@ -1,7 +1,7 @@
 /**
  * The Plugins page lists every enabled plugin's `nav` entry with an "Open" link to its page
  * (design §6: nav entries live there and at the top of the plugin's page, not in the global
- * header). Nothing is drawn when no plugin has one, or while the platform is off.
+ * header). Nothing is drawn when no plugin has one.
  */
 import { describe, test, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
@@ -59,8 +59,8 @@ describe('PluginNavLinks', () => {
     expect(container.textContent).toBe('')
   })
 
-  test('platform off (404): nothing', async () => {
-    const { container } = draw(404, { code: 'plugins_disabled' })
+  test('a failed request draws nothing and breaks nothing', async () => {
+    const { container } = draw(500, { error: 'boom' })
     await new Promise((r) => setTimeout(r, 0))
     expect(container.textContent).toBe('')
   })

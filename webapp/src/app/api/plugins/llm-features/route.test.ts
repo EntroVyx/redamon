@@ -1,12 +1,11 @@
 /**
  * GET /api/plugins/llm-features: the plugins a user can choose a model for in Models by
  * feature (TD-10, F-16): installed, enabled, holding `llm:invoke` granted and declared,
- * with an `llmFeature` description in the manifest. A 404 while the platform is off, so
- * the settings page shows no plugin tile at all.
+ * with an `llmFeature` description in the manifest.
  *
  * @vitest-environment node
  */
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 const h = vi.hoisted(() => ({ db: null as unknown as Record<string, unknown>, eff: null as unknown }))
@@ -40,15 +39,6 @@ beforeEach(() => {
   db = createFakePrisma()
   h.db = db as unknown as Record<string, unknown>
   h.eff = { userId: 'user-1' }
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
-})
-afterEach(() => vi.unstubAllEnvs())
-
-test('switch off: 404 plugins_disabled', async () => {
-  vi.stubEnv('PLUGINS_ENABLED', 'false')
-  const res = await GET()
-  expect(res.status).toBe(404)
-  expect((await res.json()).code).toBe('plugins_disabled')
 })
 
 test('no session: 401', async () => {

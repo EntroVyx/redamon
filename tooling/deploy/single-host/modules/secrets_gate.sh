@@ -16,6 +16,7 @@ secrets_gate() {
 
   local vars=(AUTH_SECRET INTERNAL_API_KEY SCANNER_API_KEY ORCHESTRATOR_API_KEY
               MCP_AUTH_TOKEN AGENT_WS_TICKET_SECRET TUNNEL_AUTH_TOKEN
+              PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET
               POSTGRES_PASSWORD NEO4J_PASSWORD)
   local v val fail=0
   for v in "${vars[@]}"; do

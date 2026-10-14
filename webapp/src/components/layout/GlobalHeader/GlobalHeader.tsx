@@ -14,12 +14,7 @@ import { useAuth } from '@/providers/AuthProvider'
 import { useProject } from '@/providers/ProjectProvider'
 import styles from './GlobalHeader.module.css'
 
-interface GlobalHeaderProps {
-  /** The plugin platform's switch, read by the root layout on the server (no request here). */
-  pluginsEnabled?: boolean
-}
-
-export function GlobalHeader({ pluginsEnabled = false }: GlobalHeaderProps) {
+export function GlobalHeader() {
   const pathname = usePathname()
   const { isAdmin } = useAuth()
   const { projectId } = useProject()
@@ -35,6 +30,7 @@ export function GlobalHeader({ pluginsEnabled = false }: GlobalHeaderProps) {
     // their project). Only the TrafficMind *settings* (egress guard, master
     // switch) are admin-only, gated in Global Settings.
     { label: 'TrafficMind', href: '/traffic', icon: <Network size={14} /> },
+    { label: 'Plugins', href: '/plugins', icon: <Puzzle size={14} />, isNew: true },
     { label: 'Reports', href: '/reports', icon: <FileText size={14} /> },
   ]
 
@@ -74,16 +70,6 @@ export function GlobalHeader({ pluginsEnabled = false }: GlobalHeaderProps) {
           <FolderOpen size={14} />
           <span>Projects</span>
         </Link>
-
-        {pluginsEnabled && (
-          <Link
-            href="/plugins"
-            className={`${styles.navItem} ${pathname === '/plugins' || pathname.startsWith('/plugins/') ? styles.navItemActive : ''}`}
-          >
-            <Puzzle size={14} />
-            <span>Plugins</span>
-          </Link>
-        )}
 
         {isAdmin && (
           <Link

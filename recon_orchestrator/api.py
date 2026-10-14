@@ -460,10 +460,6 @@ async def _maybe_prune_mcp_tokens() -> None:
     )
 
 
-def _plugins_enabled() -> bool:
-    return (os.environ.get("PLUGINS_ENABLED") or "").strip().lower() in ("true", "1")
-
-
 def _post_status(url: str, key: str, timeout: float) -> Optional[int]:
     """Blocking POST with the internal key; the HTTP status, or None when unreachable.
     request_json cannot tell a 404 from an outage, which the reconcile tick must."""
@@ -485,8 +481,8 @@ async def _post_plugin_reconcile(key: str) -> None:
     status = await asyncio.to_thread(_post_status, url, key, 60.0)
     if status == 404:
         if not _plugin_reconcile_gone:
-            logger.warning("[plugins] reconcile: the webapp has no reconcile route (an older image, or plugins "
-                           "off in the webapp); not asking again until the orchestrator restarts")
+            logger.warning("[plugins] reconcile: the webapp has no reconcile route (an older image); "
+                           "not asking again until the orchestrator restarts")
         _plugin_reconcile_gone = True
     elif status is None or status >= 300 and status != 202:
         logger.debug("[plugins] reconcile: the webapp answered %s; retried at the next interval", status)
@@ -497,7 +493,7 @@ async def _maybe_reconcile_plugins() -> None:
     task never awaited here: the reaper awaits each step, and the same loop releases governor
     reservations and dispatches scans (RV-16)."""
     global _last_plugin_reconcile, _plugin_reconcile_task
-    if not _plugins_enabled() or _plugin_reconcile_gone:
+    if _plugin_reconcile_gone:
         return
     if _plugin_reconcile_task is not None and not _plugin_reconcile_task.done():
         return

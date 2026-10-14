@@ -1,7 +1,5 @@
 .page {
   padding: var(--space-6);
-  max-width: 1400px;
-  margin: 0 auto;
 }
 
 .header {
@@ -10,6 +8,12 @@
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-4);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .title {
@@ -22,6 +26,18 @@
   color: var(--text-secondary);
   font-size: var(--text-sm);
   max-width: 760px;
+}
+
+.catalogLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.catalogLink:hover {
+  text-decoration: underline;
 }
 
 .platform {
@@ -37,8 +53,15 @@
   margin-bottom: var(--space-4);
 }
 
+/* Two cards a row: each card holds its text beside a square avatar, which needs the width. */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
+}
+
+@media (max-width: 1100px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

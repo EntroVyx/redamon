@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { requireEffectiveUser } from '@/lib/access'
 import { PLUGIN_PLATFORM_VERSION } from '@/lib/plugins/platformVersion'
 import { RunnerError, RunnerUnavailableError, runnerHealth } from '@/lib/plugins/runnerClient'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugins/status: this webapp's platform version and what the plugin runner
@@ -13,7 +12,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const user = await requireEffectiveUser()
   if (user instanceof NextResponse) return user
 

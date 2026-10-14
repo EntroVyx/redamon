@@ -17,9 +17,10 @@
 2. [Assets](#assets)
 3. [Architecture & Data Flow](#architecture--data-flow)
 4. [Inbound MCP: a third actor](#inbound-mcp-a-third-actor-and-a-credential-that-outlives-its-session)
-5. [Trust Boundaries](#trust-boundaries)
-6. [Entry Points](#entry-points)
-7. [Network Surface (Local vs Public-Internet)](#network-surface-local-vs-public-internet)
+5. [Plugins: third-party code inside the stack](#plugins-third-party-code-inside-the-stack)
+6. [Trust Boundaries](#trust-boundaries)
+7. [Entry Points](#entry-points)
+8. [Network Surface (Local vs Public-Internet)](#network-surface-local-vs-public-internet)
 
 ---
 
@@ -35,6 +36,7 @@
 - **Third-party credentials**: per-user LLM provider API keys and ~35 recon/OSINT service API keys.
 - **MCP personal access tokens** (`McpAccessToken`): sha256-hashed, per user, scope-limited, expiring. A bearer credential that travels in a header on every call and OUTLIVES the session that minted it, so unlike the JWT cookie a single capture is a lasting one.
 - **Agent execution state** (LangGraph checkpoints: prompts, tool outputs, exploitation artifacts).
+- **Plugin code and plugin data**: third-party plugin archives installed from a signed catalog, each plugin's own rows (`PluginData`), and skill-text overrides a plugin proposes (`PluginOverride`) that become part of the agent's instructions once a person approves them.
 
 ### Technology Stack
 
@@ -55,10 +57,11 @@
 | AI surface testing | Local **Ollama** judge/attacker (qwen2.5:7b default), garak/PyRIT/giskard/promptfoo (`scanners/ai_attack_surface_scan/`) |
 | Knowledge Base | Optional NVD / ExploitDB / Nuclei / GTFOBins / LOLBAS ingestion + embeddings (`services/knowledge_base/`) |
 | Code fixing (CodeFix) | LLM CodeFix/Triage agents cloning GitHub repos and opening PRs (`agentic/cypherfix_*`); **CodeFix build/test commands run in an ephemeral, secret-free, network-isolated sandbox container** (`scanners/codefix_sandbox/`, spawned per job) — not in the agent |
+| Plugin platform | **plugin-runner** (Python / FastAPI supervisor on `:7080`; one worker process per plugin version under its own UID, `python -I -S`) and the **plugin-gateway** proxy (same image, `:7071`/`:7072`), both in the `plugins` compose profile, which only `redamon.sh` starts; the webapp's Plugin Manager and Gateway routes; plugins installed from a signed catalog (`services/plugin_runner/`, `webapp/src/lib/plugins/`, `docker-compose.plugins.yml`, `docs/readmes/README.PLUGINS.md`). Always part of a running install; individual plugins are optional |
 
 ### Deployment Architecture
 
-All services run as containers on a single Docker host across **three bridge networks** (`redamon-network`, `redamon-orchestrator-net`, `pentest-net`) plus selected containers on the **host network**. The privileged orchestrator API is bound to **host loopback only** (`127.0.0.1:8010`).
+All services run as containers on a single Docker host across **three bridge networks** (`redamon-network`, `redamon-orchestrator-net`, `pentest-net`) plus selected containers on the **host network**. The privileged orchestrator API is bound to **host loopback only** (`127.0.0.1:8010`). Two more networks carry the plugin platform, both `internal` with no internet route: `redamon-plugins-net` (the plugin runner and the plugin-gateway proxy) and `redamon-plugins-edge` (the proxy and the webapp). They need Docker Engine 28.0.0 or newer (`gateway_mode_ipv4: isolated`), so `redamon.sh` refuses to install, update or start RedAmon on an older engine rather than run without them.
 
 **Public-internet topology (via `tooling/deploy/single-host/`).** When deployed publicly, an **nginx reverse proxy terminates TLS on `443`** and is the only listener reachable from the internet. It proxies `/` and `/api/*` to the loopback-bound webapp (`127.0.0.1:3000`) and the four agent WebSocket paths (`/ws/agent`, `/ws/kali-terminal`, `/ws/cypherfix-triage`, `/ws/cypherfix-codefix`) to the loopback-bound agent (`127.0.0.1:8090`); the agent's REST endpoints are never proxied. Port `80` serves only the ACME challenge and a redirect to `443`. `ufw` default-denies inbound except `443` (and `22`/`443` from the operator CIDR); the Docker loopback re-binds are the primary control for `3000`/`8090` (ufw is belt-and-braces, since Docker's own iptables chains can bypass it). The bridge networks and the orchestrator loopback bind are unchanged from the local posture. Because `NEXT_PUBLIC_AGENT_WS_URL` is baked at build time, the webapp is rebuilt with a same-origin `wss://<domain>/ws/…` so the browser never targets `:8090` directly.
 
@@ -88,6 +91,15 @@ graph TD
     end
 
     WEB -. multi-homed / X-Orchestrator-Key .-> ORCH
+
+    subgraph net_plugins [plugins-edge + plugins-net - internal, no internet]
+        PGW[plugin-gateway proxy :7071 / :7072]
+        PRUN[plugin-runner :7080 - one worker per plugin version]
+        PRUN -->|call token, :7071| PGW
+    end
+
+    PGW -->|/api/plugin-gateway/v1/*, /api/plugin-runner/v1/*| WEB
+    WEB -. PLUGIN_RUNNER_KEY via :7072 .-> PGW
 
     BROKER[docker-broker - filtered docker.sock] --> DSOCK[(/var/run/docker.sock)]
     ORCH --> DSOCK
@@ -127,6 +139,9 @@ graph TD
 | `INTERNAL_API_KEY` / `ORCHESTRATOR_API_KEY` | Service auth tokens | **CRITICAL** | Inter-service impersonation / scan orchestration |
 | GitHub access token (CodeFix agent, `cypherfix_codefix/tools/github_repo.py`) | Credential | **CRITICAL** | Push/PR to operator repos. Now supplied to git via `GIT_ASKPASS` (never embedded in the clone/push URL or `.git/config`) and **never injected into the build sandbox** |
 | Rules of Engagement & client PII (`Project.roeClientContactEmail/Phone`, scope, exclusions) | Engagement data | **HIGH** | Legal/scope breach; out-of-scope attacks |
+| `PLUGIN_CALL_TOKEN_SECRET` (signs plugin call tokens) | Cryptographic key | **CRITICAL** | Forge call tokens: act as any user, in any project and session, within any installed plugin's granted permissions (read their transcripts, propose overrides, spend their plugin LLM budget). Generated by `redamon.sh`; must differ from `AUTH_SECRET` and the agent's keys, so a call token can never pass as a login |
+| `PLUGIN_RUNNER_KEY` | Service auth token | **HIGH** | Drive the plugin runner (start and cancel actions) and read its run list. Held only by the webapp and the runner's supervisor, never by plugin workers; fails closed when unset |
+| Approved skill-text overrides (`PluginOverride`, status `active`) | Agent instructions | **HIGH** | Each one replaces a part of a built-in skill in the agent's instructions, in the same instruction stream as the scope rules. Tampering steers the agent; the hard guardrail is code and stays out of reach |
 
 ### 2. Important Assets
 
@@ -139,6 +154,8 @@ graph TD
 | Fireteam member state (`fireteam_members.resultBlob`, `errorMessage`) | Multi-agent state | MEDIUM | Exploitation results per member |
 | Agent / orchestrator logs (`agentic/logs`) | Logs | MEDIUM | May contain tokens/target detail |
 | API usage reports (`api_usage_reports`, one row per user) | Account metadata | MEDIUM | Plan names, usage numbers, last-4 key hints, token expiry dates; never a key, email or raw provider body |
+| Plugin data (`PluginData`) and pending proposals (`PluginOverride`, status `proposed`) | Plugin state | MEDIUM | Written only through the Gateway, inside the plugin's namespace and quotas; can hold text derived from session transcripts, which carry target data |
+| Plugin worker logs (`redamon-plugin-runner` container logs) | Logs | MEDIUM | May carry target text a plugin printed; rotated at 10 MB × 3 |
 
 ### 3. Infrastructure Assets
 
@@ -150,6 +167,9 @@ graph TD
 | GVM/OpenVAS stack | Vuln scanner | `ospd` runs `seccomp/apparmor=unconfined`, `NET_ADMIN`/`NET_RAW` |
 | On-demand Ollama LLM container | Local inference | Spawned per AI-surface scan; isolated net |
 | Bridge networks (`redamon`, `orchestrator-net`, `pentest-net`) | Network segmentation | Trust-zone separation |
+| Plugins volume (`plugins`) | Plugin code | Installed plugin versions. Read-write only for the webapp's Plugin Manager (`/data/plugins`), read-only for the runner, so a plugin cannot change its own code or another plugin's |
+| Plugin runner container | Third-party code runtime | `read_only`, `cap_drop: [ALL]` plus `SETUID`/`SETGID`/`KILL` only (to start workers under their own UIDs and stop them); memory, process and CPU limits per worker and for the container |
+| Plugin networks (`redamon-plugins-net`, `redamon-plugins-edge`) | Network segmentation | `internal`, `gateway_mode_ipv4: isolated`, fixed subnets `10.213.80.0/24` and `10.213.81.0/24`; created on every install, before any core service is (re)created |
 
 ### 4. Other Assets
 
@@ -161,6 +181,7 @@ graph TD
 | RoE documents (`Project.roeDocumentData` bytes; PDF/DOCX/TXT) | User input | Parsed via pdfjs/mammoth → LLM |
 | Agent/community Chat Skills & Attack Skills (`agentic/skills`, `community-skills`, DB) | Behavior definitions | Steer agent tradecraft |
 | Knowledge Base data (`services/knowledge_base/data`, `kb_data` volume) | Reference corpus | NVD/ExploitDB/Nuclei/GTFOBins embeddings |
+| Plugin archives and the plugin catalog | Third-party code | Downloaded over `https` from allowlisted GitHub hosts (≤20 MB); trusted only with a valid catalog signature (keyring in the base repo) and a matching SHA-256. An offline install (`/api/plugins/offline-install`) uploads the archive with a catalog and signature that cover it and goes through exactly the same checks |
 
 ---
 
@@ -247,6 +268,8 @@ graph LR
 - **Graph reads from the worker** are funneled through `agent /graph/exec`, which enforces read-only + tenant scoping; the worker holds no Neo4j credentials.
 - **Outbound to external LLM/OSINT providers** carries prompts, target context, and operator-supplied keys off-host.
 - **API usage check** (on demand, Settings > API Keys): the webapp itself reads the stored keys and calls each provider's account/usage endpoint, so keys also leave the host from the webapp container, not only from the agent and the scanners. The GitHub Enterprise probe only reaches the saved, validated GHE host; an OpenAI-compatible `baseUrl` is contacted only when it matches a public preset host. The report (`api_usage_reports`) keeps numbers and last-4 hints, never a key or a raw provider body.
+- **Plugin actions**: a user starts an action → the webapp mints a call token and asks the runner (through the proxy on `:7072`, `PLUGIN_RUNNER_KEY`) to run it → the plugin worker calls the webapp's Gateway routes through the proxy on `:7071` with that token only. The Gateway can return the session's transcript (masked, capped), the plugin's own `PluginData` rows, a model answer (forwarded to the agent's `POST /plugins/llm/invoke`, which uses the user's own provider key, so the key never leaves the agent), or store an override **proposal**. A proposal changes nothing until a person approves it in core UI; the agent then receives approved overrides as data through `fetch_agent_settings` (`SKILL_TEXT_OVERRIDES`).
+- **Plugin catalog and archives** leave GitHub for the webapp (`raw.githubusercontent.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`; `https` only, at most 5 redirects, each re-checked) and land on the plugins volume after the signature, SHA-256 and unpack checks.
 
 ---
 
@@ -351,6 +374,132 @@ CIDR list (`403`) must not be banned for a configuration problem.
 
 ---
 
+## Plugins: third-party code inside the stack
+
+The plugin platform (`docs/readmes/README.PLUGINS.md`) is part of every running
+install and is the first feature that runs code RedAmon did not write. An admin installs a
+plugin from a signed catalog (by default the official `redamon-plugins`
+repository); any signed-in user can then trigger its actions, and its code runs
+in the `plugin-runner` container on that user's behalf. Its output reaches the
+rest of the system only as data, through the Gateway.
+
+### What it changes about the threat model
+
+**A new actor: the plugin author, and whoever controls the catalog.** Until now
+every line of code in the stack shipped in RedAmon's own images. What stands
+between a compromised publisher and code on the host is the catalog signature
+(checked against the keyring in the base repository; another catalog needs the
+explicit `PLUGINS_EXTRA_TRUSTED_KEYS` opt-in), the archive's SHA-256, a catalog
+`serial` that may never go backwards, and an unpack that rejects absolute paths,
+`..`, links and oversize archives. Installing, updating, enabling, rolling back
+and uninstalling are instance-wide, admin-only actions, and the admin role is
+read from the database on every request rather than from the login token, which
+can outlive a demotion by up to seven days.
+
+**Plugin code is treated as hostile once it runs.** Containment does not depend
+on the plugin using the SDK:
+
+- each plugin version runs as its own worker process under its own UID, started
+  with `python -I -S` and a clean environment; workers hold no database
+  credentials, LLM keys or runner key, only a per-call token;
+- the runner shares `redamon-plugins-net` only with the `plugin-gateway` proxy.
+  The network is `internal` with `gateway_mode_ipv4: isolated`, so it has no
+  internet and no address on the host. The proxy passes only
+  `/api/plugin-gateway/v1/*` and `/api/plugin-runner/v1/*` to the webapp and
+  never joins `redamon-network`, where it would reach Postgres, Neo4j and the
+  agent's body-identity routes;
+- the plugins volume is read-only to the runner; only the webapp's Plugin Manager
+  writes it;
+- the container is `read_only` with `cap_drop: [ALL]` plus `SETUID`, `SETGID`
+  and `KILL`, and every worker has memory, process and time limits
+  (`PLUGIN_WORKER_MEM_MB`, `PLUGIN_WORKER_NPROC`, `PLUGIN_ACTION_MAX_TIMEOUT`)
+  under a per-plugin concurrency cap.
+
+**Every Gateway call is authorized again.** A call token is a JWT signed with
+`PLUGIN_CALL_TOKEN_SECRET`, bound to (plugin, acting user, project, session),
+valid no longer than its action or job and for at most
+`PLUGIN_GATEWAY_CALLS_PER_TOKEN` calls. On each call the Gateway re-checks the
+token, that the plugin is still enabled, ready, not revoked and at the token's
+version, that the permission is both granted and declared, and the tenancy of
+the project and session.
+
+**Target data reaches plugin code.** `sdk.session.read` returns the agent
+transcript of the token's session, which is tool output from live targets. The
+Gateway masks credential-shaped values (keys, tokens, cookies, private keys) but
+does not anonymise free text. Containing that data relies on the trusted catalog
+and on the plugins network having no way out, not on scrubbing. The same text is
+attacker-influenced, so prompt injection against a plugin's own model calls is
+assumed.
+
+**The most powerful output is text the agent will follow.**
+`sdk.override.propose` proposes new text for a part of a built-in skill. Once
+approved, it replaces that part of the agent's instructions, in the same
+instruction stream as the scope rules, so an override can contradict them. A
+proposal is therefore inert until a person approves it in core UI (a
+before/after comparison with risk flags and the plugin's badge, then a
+confirmation). It is validated on propose and again on read, its growth is
+capped (`PLUGIN_SKILL_TEXT_MAX_GROWTH`), it turns Stale when its factory text
+changes, and it can be reset at any time. The hard guardrail (`.gov/.mil/.edu/.int`
+and the intergovernmental list) is code, so no override reaches it.
+
+**LLM keys stay in the agent.** `sdk.llm.invoke` goes Gateway → agent
+`POST /plugins/llm/invoke` (master internal key only). The agent runs the model
+the user chose for that plugin with the user's own provider key, under a
+separate daily budget (`PLUGIN_LLM_DAILY_CALL_CAP`), so a plugin never holds a
+key and cannot exhaust the user's other LLM features.
+
+**Always present; refused, not degraded.** The platform cannot be switched off,
+so this surface (the Plugins page and routes, the Gateway, the runner, the two
+plugin networks) exists on every running install, with or without a plugin
+installed. Its containment rests on preconditions that `redamon.sh` checks
+before any core service is created or recreated: Docker Engine 28.0.0 or newer
+(the isolated gateway mode), `INTERNAL_API_KEY`, `PLUGIN_RUNNER_KEY` and
+`PLUGIN_CALL_TOKEN_SECRET` set and not `changeme`, a call-token secret of at
+least 32 characters that equals no other secret, a runner image that builds,
+and Docker accepting the plugin networks, volume and containers. A host that
+fails any of them is refused (`install`, `update` and `up` stop and name the
+reason) rather than started with weaker isolation, and the memory gate always
+budgets the runner. A plain `docker compose up -d` loads no overlay
+(`docker-compose.plugins.yml`) and starts neither plugin service, so the webapp
+has no path to the runner and every plugin action fails closed until
+`./redamon.sh up`. With the runner down, actions answer `503 runner_unavailable`
+and approved overrides keep applying, because they are data in Postgres. The
+off-ramps are per plugin: disabling or uninstalling one stops its overrides from
+the agent's next turn, and a skill can be reset to its factory text whatever
+state the plugin is in.
+
+### Public-internet posture
+
+nginx answers `404` for `/api/plugin-gateway/`, `/api/plugin-runner/` and
+`/api/internal/plugins/`, in both the `https` and the `http-*` templates. These
+routes serve only the internal proxy and the orchestrator, and the session
+middleware exempts the first two from the cookie check because they
+authenticate with a call token or the runner key. The user-facing
+`/api/plugins/*` routes stay behind the operator gate like the rest of `/api/`
+and accept only same-origin JSON, checked against `PLUGINS_ALLOWED_ORIGIN`,
+which `deploy.sh` seeds from the public origin because nginx drops the port from
+`Host`. Neither plugin service publishes a host port in either posture. The
+single-host deploy's host bootstrap brings Docker up to Engine 28.0.0 in `init`,
+`harden` and `update`, and its secrets gate refuses a weak `PLUGIN_RUNNER_KEY`
+or `PLUGIN_CALL_TOKEN_SECRET` like the other secrets.
+
+### Residual risks
+
+- **One container for every plugin.** Plugins are separated by process and UID,
+  not by container.
+- **Masking is not anonymisation.** A plugin with `session:read` sees the target
+  data in the transcripts it may read.
+- **No per-process CPU-rate limit** for an unprivileged worker: workers run at
+  `nice 10`, and the container's `cpus:` (`PLUGIN_RUNNER_CPUS`) is the hard bound.
+- **A catalog freeze is not detected.** A rollback to an older catalog is
+  refused, but an old, validly signed catalog served on by whoever controls the
+  connection is not, because catalogs do not expire.
+- **The reviewer is the control on overrides.** A person who approves without
+  reading lets a plugin rewrite the agent's instructions, the scope text
+  included.
+
+---
+
 ## Trust Boundaries
 
 RedAmon implements explicit, code-level privilege separation. The design intent (documented inline in `docker-compose.yml` and `recon_orchestrator/auth.py`) is that the **target-facing worker is the least trusted** component and holds **no secrets**.
@@ -379,8 +528,15 @@ graph TB
     subgraph TB5 [External / untrusted]
         TGT[Targets + OSINT + LLM APIs]
     end
+    subgraph TB6 [Untrusted third-party code - plugins-net, no internet]
+        PW[plugin workers - own UID, call token only]
+    end
+    PGW[plugin-gateway proxy - two route prefixes]
 
     BROWSER -->|JWT cookie| WEB
+    PW -->|call token| PGW
+    PGW -->|/api/plugin-gateway/v1/*| WEB
+    WEB -->|PLUGIN_RUNNER_KEY| PGW
     WEB -->|X-Orchestrator-Key| ORCH
     WEB -->|X-Internal-Key| AGENT
     AGENT -->|MCP SSE| KALI
@@ -405,6 +561,12 @@ graph TB
 | spawned scanner → host | Host network + `NET_RAW`; mounts the **broker** socket, not raw socket; capability-restricted | Scanners do hold `INTERNAL_API_KEY` |
 | platform → targets/LLMs | Hard guardrail (`.gov/.mil/.edu/.int` + ~310 intergovernmental domains, non-disableable) + LLM soft guardrail + RoE time-window pre-flight | Soft guardrail is LLM-based ("be lenient"); fails open |
 | DBs | PostgreSQL/Neo4j on bridge net with credentials | Secrets stored plaintext at rest in `user_settings`/`user_llm_providers` |
+| plugin worker → webapp Gateway | Only through the `plugin-gateway` proxy, which passes `/api/plugin-gateway/v1/*` and `/api/plugin-runner/v1/*` and nothing else; a call token bound to (plugin, user, project, session), limited to its action or job and to `PLUGIN_GATEWAY_CALLS_PER_TOKEN` calls; every call re-checks the plugin's state, the permission (granted and declared) and the tenancy; transcripts masked and capped | A plugin with `session:read` sees target data; masking is not anonymisation |
+| webapp → plugin runner | `PLUGIN_RUNNER_KEY` through the proxy on `:7072`; auth-only and fail-closed (no key, no request accepted); deliberately not the agent's fail-open `require_internal_auth` | Single shared static key |
+| plugin → agent behaviour | Override proposals are inert until a person approves them in core UI; validated on propose and on read; growth capped; Stale when the factory part changes; resettable; not delivered once its plugin is disabled or uninstalled | An approved override can rewrite the agent's instructions, scope text included; the reviewer is the control |
+| plugin → agent LLM | Gateway → agent `POST /plugins/llm/invoke` under `require_master_internal_auth`; the agent uses the user's chosen model and key; separate per-plugin budget | A valid token can still spend the user's plugin LLM budget |
+| webapp → plugin catalog / archives | `https` on allowlisted GitHub hosts, redirects re-checked; catalog signature against the keyring in the base repo; SHA-256 per archive; `serial` never lower; unpack rejects absolute paths, `..`, links and oversize archives; admin-only | A frozen (old but validly signed) catalog is not detected |
+| plugin worker ↔ plugin worker | Separate process and UID; volume read-only to all workers | One shared container, not one per plugin |
 
 **Public-internet posture adds a boundary in front of the browser→webapp crossing:** nginx on `443` becomes the outermost trust boundary. It supplies the login rate-limit the app lacks (`limit_req` on `/api/auth/login`, the only brake since there is no account lockout), an operator-IP allowlist (`allow`/`deny`) or basic-auth gate, TLS + HSTS, and slowloris/DoS timeouts; a deploy-time secrets-strength gate refuses to boot with `changeme`/unset/short secrets, closing the "keys default to `changeme`" residual for that posture. The agent's REST endpoints stay behind the boundary because nginx proxies only the four `/ws/*` paths; as of wave 2 `/graph/exec` and `/emergency-stop-all` also require `require_internal_auth` (the `/workspace/*` routes remain body-identity, still loopback/bridge-only). All four `/ws/*` paths now **fail closed** when `AGENT_WS_TICKET_SECRET` is unset (no more ticket fail-open), so the former WS-ticket residual is closed at the app layer and the secrets gate is defense-in-depth rather than the sole control.
 
@@ -435,6 +597,8 @@ Host-published listeners (from `docker-compose.yml`), shown for the **local** po
 | Reverse-shell / ngrok | kali-sandbox | TCP/HTTP | `4444` / `127.0.0.1:4040` | None | 4444 LAN (direct reverse shells) local; **public: `127.0.0.1`, `ufw`-opened to target CIDRs per engagement**; 4040 loopback |
 | Ollama judge (on-demand) | local-llm | HTTP | `11434` | None | Spawned per scan |
 | GVM (gvmd/ospd) | GVM stack | Unix socket | n/a | Socket + GVM `admin/admin` | Internal only (no host port) |
+| Plugin runner supervisor | plugin-runner | HTTP | n/a (`:7080`) | `PLUGIN_RUNNER_KEY`, fail-closed | Internal only (no host port), on `redamon-plugins-net` |
+| Plugin gateway proxy | plugin-gateway | HTTP | n/a (`:7071` workers → webapp, `:7072` webapp → runner) | `:7071` forwards only two route prefixes, the webapp then checks the call token or runner key; `:7072` forwards only `/runner/v1/*` | Internal only (no host port), on `redamon-plugins-net` + `redamon-plugins-edge` |
 
 ### 2. Application Entry Points
 
@@ -456,6 +620,10 @@ Webapp server-side routes under `webapp/src/app/api/` (all behind `middleware.ts
 | Triage and Mute Rules | `/api/triage/{findings,verdict,mute,unmute,muted,preflight}`, `/api/projects/[id]/node-filters/{,preview,apply,disarm,exemptions,status,runs/[runId]}` | JWT; strict owner check (`requireProjectOwner`: 404, not relaxed by `ACCESS_ENFORCE=0`), because these decide what the operator and the agent can see; every mutation with a body is JSON-only (415); Mute Rules changes and unmutes are audited with the real actor (a person's mute and a UI verdict are not) |
 | User presets | `/api/presets/*` (recon), `/api/mute-rule-presets/*` (Mute Rules) | JWT; scoped to the effective user; another user's preset answers 404 |
 | Internal check-ins | `/api/internal/triage-runs/*`, `/api/internal/node-filter-runs/[runId]{,/heartbeat,/finish}` | `X-Internal-Key` + route allowlist; each route re-checks `isInternalRequest`, and the run id, never the body, decides the project |
+| Plugins | Lifecycle: `/api/plugins`, `/api/plugins/[pluginId]/{install,update,enable,disable,rollback,uninstall,logs,export}`, `/api/plugins/offline-install`. Use: `/api/plugins/{status,contributions,llm-features}`, `/api/plugins/[pluginId]/actions/[actionId]`, `/api/plugins/jobs/[jobId]{,/cancel}`, `/api/plugins/overrides/{versions,summary,reset}`, `/api/plugins/overrides/change-sets/[id]{,/approve,/reject}` | JWT; same-origin JSON only (`PLUGINS_ALLOWED_ORIGIN` behind a reverse proxy). Lifecycle routes are instance-wide and admin-only, with the role read from the database on every request; actions, jobs and override decisions are scoped to the acting user. Lifecycle operations and override decisions are audited |
+| Plugin Gateway (plugin code) | `/api/plugin-gateway/v1/{session/read,data/{get,put,query,count,delete},llm/invoke,override/{get,propose,withdraw},jobs/{progress,complete}}` | **No session cookie** (middleware token-auth prefix): a call token only, re-authorized on every call; JSON only; body sizes bounded. Reached by plugin workers through the proxy; **nginx answers `404` in the public posture** |
+| Plugin runner callback | `/api/plugin-runner/v1/run-list` | **No session cookie**: `PLUGIN_RUNNER_KEY`, fail-closed; **nginx `404` in the public posture** |
+| Plugin reconcile | `POST /api/internal/plugins/reconcile` | `X-Internal-Key` + route allowlist, re-checked with `isInternalRequest`; called by the recon orchestrator every `PLUGIN_RECONCILE_INTERVAL` (300 s); **nginx `404` in the public posture** |
 
 **Agent service (`agentic/api.py`) endpoints**, reachable on `:8090`. As of wave 2 all four `/ws/*` paths require a signed ws-ticket + a server-side same-origin check (fail-closed when `AGENT_WS_TICKET_SECRET` is unset), and `/graph/exec` + `/emergency-stop-all` require `require_internal_auth`; the remaining REST helpers still derive user/project identity from the request body. In the local posture the whole surface is LAN-reachable. In the public posture nginx exposes **only** the four `/ws/*` paths (all ticket + origin gated); every REST route below is never proxied and stays loopback-only:
 - `WS /ws/agent` (session init), `WS /ws/kali-terminal` (PTY proxy)
@@ -465,6 +633,7 @@ Webapp server-side routes under `webapp/src/app/api/` (all behind `middleware.ts
 - `POST /llm/{ffuf-extensions,nuclei-tags,waf-classify,nuclei-fp-filter,takeover-classify}`
 - `GET /health`, `GET /defaults`, `POST /models`, `/workspace/*`, `/sessions/*`
 - `POST /graph/node-filters/preview`, `POST /graph/node-filters/apply` (Mute Rules): `require_master_internal_auth`, the master key only, never `SCANNER_API_KEY`, because apply MUTES findings. Apply takes only a run id and fetches the rules snapshotted into that run from the webapp, never from the request; preview writes nothing.
+- `GET /plugins/skill-parts`, `POST /plugins/skill-parts/validate`, `POST /plugins/llm/invoke` (plugin platform, `agentic/plugin_api.py`): `require_master_internal_auth` on the whole router. Called only by the webapp's Gateway, never by plugin code, which cannot reach the agent's network. `llm/invoke` runs the model the user chose for the plugin with that user's key.
 
 **Orchestrator service (`recon_orchestrator/api.py`)** — loopback `:8010`, every route except `/health` requires `X-Orchestrator-Key`:
 - `POST /recon/{project_id}/{start,stop,pause,resume}`, `GET .../status,logs`, `/recon/{project_id}/partial`
@@ -482,6 +651,8 @@ Webapp server-side routes under `webapp/src/app/api/` (all behind `middleware.ts
 | Tunnel-config sync | Worker boot → webapp push to `:8015` | Worker calls unauthenticated `/api/global/tunnel-config/sync`; webapp pushes config |
 | CodeFix / Triage agents | Operator-initiated code fix | Clone GitHub repo (token via `GIT_ASKPASS`); **build/test (`github_bash`) runs in an isolated per-job sandbox** via `docker exec` (agent → webapp → orchestrator), not in the agent; commit stages **only approved files** (no `git add -A`); push refused to default/`main`/`master` (`cypherfix_codefix/`, `scanners/codefix_sandbox/`) |
 | LangGraph checkpointer | Every agent/fireteam step | Persists agent state to PostgreSQL (`PERSISTENT_CHECKPOINTER=true`) |
+| Plugin workers | A user's plugin action | Started by the runner's supervisor, one process per plugin version under its own UID; killed on timeout or limit; reach the stack only through the proxy |
+| Plugin reconcile | Recon orchestrator, every `PLUGIN_RECONCILE_INTERVAL` (300 s) | `POST /api/internal/plugins/reconcile` (`X-Internal-Key`): one run at a time under a platform-wide lease, bounded work (one heal download, a 20 s budget); recovers operations a crash interrupted, deletes orphaned version and staging folders, and restores a lost plugins volume from the catalog, whose checksum pins the exact archive |
 
 ---
 
@@ -493,6 +664,7 @@ Consolidated view of the full network surface and how traffic is mediated in eac
 
 - **Local (default `redamon.sh` / `docker compose`).** No nginx, no TLS, no gate. The host publishes `webapp:3000`, `agent:8090`, and `kali:4444` on `0.0.0.0` (LAN-reachable); every other listener binds `127.0.0.1` (loopback). The browser talks to the webapp on `:3000` and opens agent WebSockets directly on `:8090`.
 - **Public-internet (`tooling/deploy/single-host/`).** nginx on the host terminates TLS on `443` and is the single public origin. The prod overlay re-binds `webapp:3000` and `agent:8090` to `127.0.0.1`; the browser reaches everything through `443`. `NEXT_PUBLIC_AGENT_WS_URL` is baked at build time to `wss://<domain>/ws/agent`, so the browser never targets `:8090` directly.
+- **Plugin platform, either posture.** The plugin runner and the plugin-gateway proxy publish **no host port**: they listen only on the internal plugin networks, and the webapp reaches them over `redamon-plugins-edge`.
 
 > **nginx is a host service, not a container.** It runs on the host (installed by `deploy.sh` via apt), sits **only at the edge** (80/443), and reverse-proxies to two loopback backends — the webapp (`127.0.0.1:3000`) and the agent (`127.0.0.1:8090`). It is **not** a middlebox between containers: all internal service-to-service traffic (webapp ↔ agent ↔ orchestrator ↔ DBs ↔ Kali) flows directly over the Docker bridge networks and never passes through nginx.
 
@@ -509,6 +681,7 @@ Rendered from `tooling/deploy/single-host/nginx/redamon.conf.tmpl`. These are th
 | `:443` | `/api/` | webapp `127.0.0.1:3000` | `limit_req` 30/s (burst 60) |
 | `:443` | `/ws/(agent\|kali-terminal\|cypherfix-triage\|cypherfix-codefix)` | agent `127.0.0.1:8090` | `auth_request` session gate (when `WS_REQUIRE_SESSION=true`) + `limit_conn` |
 | `:443` | `= /_redamon_session` (internal) | webapp `127.0.0.1:3000/api/auth/me` | internal validator for `auth_request`; not directly reachable |
+| `:443` | `^~ /api/plugin-gateway/`, `^~ /api/plugin-runner/`, `^~ /api/internal/plugins/` | — | `return 404`: plugin-internal routes (call token, runner key, internal key) never served at the edge; also in the `http-*` template |
 
 **The agent's REST surface is never proxied.** Only the four `/ws/*` paths reach `:8090`; `/graph/exec`, `/emergency-stop-all`, `/mcp/*`, `/llm/*`, `/workspace/*`, `/sessions/*`, etc. have no nginx route and stay loopback/bridge-only. The whole `:443` server sits behind the **operator gate** (`GATE_MODE`): `ip_allowlist` (nginx `allow`/`deny` from `OPERATOR_ALLOW_CIDRS`), `basic_auth` (htpasswd popup), or `none`.
 
@@ -550,6 +723,8 @@ Per-listener reachability in each posture (host publish → who can connect):
 | `8015` | tunnel manager | `127.0.0.1` | `127.0.0.1` |
 | `8016` | terminal PTY | `127.0.0.1` | `127.0.0.1` |
 | `4040` | ngrok API | `127.0.0.1` | `127.0.0.1` |
+| `7071` / `7072` | plugin-gateway proxy | not published (internal plugin networks) | not published |
+| `7080` | plugin runner supervisor | not published (`redamon-plugins-net`) | not published |
 | `80` / `443` | nginx | — (no nginx) | `0.0.0.0` — the public origin |
 
 ### 6.6 Cloud firewall / Security Group (public-internet posture)
@@ -577,9 +752,11 @@ The webapp middleware (`webapp/src/middleware.ts`) enforces the JWT cookie on ev
 
 Every other `/api/*` route requires a valid `redamon-auth` JWT cookie. The `X-Internal-Key` / `X-Scanner-Key` service headers (cleared by nginx at the edge) are accepted only from internal callers on the Docker network.
 
+Two more prefixes skip the cookie check but are **not** open: `/api/plugin-gateway/v1/` (a plugin call token) and `/api/plugin-runner/v1/` (`PLUGIN_RUNNER_KEY`, fail-closed). Each prefix ends in `/`, so a look-alike path such as `/api/plugin-gatewayx` stays behind the cookie. In the public posture nginx answers `404` for both before the webapp is consulted.
+
 ### 6.8 Internal segmentation (east-west)
 
-Container-to-container traffic runs over three Docker bridge networks plus the host network; none of it passes through nginx.
+Container-to-container traffic runs over three Docker bridge networks, the two internal plugin networks and the host network; none of it passes through nginx.
 
 | Network | Members | Purpose |
 |---------|---------|---------|
@@ -587,12 +764,18 @@ Container-to-container traffic runs over three Docker bridge networks plus the h
 | `redamon-orchestrator-net` | recon-orchestrator, webapp (multi-homed), on-demand Ollama | Isolated privileged orchestration |
 | `pentest-net` | kali-sandbox, spawned scanners | Target-facing offensive plane |
 | host network | spawned recon/gvm/secret scanners, reverse-shell catcher | Raw-socket scanning + direct reverse shells |
+| `redamon-plugins-net` (`10.213.80.0/24`, `internal`, isolated gateway) | plugin-runner, plugin-gateway | Third-party plugin code; no internet, no host address |
+| `redamon-plugins-edge` (`10.213.81.0/24`, `internal`, isolated gateway) | plugin-gateway, webapp | The one path between plugin code and the stack |
+
+The plugin networks have fixed subnets outside Docker's default pools, so they can never take a range the core networks are pinned to. The proxy is the only container on both, and it never joins `redamon-network`.
 
 Notable internal reachability: the webapp is the only container multi-homed onto `redamon-orchestrator-net` (it holds `X-Orchestrator-Key`); the recon-orchestrator holds the Docker socket (via docker-broker for scanner spawns, and the real socket for GVM / CodeFix sandbox); the agent reaches the Kali MCP servers over `redamon-network`; spawned scanners write to Neo4j over the host network.
 
 ### 6.9 Egress (outbound)
 
 Outbound connections leave the host to: external **LLM providers** (agent, per-user keys), **TypeSafe AI** (`api.typesafe.ai`; agent only, per-user token, and only for a project whose AI hook engine is set to Jev or that turns on a Jev-only hook: it carries the target's response headers, body sample and tech fingerprint, and for the Jev-only hooks crawled directory names, probed pages, hostnames and redacted tool error output, all wrapped as untrusted data, so enabling it makes TypeSafe a third party that receives target data), ~35 **OSINT/recon APIs** (scanners; and the webapp, which calls provider account/usage endpoints on demand for the API usage report, off with `API_USAGE_CHECK_ENABLED=false`), **scan targets** (Kali tools and recon probes, on the host network / `pentest-net`), **upstream feeds** (KB ingestion, MSF/Nuclei/image updates), and **tunnel edges** (ngrok cloud / chisel server) when `TUNNELS_ENABLED` and a tunnel is configured. The reverse-shell catcher (`4444`) accepts inbound from engagement targets only when opened per-engagement (`./deploy.sh revshell-open`).
+
+The **webapp** also fetches the plugin catalog and plugin archives from GitHub (`raw.githubusercontent.com`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`; `https` only, the host re-checked on every redirect). **Plugin workers have no egress at all**: a plugin's model calls leave from the agent, to the provider of the model the user chose for that plugin.
 
 ---
 

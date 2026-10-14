@@ -183,51 +183,50 @@ describe('GlobalHeader – structure', () => {
 /* ------------------------------------------------------------------ */
 
 describe('GlobalHeader – Plugins button', () => {
-  const pluginsLink = () => screen.queryByRole('link', { name: /^plugins$/i })
+  // The accessible name includes the "New!" badge text, so match the prefix.
+  const pluginsLink = () => screen.queryByRole('link', { name: /^plugins/i })
 
-  test('absent while the plugin platform is off (the default)', () => {
+  test('"Plugins" with the Puzzle icon, linking to /plugins', () => {
     render(<GlobalHeader />)
-    expect(pluginsLink()).toBeNull()
-    cleanup()
-    render(<GlobalHeader pluginsEnabled={false} />)
-    expect(pluginsLink()).toBeNull()
-  })
-
-  test('with the platform on: "Plugins" with the Puzzle icon, linking to /plugins', () => {
-    render(<GlobalHeader pluginsEnabled />)
     const link = pluginsLink()!
     expect(link.getAttribute('href')).toBe('/plugins')
     expect(link.querySelector('svg.lucide-puzzle')).not.toBeNull()
-    expect(link.className).toContain('navItem')
+    expect(link.className).toContain('coreNavItem')
   })
 
-  test('on the right, directly after Projects', () => {
-    render(<GlobalHeader pluginsEnabled />)
-    const projects = screen.getByRole('link', { name: /^projects$/i })
-    expect(projects.nextElementSibling).toBe(pluginsLink())
-    expect(projects.closest('div')).toBe(pluginsLink()!.closest('div'))
+  test('carries the green "New!" badge', () => {
+    render(<GlobalHeader />)
+    const badge = pluginsLink()!.querySelector('span[class*="newBadge"]')
+    expect(badge?.textContent).toBe('New!')
+  })
+
+  test('in the core nav group, directly before Reports', () => {
+    render(<GlobalHeader />)
+    const reports = screen.getByRole('link', { name: /^reports$/i })
+    expect(pluginsLink()!.nextElementSibling).toBe(reports)
+    expect(pluginsLink()!.closest('nav')).toBe(reports.closest('nav'))
   })
 
   test('shown to every signed-in user, not only admins', () => {
     mockIsAdmin = false
-    render(<GlobalHeader pluginsEnabled />)
+    render(<GlobalHeader />)
     expect(pluginsLink()).not.toBeNull()
     expect(screen.queryByRole('link', { name: /^users$/i })).toBeNull()
   })
 
   test.each(['/plugins', '/plugins/echo'])('active on %s', (route) => {
     mockPathname = route
-    render(<GlobalHeader pluginsEnabled />)
-    expect(pluginsLink()!.className).toContain('navItemActive')
+    render(<GlobalHeader />)
+    expect(pluginsLink()!.className).toContain('coreNavItemActive')
   })
 
   test('not active elsewhere, and Projects is not active on /plugins', () => {
     mockPathname = '/projects'
-    render(<GlobalHeader pluginsEnabled />)
-    expect(pluginsLink()!.className).not.toContain('navItemActive')
+    render(<GlobalHeader />)
+    expect(pluginsLink()!.className).not.toContain('coreNavItemActive')
     cleanup()
     mockPathname = '/plugins'
-    render(<GlobalHeader pluginsEnabled />)
+    render(<GlobalHeader />)
     expect(screen.getByRole('link', { name: /^projects$/i }).className).not.toContain('navItemActive')
   })
 })

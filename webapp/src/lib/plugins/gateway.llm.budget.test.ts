@@ -71,7 +71,6 @@ beforeEach(() => {
   h.usage = []
   h.cap = 3
   h.agent = async () => Response.json({ content: 'ok', model_used: MODEL, usage: { input_tokens: 10, output_tokens: 4, estimated: false } })
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   vi.spyOn(console, 'log').mockImplementation(() => {})

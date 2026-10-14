@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { requireEffectiveUser } from '@/lib/access'
 import { findUserJob, jobView, refreshJob } from '@/lib/plugins/jobs'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugins/jobs/[jobId]: an async plugin action as the UI polls it (TD-22). Only
@@ -12,7 +11,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const eff = await requireEffectiveUser()
   if (eff instanceof NextResponse) return eff
   const { jobId } = await params

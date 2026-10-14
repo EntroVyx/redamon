@@ -1,6 +1,5 @@
 /**
  * The lifecycle routes put code on the host, so (README.PLUGINS.md §7.1, RV-11):
- * - 404 with the switch off, before anything else;
  * - admin only, with the role READ FROM THE DATABASE on every request: the role inside
  *   the 7-day JWT stays "admin" for a week after a demotion;
  * - an admin acting as a standard user keeps admin rights here (the login session is the
@@ -74,7 +73,6 @@ beforeEach(() => {
   db.seed('pluginInstall', [{ pluginId: 'echo', status: 'ready', enabled: true, activeVersion: '1.0.0' }])
   h.session = { userId: 'user-admin', role: 'admin' }
   h.eff = { userId: 'user-admin' }
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   for (const m of ['warn', 'error', 'log'] as const) vi.spyOn(console, m).mockImplementation(() => {})
 })
 
@@ -105,14 +103,6 @@ const POSTS: Array<[string, Post, unknown]> = [
 
 describe.each(POSTS)('POST /api/plugins/[pluginId]/%s', (name, route, body) => {
   const call = (opts?: Parameters<typeof post>[2], pluginId = 'echo') => route(post(`/api/plugins/${pluginId}/${name}`, body, opts), ctx(pluginId))
-
-  test('404 plugins_disabled when the switch is off, before any check', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    h.session = null
-    const res = await call()
-    expect(res.status).toBe(404)
-    expect((await res.json()).code).toBe('plugins_disabled')
-  })
 
   test('401 without a session', async () => {
     h.session = null
@@ -198,11 +188,8 @@ describe('GET export and logs', () => {
   test.each([
     ['export', exportRoute],
     ['logs', logsRoute],
-  ])('%s: 404 when off, 401, 403 for a standard or demoted user', async (name, route) => {
+  ])('%s: 401, 403 for a standard or demoted user', async (name, route) => {
     const call = () => (route as (r: NextRequest, c: unknown) => Promise<Response>)(get(`/api/plugins/echo/${name}`), ctx('echo'))
-    vi.stubEnv('PLUGINS_ENABLED', '')
-    expect((await call()).status).toBe(404)
-    vi.stubEnv('PLUGINS_ENABLED', 'true')
     h.session = null
     expect((await call()).status).toBe(401)
     h.session = { userId: 'user-alice', role: 'standard' }

@@ -44,7 +44,6 @@ beforeEach(async () => {
   t = Date.parse('2026-10-09T10:00:00.000Z')
   setNowForTests(() => new Date(t))
   clearRunnerBootIdCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -141,13 +140,10 @@ describe('reading a job', () => {
     expect((await read('../x')).status).toBe(404)
   })
 
-  test('no session: 401; switch off: 404', async () => {
+  test('no session: 401', async () => {
     const { body } = await start()
     h.eff = null
     expect((await read(body.jobId as string)).status).toBe(401)
-    h.eff = { userId: ALICE }
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    expect((await read(body.jobId as string)).status).toBe(404)
   })
 })
 

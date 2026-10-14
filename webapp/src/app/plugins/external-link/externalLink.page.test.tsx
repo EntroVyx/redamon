@@ -3,25 +3,16 @@
  * address and opens it only on a click, in a new tab without an opener; only http(s) URLs
  * without credentials are offered (design §6; R-05).
  */
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, test, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-
-vi.mock('next/navigation', () => ({
-  notFound: () => {
-    throw new Error('NEXT_NOT_FOUND')
-  },
-}))
-
 import ExternalLinkPage from './page'
 import { externalLinkHref, safeExternalUrl } from '@/lib/plugins/externalLink'
 
 const open = async (url?: string | string[]) =>
   render(await ExternalLinkPage({ searchParams: Promise.resolve(url === undefined ? {} : { url }) }))
 
-beforeEach(() => vi.stubEnv('PLUGINS_ENABLED', 'true'))
 afterEach(() => {
   cleanup()
-  vi.unstubAllEnvs()
 })
 
 describe('safeExternalUrl / externalLinkHref', () => {
@@ -78,10 +69,5 @@ describe('the page', () => {
     cleanup()
     await open(['https://example.com', 'https://example.org'])
     expect(screen.queryAllByRole('link', { name: /open/i })).toHaveLength(0)
-  })
-
-  test('switch off: not found', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    await expect(open('https://example.com')).rejects.toThrow('NEXT_NOT_FOUND')
   })
 })

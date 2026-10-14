@@ -17,6 +17,7 @@ Before anything else, read the [DISCLAIMER.md](DISCLAIMER.md). This is a securit
 - [Contribution Tracks](#contribution-tracks)
 - [Contributor Ranks](#contributor-ranks)
 - [Rewards Breakdown](#rewards-breakdown)
+- [Contributing a Plugin](#contributing-a-plugin)
 - [Architecture & Development Workflow](#architecture--development-workflow)
 - [Reporting Issues](#reporting-issues)
 - [Security Vulnerabilities](#security-vulnerabilities)
@@ -162,6 +163,8 @@ Pick items from the [Roadmap Project Board](https://github.com/users/samugit83/p
 
 > **Note:** If you need to add a new Python import to `recon_orchestrator` or `agent`, check the Dockerfile first — the container must have the package or it will crash-loop.
 
+> **Building a plugin instead?** A plugin is written in the separate, public **[redamon-plugins](https://github.com/samugit83/redamon-plugins)** repository against the **[Plugin SDK](docs/readmes/README.PLUGIN_SDK.md)**, never in this one: this repository holds the platform that hosts plugins and no plugin logic. If a plugin needs something the platform cannot do yet, the change here is a generic platform capability that any plugin could use (see [README.PLUGINS.md](docs/readmes/README.PLUGINS.md) §11.4), not code for that plugin.
+
 > **Integrating a new tool?** We provide battle-tested AI prompts that guide you through every file and dependency layer — plus an iterative review workflow for zero-bug PRs. See **[AI-Assisted Development](https://github.com/samugit83/redamon/wiki/AI-Assisted-Development)** on the wiki.
 
 ### Docs & Wiki
@@ -266,6 +269,45 @@ Every rank unlocks real rewards. No empty promises.
 
 ---
 
+## Contributing a Plugin
+
+Plugins are optional features an admin installs into RedAmon from a signed catalog (see the
+[Plugins wiki page](https://github.com/samugit83/redamon/wiki/Plugins)). Their code never lives
+in this repository: every plugin is a folder in the separate, public
+**[redamon-plugins](https://github.com/samugit83/redamon-plugins)** repository, and anyone can
+propose one there **without write access**, through a pull request from a fork.
+
+**The path, for an outside contributor:**
+
+1. **Propose it (recommended).** For anything bigger than a fix, open an issue in
+   [redamon-plugins](https://github.com/samugit83/redamon-plugins/issues) describing what the
+   plugin does, which permissions it needs and where it appears.
+2. **Fork and build.** Fork `samugit83/redamon-plugins` and create your plugin's folder against
+   the [Plugin SDK](docs/readmes/README.PLUGIN_SDK.md): a manifest, Python actions, tests, a
+   README and a changelog. [`skiller/`](https://github.com/samugit83/redamon-plugins/tree/master/skiller)
+   is a complete example.
+3. **Check it.** `tools/run.sh validate <id>` and `tools/run_tests.sh <id>` run everything in
+   Docker, exactly as CI does. Optionally install it on your own RedAmon with a development key.
+4. **Open a pull request** against `master` of `redamon-plugins` and fill in its checklist.
+5. **Wait for an administrator.** A maintainer of `redamon-plugins` reviews the code and the
+   permissions, may ask for changes, and is the only one who can merge it.
+6. **The release is the administrator's.** After the merge, an administrator tags the release
+   and approves the signed catalog; within minutes the plugin appears on the Plugins page of
+   every RedAmon, where each instance's admin decides whether to install it.
+
+The full procedure, with every command and what the review checks, is
+**[CONTRIBUTING.md in redamon-plugins](https://github.com/samugit83/redamon-plugins/blob/master/CONTRIBUTING.md)**;
+the user-facing guide is the wiki page
+**[Building a Plugin](https://github.com/samugit83/redamon/wiki/Building-a-Plugin)**.
+Administrators with write access follow a different procedure, described with this one in
+[README.PLUGINS.md §6.6](docs/readmes/README.PLUGINS.md#66-adding-a-plugin-administrators-and-outside-contributors).
+
+If your plugin needs something the platform cannot do yet (a new extension point, SDK call or
+screen primitive), that part is a pull request to **this** repository, as a generic platform
+capability any plugin could use, never code for one plugin. Open an issue here first.
+
+---
+
 ## Architecture & Development Workflow
 
 > For a comprehensive deep dive into the codebase — architecture, project layout, subsystem internals, and development checklists — see the **[Developer Guide](docs/readmes/README.DEV.md)**.
@@ -283,6 +325,7 @@ RedAmon runs as a Docker Compose stack. Here's what each service does and how ch
 | postgres | PostgreSQL | `services/postgres_db/` | Project config, user settings |
 | neo4j | Neo4j | `graph_db/` | Knowledge graph for all findings |
 | gvm-* | OpenVAS / GVM | `scanners/gvm_scan/` | Vulnerability scanner (optional profile) |
+| plugin-runner, plugin-gateway | Python | `services/plugin_runner/` | Run installed third-party plugins, one isolated worker per plugin version; the gateway proxy is their only way to the webapp |
 
 **Hot-reload rules:**
 

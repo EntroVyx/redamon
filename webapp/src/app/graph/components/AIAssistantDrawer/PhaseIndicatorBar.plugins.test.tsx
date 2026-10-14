@@ -79,6 +79,16 @@ describe('the plugin group', () => {
     expect(screen.getByRole('button', { name: /skill versions/i })).toBeInTheDocument()
   })
 
+  test('each plugin item is a flex row so its icon sits beside the label, not above it', () => {
+    h.contributions = [skiller]
+    draw()
+    for (const name of [/improve skill from this session/i, /skill versions/i]) {
+      const item = screen.getByRole('button', { name })
+      expect(item.className).toContain('pluginItem')
+      expect(item.querySelector('svg')).not.toBeNull()
+    }
+  })
+
   test('items are disabled with "Send a message first" until there is a conversation', () => {
     h.contributions = [skiller]
     const p = draw({ conversationId: null })

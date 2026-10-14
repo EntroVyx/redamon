@@ -2,7 +2,7 @@
 # =============================================================================
 # LIVE isolation probe of the plugin runner and the plugin-gateway proxy
 # (master plan step 3.8, TD-05, experiments E1/E2). Not part of the gate: it needs
-# the platform running (PLUGINS_ENABLED=true and ./redamon.sh up).
+# the platform running (./redamon.sh up).
 # Run:  bash tests/plugins_isolation_live.sh
 #
 # Starts nothing. Runs services/plugin_runner/tests_live/probe.py inside the
@@ -21,7 +21,7 @@ PROBE_UID=29999
 
 running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
 if ! command -v docker >/dev/null 2>&1 || ! running redamon-plugin-runner || ! running redamon-plugin-gateway; then
-    echo "  SKIP  the plugin runner and proxy are not running (PLUGINS_ENABLED=true, ./redamon.sh up)"
+    echo "  SKIP  the plugin runner and proxy are not running (./redamon.sh up)"
     exit 0
 fi
 

@@ -1,10 +1,10 @@
 ---
 name: plugin-platform
 description: >
-  The optional plugin platform: third-party plugin code runs isolated in the plugin
+  The plugin platform, always on: third-party plugin code runs isolated in the plugin
   runner, reaches RedAmon only through the Gateway, and changes agent behaviour only
   through text a person approved in core UI. The base repository holds no plugin
-  logic, and with PLUGINS_ENABLED off nothing plugin-related may run or change.
+  logic, and a host that cannot run the platform is refused, never half-started.
   Trigger: editing webapp/src/lib/plugins/, webapp/src/app/api/plugins/,
   webapp/src/app/api/plugin-gateway/, webapp/src/app/api/plugin-runner/,
   webapp/src/app/api/internal/plugins/, webapp/src/components/plugins/,
@@ -38,16 +38,22 @@ for an LLM call path, `llm-provider-integration`; for tests, `redamon-testing`.
   in `webapp/src`, `agentic` or `services`; a plugin's name may appear only in tests, fixtures
   and docs. Check: `grep -rn -i "skiller" --include=*.ts --include=*.tsx --include=*.py webapp/src agentic services`
   finds only test files. The platform is generic; a plugin lives in `redamon-plugins`.
+- **NEVER add an off switch or a degrade-to-off path.** The platform always runs (owner decision
+  2026-10-12). A host that cannot run it is refused by install, update and up with the cause
+  named, before any core service is recreated (`require_plugin_engine`, `plugins_preflight`,
+  `_plugins_prepare` in [redamon.sh](../../redamon.sh)); a runner that is down at runtime is a
+  state the UI shows (the runner banner, 503 `runner_unavailable`), never a 404.
 - **NEVER name a plugin service in a plain `up`.** `docker compose up -d --no-deps <profile service>`
   starts a profile service even without `--profile` (measured, experiment E8), so a plugin service
-  in `rebuild_core`, `restart_only` or any ad-hoc `up` starts it with plugins off. Only
-  `plugins_converge` in [redamon.sh](../../redamon.sh) starts or removes `plugin-runner` and
-  `plugin-gateway`.
+  in `rebuild_core`, `restart_only` or any ad-hoc `up` starts it without the recreate a runner
+  rebuild needs and without the failure that stops the command. Only `plugins_converge` starts
+  `plugin-runner` and `plugin-gateway`.
 - **NEVER wire the webapp to the plugins in `docker-compose.yml`.** Its `plugins-edge` network
   and `plugins` volume live in [docker-compose.plugins.yml](../../docker-compose.plugins.yml),
-  which `redamon.sh` loads only while the switch is effectively on, so a user who never enables
-  plugins gets no new network (and no Docker Engine 28 requirement). A new webapp plugin variable
-  still goes in the webapp's `environment:` list: the webapp has no `env_file`.
+  which `redamon.sh` loads only after the plugin preflight created the plugin networks, so a
+  Docker that refuses them stops the command with that cause instead of failing halfway through
+  the core `up`. A new webapp plugin variable still goes in the webapp's `environment:` list:
+  the webapp has no `env_file`.
 - **NEVER put the runner or the proxy on `redamon`, and never widen the proxy's prefixes.**
   Postgres, Neo4j, kali-sandbox and agent routes there trust the network. The proxy passes only
   `/api/plugin-gateway/v1/*`, `/api/plugin-runner/v1/*` and `/runner/v1/*`
@@ -90,8 +96,8 @@ cd webapp && npx vitest run --no-file-parallelism src/lib/plugins src/components
 cd webapp && npm run plugins:schemas          # regenerate schemas/json after a schema change
 docker compose --profile plugins build plugin-runner   # before the plugin_runner test section
 ./redamon.sh test unit                        # includes plugin_runner, shell and vitest
-bash tests/redamon_plugins_lifecycle_test.sh  # install/update/up, both switch states, stubbed docker
-bash tests/plugins_isolation_live.sh          # live: needs PLUGINS_ENABLED=true and ./redamon.sh up
+bash tests/redamon_plugins_lifecycle_test.sh  # install/update/up and every refusal, stubbed docker
+bash tests/plugins_isolation_live.sh          # live: needs ./redamon.sh up
 ```
 
 ---

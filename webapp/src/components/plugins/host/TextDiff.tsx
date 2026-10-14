@@ -37,10 +37,21 @@ export function TextDiff({ before, after, beforeLabel = 'Before', afterLabel = '
   const [unified, setUnified] = useState(false)
   const [current, setCurrent] = useState(-1)
   const rowRefs = useRef<(HTMLDivElement | null)[]>([])
+  const lineRefs = useRef<(HTMLDivElement | null)[]>([])
 
   const diff = useMemo(() => diffLines(before, after), [before, after])
   const rows = useMemo(() => (diff.ok ? toSplitRows(diff.ops) : []), [diff])
-  const starts = useMemo(() => rows.flatMap((r, i) => (r.changeStart ? [i] : [])), [rows])
+  const rowStarts = useMemo(() => rows.flatMap((r, i) => (r.changeStart ? [i] : [])), [rows])
+  // The unified view lists diff.ops, not rows. Both views have one start per run of changes,
+  // so `current` names the same change in either and survives the toggle.
+  const lineStarts = useMemo(
+    () =>
+      diff.ok
+        ? diff.ops.flatMap((op, i) => (op.type !== 'equal' && (i === 0 || diff.ops[i - 1].type === 'equal') ? [i] : []))
+        : [],
+    [diff],
+  )
+  const starts = unified ? lineStarts : rowStarts
 
   const legend = showPlaceholderLegend && (
     <p className={styles.legend}>Text in braces is filled from project settings when the agent runs (for example {'{target}'}).</p>
@@ -78,7 +89,8 @@ export function TextDiff({ before, after, beforeLabel = 'Before', afterLabel = '
     if (starts.length === 0) return
     const next = (current + 1) % starts.length
     setCurrent(next)
-    rowRefs.current[starts[next]]?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    const refs = unified ? lineRefs : rowRefs
+    refs.current[starts[next]]?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
   }
 
   return (
@@ -106,9 +118,13 @@ export function TextDiff({ before, after, beforeLabel = 'Before', afterLabel = '
           {diff.ops.map((op, i) => (
             <div
               key={i}
+              ref={(el) => {
+                lineRefs.current[i] = el
+              }}
               className={`${styles.cell} ${styles[op.type]}`}
               data-testid="textdiff-unified-line"
               data-type={op.type}
+              data-current={current >= 0 && starts[current] === i ? 'true' : undefined}
             >
               <span className={styles.lineNo}>{op.beforeLine ?? ''}</span>
               <span className={styles.lineNo}>{op.afterLine ?? ''}</span>

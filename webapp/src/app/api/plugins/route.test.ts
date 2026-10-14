@@ -71,7 +71,6 @@ beforeEach(() => {
   h.catalog = catalog([echo()])
   h.catalogError = null
   setNowForTests(() => NOW)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   db.seed('user', [
     { id: 'user-admin', email: 'admin@example.com', role: 'admin' },
     { id: 'user-alice', email: 'alice@example.com', role: 'standard' },
@@ -81,7 +80,6 @@ beforeEach(() => {
 
 afterEach(() => {
   setNowForTests(null)
-  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
@@ -101,10 +99,7 @@ const install = (over: Record<string, unknown> = {}) =>
   }])
 
 describe('GET /api/plugins', () => {
-  test('404 with the switch off; 401 without a session', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', '')
-    expect((await list()).status).toBe(404)
-    vi.stubEnv('PLUGINS_ENABLED', 'true')
+  test('401 without a session', async () => {
     h.session = null
     expect((await list()).status).toBe(401)
   })
@@ -112,7 +107,7 @@ describe('GET /api/plugins', () => {
   test('a plugin not installed: the newest release this platform can run, with consent text', async () => {
     const { status, body } = await list()
     expect(status).toBe(200)
-    expect(body).toMatchObject({ enabled: true, platformVersion: '1.0.0', isAdmin: false, catalog: { state: 'ok', official: true } })
+    expect(body).toMatchObject({ platformVersion: '1.0.0', isAdmin: false, catalog: { state: 'ok', official: true } })
     expect(body.plugins).toHaveLength(1)
     const e = body.plugins[0]
     expect(e).toMatchObject({ id: 'echo', displayName: 'Echo', inCatalog: true, state: 'not_installed', installed: null, installBlocked: null })

@@ -2,7 +2,6 @@ import { BUILTIN_SKILLS } from './builtinSkills'
 import { ownsScope } from './changeSetAccess'
 import * as ov from './overrides'
 import { dormantReason, findInstall, type DormantReason } from './registry'
-import { pluginsEnabled } from './switch'
 
 /**
  * The per-skill plugin summary for a project's Agent Skills settings (design §6, GET
@@ -40,7 +39,7 @@ export interface SummaryModel {
 /** The summary for one project, or null when the caller does not own it. */
 export async function buildSummaryModel(effectiveUserId: string, projectId: string): Promise<SummaryModel | null> {
   if (!(await ownsScope({ type: 'project', id: projectId }, effectiveUserId))) return null
-  const env = { switchOn: pluginsEnabled(), agentSupportsSeam: true }
+  const env = { agentSupportsSeam: true }
   const names = new Map<string, Promise<string>>()
   const nameOf = (pluginId: string) => {
     if (!names.has(pluginId)) {

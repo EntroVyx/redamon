@@ -263,8 +263,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       const eff = await requireEffectiveUser()
       if (eff instanceof NextResponse) return eff
       if (eff.userId !== id) return refused
-      // Plugin keys qualify only for the plugins installed, enabled and holding llm:invoke
-      // (none while the platform is off, without a database read).
+      // Plugin keys qualify only for the plugins installed, enabled and holding llm:invoke.
       const pluginFeatureIds = new Set((await listPluginLlmFeatures()).map((f) => f.featureId))
       const parsed = parseFeatureModelsPatch(body.featureModels, { pluginFeatureIds })
       if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })

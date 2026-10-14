@@ -2,10 +2,9 @@
  * GET /api/projects/[id] delivers approved skill-text overrides to the agent (TD-16).
  *
  * Only the agent's own settings fetch gets them: the master key AND the separate
- * includeSkillOverrides flag AND the plugin platform switched on. The scanner key, a
- * browser session, and master-key callers that ask only for includeSkillContent (the
- * text-to-cypher path) get the response they got before, and a failure to compute the
- * overrides never changes the rest of the payload.
+ * includeSkillOverrides flag. The scanner key, a browser session, and master-key callers
+ * that ask only for includeSkillContent (the text-to-cypher path) get the response they
+ * got before, and a failure to compute the overrides never changes the rest of the payload.
  *
  * @vitest-environment node
  */
@@ -76,7 +75,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('INTERNAL_API_KEY', MASTER)
   vi.stubEnv('SCANNER_API_KEY', SCANNER)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   // Enforcement on (its default); unstubAllEnvs puts the caller's value back.
   vi.stubEnv('ACCESS_ENFORCE', undefined)
   wireProject()
@@ -89,7 +87,7 @@ afterEach(() => {
 })
 
 describe('GET /api/projects/[id] skillTextOverrides', () => {
-  test('master key, both flags, switch on, an active override: delivered', async () => {
+  test('master key, both flags, an active override: delivered', async () => {
     const json = await body(BOTH, MASTER)
     expect(json.skillTextOverrides).toEqual(OVERRIDES)
     expect(json.userAttackSkills).toHaveLength(1)
@@ -120,13 +118,6 @@ describe('GET /api/projects/[id] skillTextOverrides', () => {
     expect(mockGetEffectiveUser).toHaveBeenCalled()
   })
 
-  test.each(['', 'false', '0', 'yes'])('switch %j: absent, nothing computed', async (value) => {
-    vi.stubEnv('PLUGINS_ENABLED', value)
-    const json = await body(BOTH, MASTER)
-    expect(json).not.toHaveProperty('skillTextOverrides')
-    expect(mockResolveForProject).not.toHaveBeenCalled()
-  })
-
   test('no override applies: the field is left out', async () => {
     mockResolveForProject.mockResolvedValue({})
     const json = await body(BOTH, MASTER)
@@ -138,7 +129,7 @@ describe('GET /api/projects/[id] skillTextOverrides', () => {
     try {
       mockResolveForProject.mockRejectedValue(new Error('db down'))
       const failed = await body(BOTH, MASTER)
-      vi.stubEnv('PLUGINS_ENABLED', 'false')
+      mockResolveForProject.mockResolvedValue({})
       const without = await body(BOTH, MASTER)
       expect(failed).toEqual(without)
       expect(failed).not.toHaveProperty('skillTextOverrides')
@@ -156,13 +147,7 @@ describe('GET /api/projects/[id] skillTextOverrides', () => {
 })
 
 describe('computeSkillTextOverrides', () => {
-  test('switch off: undefined without touching the store', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    await expect(computeSkillTextOverrides('proj-1')).resolves.toBeUndefined()
-    expect(mockResolveForProject).not.toHaveBeenCalled()
-  })
-
-  test('switch on: what the store resolves for the project', async () => {
+  test('what the store resolves for the project', async () => {
     await expect(computeSkillTextOverrides('proj-1')).resolves.toEqual(OVERRIDES)
     expect(mockResolveForProject).toHaveBeenCalledWith('proj-1')
   })

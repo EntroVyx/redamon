@@ -146,7 +146,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     if (request.nextUrl.searchParams.get('includeSkillOverrides') === 'true' && isInternalRequest(request)) {
       try {
         const overrides = await computeSkillTextOverrides(id)
-        if (overrides && Object.keys(overrides).length) skillOverridesField = { skillTextOverrides: overrides }
+        if (Object.keys(overrides).length) skillOverridesField = { skillTextOverrides: overrides }
       } catch (err) {
         console.warn('[plugins] skill overrides omitted:', err)
       }

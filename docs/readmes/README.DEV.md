@@ -171,8 +171,8 @@ Browser ──→ Webapp (Next.js :3000) ──WebSocket──→ Agent (FastAPI
             remediations, reports
 ```
 
-With the plugin platform on (off by default, see [README.PLUGINS.md](README.PLUGINS.md)), two
-more services run, and they reach the rest of the stack only through each other:
+The plugin platform ([README.PLUGINS.md](README.PLUGINS.md)) adds two more services, which reach
+the rest of the stack only through each other:
 
 ```
 Webapp ──runner key──→ plugin-gateway :7072 ──→ plugin-runner :7080 ──spawns──→ plugin workers
@@ -209,7 +209,8 @@ settings fetch.
 > supervisor's `/runner/v1/*` towards the runner, so a worker reaches neither Postgres, Neo4j,
 > the agent nor the internet. Both plugin networks set `gateway_mode_ipv4: isolated`, which
 > needs Docker Engine 28.0.0 or newer and stops a worker reaching the host through the bridge
-> address. Compose creates neither network, and no plugin volume, while plugins are off.
+> address. `redamon.sh` creates both networks and the plugins volume; a plain
+> `docker compose up -d` creates neither.
 
 ### Docker Compose Services
 
@@ -224,7 +225,7 @@ settings fetch.
 | `gvmd` | redamon-gvm-gvmd | internal | GVM daemon (vulnerability scanner) |
 | `gvm-ospd` | redamon-gvm-ospd | internal | OpenVAS scanner engine |
 | `recon` | (profile: tools) | — | Recon pipeline image (spawned dynamically, not always running) |
-| `plugin-runner` | redamon-plugin-runner | internal (7080) | Runs plugin code, one worker process per plugin version (profile: plugins; started only by `redamon.sh` while plugins are on) |
+| `plugin-runner` | redamon-plugin-runner | internal (7080) | Runs plugin code, one worker process per plugin version (profile: plugins; started only by `redamon.sh`) |
 | `plugin-gateway` | redamon-plugin-gateway | internal (7071, 7072) | The only door between `plugins-net` and the webapp (same image as `plugin-runner`, profile: plugins) |
 
 > For full Mermaid diagrams, container architecture, and data flow pipelines, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -427,7 +428,7 @@ redamon/
 ├── docs/readmes/                        # All documentation (you are here)
 ├── .github/                        # GitHub Actions CI/CD workflows
 ├── docker-compose.yml              # Full stack orchestration — all containers, networks, volumes
-├── docker-compose.plugins.yml      # Plugin overlay (webapp on plugins-edge + plugins volume); redamon.sh loads it only while plugins are on
+├── docker-compose.plugins.yml      # Plugin overlay (webapp on plugins-edge + plugins volume); loaded only by redamon.sh
 ├── redamon-plugins/                # NOT part of this repository: optional local clone of the plugin repository, ignored by .gitignore
 ├── CONTRIBUTING.md                 # Contribution guidelines and contributor ranks
 ├── CHANGELOG.md                    # Release history
@@ -590,7 +591,7 @@ All REST endpoints live in `webapp/src/app/api/`. The main route groups:
 | `roe/` | Rules of Engagement management |
 | `ws/` | WebSocket proxy to agent container |
 | `health/` | Health check |
-| `plugins/` | Plugin platform: the Plugins page model, admin lifecycle (install, update, rollback, enable, disable, uninstall, export, logs), actions and jobs, skill-version review. 404 while the platform is off |
+| `plugins/` | Plugin platform: the Plugins page model, admin lifecycle (install, update, rollback, enable, disable, uninstall, export, logs), actions and jobs, skill-version review |
 | `plugin-gateway/v1/` | The Gateway plugin code calls through the proxy; call token only |
 | `plugin-runner/v1/` | The plugin runner's run list; runner key only |
 | `internal/plugins/` | Plugin reconciliation, called by the recon orchestrator with the master internal key |
@@ -606,7 +607,7 @@ All REST endpoints live in `webapp/src/app/api/`. The main route groups:
 | Reports | `/reports` | Pentest report listing and viewing |
 | Settings | `/settings` | Global settings (LLM providers, API keys) |
 | Insights | `/insights` | Analytics charts and project metrics |
-| Plugins | `/plugins` | Plugin catalog, install and management; plugin screens at `/plugins/<id>` (plugin platform on) |
+| Plugins | `/plugins` | Plugin catalog, install and management; plugin screens at `/plugins/<id>` |
 
 **Database access:**
 
@@ -628,7 +629,7 @@ All REST endpoints live in `webapp/src/app/api/`. The main route groups:
 | Kali Sandbox (MCP) | `http://kali-sandbox:8000/sse` (requires `Authorization: Bearer $MCP_AUTH_TOKEN`) |
 | Neo4j | `bolt://neo4j:7687` |
 | PostgreSQL | `postgresql://redamon:<POSTGRES_PASSWORD>@postgres:5432/redamon` (password from `.env`, generated on fresh install) |
-| Plugin runner | `http://plugin-gateway:7072` (`PLUGIN_RUNNER_URL`: the supervisor, through the proxy; reachable only while plugins are on, over `plugins-edge`) |
+| Plugin runner | `http://plugin-gateway:7072` (`PLUGIN_RUNNER_URL`: the supervisor, through the proxy, over `plugins-edge`) |
 
 **React hooks:**
 
@@ -637,8 +638,9 @@ The webapp exposes 19 custom hooks in `src/hooks/` that encapsulate all real-tim
 **Plugin platform library (`src/lib/plugins/`):**
 
 The webapp is the trusted half of the plugin platform: it alone reads the database, writes the
-plugins volume and serves the Gateway. With `PLUGINS_ENABLED` off (the default) every plugin route
-answers 404 (`switch.ts`). The design is in [README.PLUGINS.md](README.PLUGINS.md).
+plugins volume and serves the Gateway. When the runner is down, actions answer
+`503 runner_unavailable` and the Plugins page says so. The design is in
+[README.PLUGINS.md](README.PLUGINS.md).
 
 | Area | Modules |
 |------|---------|
@@ -692,7 +694,7 @@ Settings have defaults defined in **four layers** that must stay in sync:
 
 ### 5.1 Prerequisites
 
-- **Docker** & **Docker Compose v2+** ([install guide](https://docs.docker.com/get-docker/))
+- **Docker Engine 28.0.0 or newer** & **Docker Compose v2+** ([install guide](https://docs.docker.com/get-docker/)). `redamon.sh` refuses an older engine, because the plugin networks need it
 - **Git**
 - A code editor (VS Code recommended)
 - At least one LLM API key — configured in the webapp UI at `/settings`, NOT in `.env`
@@ -757,9 +759,9 @@ This is the most important table for day-to-day development. It tells you exactl
 | Any `Dockerfile` | `docker compose build <service> && docker compose up -d <service>` | Dockerfile changes always need rebuild |
 | Bump a pinned tool/model (T15/T17) | rebuild the affected image | `recon/Dockerfile`+`requirements.txt` and `services/knowledge_base/curation/pins.py` pin third-party pulls to commits/tags; a moved/removed pin **fails the build loudly**. Edit the pin, then rebuild. |
 | `docker-compose.yml` | `docker compose up -d` | Compose detects config changes and recreates affected containers |
-| `services/plugin_runner/**` (supervisor, worker, SDK, proxy) | `docker compose --profile plugins build plugin-runner`, then `./redamon.sh up` | Baked into one image, `redamon-plugin-runner`, that both plugin services run; `up` recreates them from the new image while plugins are on |
-| `docker-compose.plugins.yml` | `./redamon.sh up` | Only `redamon.sh` loads the overlay, and only while the plugin switch is effectively on |
-| `PLUGINS_ENABLED` or another plugin variable in `.env` | `./redamon.sh up` | A plain restart keeps the old environment; `up` decides the effective switch, loads or drops the overlay, and starts or removes the plugin services |
+| `services/plugin_runner/**` (supervisor, worker, SDK, proxy) | `docker compose --profile plugins build plugin-runner`, then `./redamon.sh up` | Baked into one image, `redamon-plugin-runner`, that both plugin services run; `up` recreates them from the new image |
+| `docker-compose.plugins.yml` | `./redamon.sh up` | Only `redamon.sh` loads the overlay |
+| A plugin variable in `.env` | `./redamon.sh up` | A plain restart keeps the old environment; `up` runs the plugin preflight again and recreates the services whose environment changed |
 | The plugin platform version | Bump every copy (see [§6.6](#66-adding-a-plugin-extension-point)), rebuild webapp and runner | A runner whose version differs from the webapp's reports itself out of date and starts no worker |
 | `webapp/prisma/schema.prisma` | `docker compose exec webapp npx prisma db push` | Push schema changes to PostgreSQL |
 | New default value | Update ALL 4 layers + rebuild agent & webapp | See [checklist](#61-adding-a-new-project-setting) |
@@ -806,24 +808,24 @@ docker compose restart kali-sandbox              # Restart kali-sandbox (code vo
 docker compose down && docker compose up -d     # Full restart (preserves data)
 docker compose down -v && docker compose up -d  # DANGER: deletes ALL data (volumes)
 
-# ─── Plugin platform (only while PLUGINS_ENABLED is effectively on) ─────
-./redamon.sh status                             # PLUGINS: on, or off with the reason
+# ─── Plugin platform ────────────────────────────────────────────────────
+./redamon.sh status                             # PLUGINS: the runner and gateway state, or why they cannot run
 docker compose --profile plugins ps plugin-runner plugin-gateway
 docker compose --profile plugins logs -f plugin-runner plugin-gateway
 docker compose --profile plugins build plugin-runner   # one image for both plugin services
-# redamon.sh adds docker-compose.plugins.yml to COMPOSE_FILE only while the switch is
-# effectively on. A plain `up` must name the overlay and the profile itself (in dev mode
-# also docker-compose.override.yml: an explicit -f stops compose loading it):
+# redamon.sh adds docker-compose.plugins.yml to COMPOSE_FILE. A plain `up` must name the
+# overlay and the profile itself (in dev mode also docker-compose.override.yml: an
+# explicit -f stops compose loading it):
 docker compose -f docker-compose.yml -f docker-compose.plugins.yml --profile plugins up -d webapp plugin-runner plugin-gateway
 docker compose --profile plugins down           # with the profile, or older Compose leaves the plugin containers running
 ```
 
-While plugins are on, a plain `docker compose up -d` that leaves out the overlay recreates the
-webapp without `plugins-edge` and the plugins volume, so it loses the runner until the next
+A plain `docker compose up -d` that leaves out the overlay recreates the webapp without
+`plugins-edge` and the plugins volume, so it loses the runner until the next
 `./redamon.sh up`. Prefer `./redamon.sh up`: it runs the plugin preflight (Docker Engine 28.0.0
-or newer, the internal key and the two plugin secrets, the runner image), loads or drops the
-overlay, and starts or removes the plugin services. A failed preflight leaves plugins off for
-that run and starts everything else.
+or newer, the internal key and the two plugin secrets, the runner image), loads the overlay,
+and starts the plugin services. A failed preflight stops it before any service is created and
+names the cause.
 
 ### 5.5 Important Rules
 
@@ -992,9 +994,9 @@ whose `platform` range excludes the new version incompatible ([README.PLUGINS.md
    `services/plugin_runner/sdk/redamon_plugin_sdk/__init__.py` and
    `services/plugin_runner/sdk/contract_cases.json`. Rebuild the webapp and the runner image together:
    a runner whose version differs from the webapp's reports itself out of date and starts no worker.
-6. **Test both switch states** (with `PLUGINS_ENABLED` off the slot renders nothing and the
-   contributions route answers 404), and **document** the point in README.PLUGINS.md §7.6 and in the
-   author reference [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
+6. **Test the empty slot** (with no plugin contributing to it the slot renders nothing), and
+   **document** the point in README.PLUGINS.md §7.6 and in the author reference
+   [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
 
 ---
 

@@ -37,8 +37,8 @@ webapp/
 │   │   │       ├── ReconLogsDrawer/   # Real-time logs
 │   │   │       ├── ReconConfirmModal/ # Confirmation dialog
 │   │   │       └── AIAssistantDrawer/ # Agent chat & tool confirmation UI
-│   │   ├── plugins/           # Plugins page (plugin platform, off by default)
-│   │   ├── layout.tsx         # Root layout (reads the plugin switch for the header)
+│   │   ├── plugins/           # Plugins page and plugin screens (plugin platform)
+│   │   ├── layout.tsx         # Root layout
 │   │   ├── page.tsx           # Home page
 │   │   └── globals.css        # Global styles
 │   ├── components/            # React components
@@ -458,10 +458,10 @@ GET /api/recon/[projectId]/download
 
 Downloads the recon output JSON file for the project.
 
-### Plugin platform API (plugin platform, off by default)
+### Plugin platform API
 
-Every route below answers **404 `plugins_disabled`** while `PLUGINS_ENABLED` is not `true`
-(see [README.PLUGINS.md](README.PLUGINS.md)). Errors are `{error, code}` with a stable `code`.
+The design is in [README.PLUGINS.md](README.PLUGINS.md). Errors are `{error, code}` with a stable
+`code`; a route that needs the plugin runner while it is down answers `503 runner_unavailable`.
 
 **For the signed-in user** (session cookie; state-changing routes also require a JSON body and a
 same-origin request, checked against `PLUGINS_ALLOWED_ORIGIN` when it is set):
@@ -534,7 +534,6 @@ another runs).
 | `INTERNAL_KEY_ALLOWLIST_ENFORCE` | When `true`, block internal-key requests to routes outside the allowlist; default is log-only | (unset = log-only) |
 | `NODE_ENV` | Environment mode | `development` |
 | `PORT` | Application port | `3000` |
-| `PLUGINS_ENABLED` | Turns the plugin platform on (`true`); off, every plugin route answers 404 | `false` |
 | `PLUGIN_RUNNER_KEY`, `PLUGIN_CALL_TOKEN_SECRET` | The webapp↔runner key and the secret that signs plugin call tokens (must differ from `AUTH_SECRET`); empty, plugin routes fail closed | (generated) |
 | `PLUGINS_ALLOWED_ORIGIN` | The public origin the same-origin check of plugin routes accepts (behind nginx, which drops the port from `Host`) | (unset: the request's host) |
 | `PLUGIN_ACTION_MAX_TIMEOUT` | Cap on any plugin action, seconds | `900` |
@@ -604,7 +603,7 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 |-----------|-------------|
 | `AIAssistantDrawer` | Thin orchestrator — wires hooks together, renders sub-components |
 | `DrawerHeader` | Header bar — connection status, history toggle, new chat, download, close |
-| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown (Agent Behaviour, Tool Matrix, Agent Skills, then one group per plugin with chat-session actions when the plugin platform is on) |
+| `PhaseIndicatorBar` | Phase badge, tool icons, attack skill badge, stealth/deep-think toggles, model badge, settings dropdown (Agent Behaviour, Tool Matrix, Agent Skills, then one group per enabled plugin with chat-session actions) |
 | `ChatArea` | Scrollable message list — renders grouped items, loading eye, empty state |
 | `InputArea` | Textarea, send/stop/resume buttons, Chat Skill picker (lightning bolt), `/skill` autocomplete, active skill badge |
 | `ApprovalDialog` | Phase-transition approval overlay |
@@ -619,7 +618,7 @@ The component is split into a thin orchestrator (`AIAssistantDrawer.tsx`, ~426 l
 | `TodoListWidget` | Agent's live task list |
 | `FileDownloadCard` | Download card for agent-generated files (reports, exports) |
 
-#### Plugin actions in the gear menu (plugin platform on)
+#### Plugin actions in the gear menu
 
 After "Agent Skills" the settings dropdown shows a divider and one group per enabled plugin that
 contributes `chat.session.actions`, labelled with the plugin's name and the plugin badge (never

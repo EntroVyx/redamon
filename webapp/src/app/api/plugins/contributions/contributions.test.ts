@@ -2,11 +2,11 @@
  * GET /api/plugins/contributions: the UI a plugin contributes, as the host reads it on a
  * page load (design §6, F-10/F-11/D-36). Only plugins that `showsContributions` (enabled,
  * ready or updating, not revoked) and declare at least one UI point appear; an updating one
- * is flagged; the switch off is a 404, so the gear menu and the Plugins page show nothing.
+ * is flagged.
  *
  * @vitest-environment node
  */
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 
 const h = vi.hoisted(() => ({ db: null as unknown as Record<string, unknown>, eff: null as unknown }))
@@ -63,15 +63,6 @@ beforeEach(() => {
   db = createFakePrisma()
   h.db = db as unknown as Record<string, unknown>
   h.eff = { userId: 'user-1' }
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
-})
-afterEach(() => vi.unstubAllEnvs())
-
-test('switch off: 404 plugins_disabled', async () => {
-  vi.stubEnv('PLUGINS_ENABLED', 'false')
-  const res = await GET()
-  expect(res.status).toBe(404)
-  expect((await res.json()).code).toBe('plugins_disabled')
 })
 
 test('no session: 401', async () => {

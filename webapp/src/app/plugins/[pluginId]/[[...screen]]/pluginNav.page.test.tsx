@@ -1,7 +1,7 @@
 /**
  * /plugins/<pluginId>/[...screen]: a plugin's `nav` page (design §6). It draws the nav screen,
  * or another screen the manifest lists, from the active version's files; anything else is a
- * 404: switch off, unknown or not-showing plugin (disabled, revoked, uninstalled), no `nav`
+ * 404: unknown or not-showing plugin (disabled, revoked, uninstalled), no `nav`
  * contribution, a screen the manifest does not list, a malformed path. A screen file that
  * cannot be read shows an error naming the plugin, not a crash. Inputs passed between
  * screens travel through sessionStorage, so a crafted link carries none.
@@ -86,7 +86,6 @@ afterAll(async () => {
 beforeEach(() => {
   reseed(row())
   h.push = vi.fn()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGINS_DIR', dir)
 })
 afterEach(() => {
@@ -135,11 +134,6 @@ describe('what is drawn', () => {
 })
 
 describe('404', () => {
-  test('switch off', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    await expect(open('echo')).rejects.toThrow('NEXT_NOT_FOUND')
-  })
-
   test.each([
     ['not installed', null],
     ['disabled', { enabled: false }],

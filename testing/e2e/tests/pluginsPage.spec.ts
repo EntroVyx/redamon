@@ -8,9 +8,9 @@ import { mintToken, signIn } from './auth'
  * install the `echo` test plugin from files, disable, enable, uninstall keeping the data,
  * install again, uninstall deleting everything.
  *
- * Needs a stack with PLUGINS_ENABLED=true whose webapp trusts the throwaway key of
- * scripts/make-plugin-fixtures.mjs (run it once; it prints the PLUGINS_EXTRA_TRUSTED_KEYS
- * value for .env, then `./redamon.sh up`). Skipped when the platform is off.
+ * Needs a stack whose webapp trusts the throwaway key of scripts/make-plugin-fixtures.mjs
+ * (run it once; it prints the PLUGINS_EXTRA_TRUSTED_KEYS value for .env, then
+ * `./redamon.sh up`).
  */
 
 // Not under test-results/, which Playwright empties before the run: the key must survive it.
@@ -38,8 +38,6 @@ test.afterAll(async () => {
 })
 
 test.beforeEach(async ({ context, baseURL }) => {
-  const status = await api.get('/api/plugins/status')
-  test.skip(status.status() === 404, 'The plugin platform is off on this stack (PLUGINS_ENABLED).')
   test.skip(!admin, 'No admin user in this database.')
   await purgeEcho()
   await signIn(context, admin, baseURL!)
@@ -150,9 +148,8 @@ test('the echo nav page draws its screen under a strict CSP, with no violation',
 
   // A screen the manifest does not list shows the not-found screen and none of the plugin's
   // content. The HTTP status is 200, not 404: the root layout streams every page inside a
-  // Suspense boundary, so a page's notFound() cannot change a status already sent (the limit
-  // the Plugins page met with the switch off, solved there in the middleware, which cannot
-  // read a manifest; recorded in the progress log).
+  // Suspense boundary, so a page's notFound() cannot change a status already sent, and the
+  // middleware, which could, cannot read a manifest.
   await page.goto('/plugins/echo/not-listed')
   await expect(page.getByText(/could not be found/i)).toBeVisible()
   await expect(page.getByRole('heading', { level: 1, name: 'Echo' })).toHaveCount(0)

@@ -128,6 +128,17 @@ export function JobProgressModal({
   const canRetry = view?.status === 'failed' && !!gate && !!onRetry && GATE_CODES.has(view.error?.code ?? '')
   const timedOut = view?.status === 'failed' && view.error?.code === 'timeout'
 
+  // A plugin may report a "Stage" field like "1 of 3"; show it as step dots. Any other
+  // shape just leaves the dots out, so this never depends on a plugin's exact wording.
+  const stage = (() => {
+    const raw = view?.progress?.fields?.Stage ?? view?.progress?.fields?.stage
+    const m = typeof raw === 'string' ? /^\s*(\d+)\s+of\s+(\d+)\s*$/i.exec(raw) : null
+    if (!m) return null
+    const current = Number(m[1])
+    const total = Number(m[2])
+    return total >= 1 && total <= 12 && current >= 1 && current <= total ? { current, total } : null
+  })()
+
   const footer =
     terminal || fatal ? (
       <div className={styles.jobButtons}>
@@ -159,6 +170,21 @@ export function JobProgressModal({
               <Loader2 size={14} className={styles.spin} aria-hidden />
               {view?.progress?.message ?? 'Working…'}
             </div>
+            <div className={styles.jobProgressTrack} role="progressbar" aria-label="Working">
+              <div className={styles.jobProgressBar} aria-hidden />
+            </div>
+            {stage && (
+              <div className={styles.jobSteps} aria-hidden>
+                {Array.from({ length: stage.total }, (_, i) => (
+                  <span
+                    key={i}
+                    className={`${styles.jobStep} ${
+                      i + 1 < stage.current ? styles.jobStepOn : i + 1 === stage.current ? styles.jobStepActive : ''
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
             {view?.progress?.fields && Object.keys(view.progress.fields).length > 0 && (
               <dl className={styles.jobFields}>
                 {Object.entries(view.progress.fields).map(([k, v]) => (

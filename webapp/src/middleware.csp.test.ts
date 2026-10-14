@@ -29,7 +29,6 @@ async function csp(path: string): Promise<string | null> {
 
 beforeEach(() => {
   vi.stubEnv('AUTH_SECRET', 'b'.repeat(64))
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('NODE_ENV', 'production')
 })
 afterEach(() => vi.unstubAllEnvs())

@@ -5,7 +5,6 @@ import { ownsScope } from '@/lib/plugins/changeSetAccess'
 import * as ov from '@/lib/plugins/overrides'
 import { buildReviewModel } from '@/lib/plugins/reviewModel'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * GET /api/plugins/overrides/change-sets/[id]: the review model (lib/plugins/reviewModel.ts).
@@ -19,7 +18,6 @@ export const dynamic = 'force-dynamic'
 const notFound = () => NextResponse.json({ error: 'Not found', code: 'not_found' }, { status: 404 })
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const eff = await getEffectiveUser()
   if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
@@ -31,7 +29,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const eff = await getEffectiveUser()
   if (!eff) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

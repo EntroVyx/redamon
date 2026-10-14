@@ -275,8 +275,8 @@ flowchart TB
 | RedAmon Terminal | ws://127.0.0.1:8016 | Loopback | Kali sandbox PTY shell access (xterm.js; browser reaches it via the agent proxy) |
 | Metasploit Listener | 0.0.0.0:4444 | LAN (by design) | Reverse shell listener — a target connects back here in direct/no-tunnel mode |
 
-The plugin services (`plugin-runner`, `plugin-gateway`, present only while the plugin platform is
-on) publish no host port; see [Plugin Platform](#plugin-platform-optional-off-by-default).
+The plugin services (`plugin-runner`, `plugin-gateway`) publish no host port; see
+[Plugin Platform](#plugin-platform).
 
 ## Recon Pipeline Detail
 
@@ -430,16 +430,17 @@ sequenceDiagram
     Agent-->>User: "Found ports 22, 80, 443..."
 ```
 
-## Plugin Platform (optional, off by default)
+## Plugin Platform
 
 Plugins are optional features installed on demand from the signed
-[`redamon-plugins`](https://github.com/samugit83/redamon-plugins) catalog. Plugin code is
-third-party code, so the platform is **off by default** (`PLUGINS_ENABLED=false`). While it is
-off, compose creates no plugin container, network or volume: the two plugin services are in the
-`plugins` compose profile, and the webapp's plugin wiring lives in the overlay
-`docker-compose.plugins.yml`, which `redamon.sh` loads only while the switch is effectively on.
-Turning it on needs Docker Engine 28.0.0 or newer; a host that fails the plugin preflight starts
-everything else with plugins off and says why. The design is in
+[`redamon-plugins`](https://github.com/samugit83/redamon-plugins) catalog. The platform that
+hosts them is part of every RedAmon stack, and runs plugin code, which is third-party code,
+isolated. The two plugin services are in the `plugins` compose profile, and the webapp's plugin
+wiring lives in the overlay `docker-compose.plugins.yml`; `redamon.sh` loads the overlay and
+starts the profile on every `install`, `update` and `up`, which a plain `docker compose up -d`
+does not. The plugin networks need Docker Engine 28.0.0 or newer, so RedAmon does too, and a
+host that fails the plugin preflight is refused with the reason before any core service is
+created. The design is in
 [README.PLUGINS.md](README.PLUGINS.md); the plugin author's contract is in
 [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md).
 
@@ -483,7 +484,7 @@ flowchart TB
 | `plugin-runner` | A supervisor (FastAPI on `:7080`) that starts one worker process per (plugin, version), each under its own UID with memory and process limits and a clean environment. Only on `plugins-net`; it reads the `plugins` volume read-only and holds no database credentials, LLM keys or token secret. |
 | `plugin-gateway` | A small standard-library proxy built from the same image. It is the only door between `plugins-net` and the rest of the stack: `:7071` passes only the webapp's `/api/plugin-gateway/v1/*` (plugin code) and `/api/plugin-runner/v1/*` (the supervisor's run list), and `:7072` passes only the webapp's calls to the supervisor's `/runner/v1/*`. It joins `plugins-edge` and `plugins-net`, never `redamon`. |
 | `plugins-net`, `plugins-edge` | Two `internal` bridge networks (no route out) with `gateway_mode_ipv4: isolated`, which removes the bridge's own address on the host. The overlay adds the webapp to `plugins-edge`. |
-| `plugins` volume | The installed plugin versions. Only the webapp's Plugin Manager writes it (mounted at `/data/plugins` through the overlay); it survives switching plugins off and is removed by `./redamon.sh purge`. |
+| `plugins` volume | The installed plugin versions. Only the webapp's Plugin Manager writes it (mounted at `/data/plugins` through the overlay); only `./redamon.sh purge` removes it. |
 | Postgres tables | `plugin_installs`, `plugin_data`, `plugin_overrides`, `plugin_platform_state`. |
 
 Nothing in the platform publishes a host port.

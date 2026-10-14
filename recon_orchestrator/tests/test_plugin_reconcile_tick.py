@@ -7,11 +7,10 @@ and dispatches the scan queue, so the tick must:
   - POST /api/internal/plugins/reconcile with the internal key at most once per interval,
   - start the POST as a background task and never await it (a slow webapp never delays
     the next step), with an in-flight guard (no second POST while one runs),
-  - do nothing at all unless PLUGINS_ENABLED is true,
   - survive an empty or bad PLUGIN_RECONCILE_INTERVAL (300 s),
   - never raise when the webapp is down,
-  - on a 404 (an older webapp image, or the switch off in the webapp only) log one line
-    and stop calling until the orchestrator restarts.
+  - on a 404 (an older webapp image) log one line and stop calling until the
+    orchestrator restarts.
 
 Run: python3 -m unittest tests.test_plugin_reconcile_tick   (from /app in the
 recon-orchestrator container).
@@ -80,7 +79,7 @@ class TestReconcileTick(unittest.TestCase):
     def setUp(self):
         self.web = _FakeWebapp()
         self.env = mock.patch.dict(os.environ, {
-            "PLUGINS_ENABLED": "true", "INTERNAL_API_KEY": "k" * 64, "WEBAPP_API_URL": self.web.base,
+            "INTERNAL_API_KEY": "k" * 64, "WEBAPP_API_URL": self.web.base,
         })
         self.env.start()
         api._reset_plugin_reconcile_state()
@@ -136,13 +135,6 @@ class TestReconcileTick(unittest.TestCase):
         self.assertLess(took, 0.3)
         self.assertEqual(len(self.web.requests), 1)
 
-    def test_nothing_happens_unless_the_switch_is_on(self):
-        for value in ("", "false", "0", "no"):
-            with mock.patch.dict(os.environ, {"PLUGINS_ENABLED": value}):
-                api._reset_plugin_reconcile_state()
-                self.run_async(self._tick_and_wait())
-        self.assertEqual(self.web.requests, [])
-
     def test_the_interval_survives_an_empty_or_bad_value(self):
         for raw, expected in (("", 300), ("   ", 300), ("abc", 300), ("-5", 300), ("0", 300), ("120", 120)):
             with mock.patch.dict(os.environ, {"PLUGIN_RECONCILE_INTERVAL": raw}):
@@ -177,7 +169,6 @@ class TestReconcileTick(unittest.TestCase):
         # no env_file, so only what its own environment block lists reaches it.
         block = re.search(r"\n  recon-orchestrator:\n(.*?)(?=\n  [a-z][a-z0-9_-]*:\n)", compose, re.S).group(1)
         self.assertIn("PLUGIN_RECONCILE_INTERVAL: ${PLUGIN_RECONCILE_INTERVAL:-300}", block)
-        self.assertIn("PLUGINS_ENABLED: ${PLUGINS_ENABLED:-false}", block)
 
 
 if __name__ == "__main__":

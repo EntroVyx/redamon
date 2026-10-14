@@ -11,8 +11,7 @@ import { mintToken, signIn } from './auth'
  * settings, reviews the before/after, approves it, sees the version active, and resets to
  * factory. Driven from project settings so no agent run is needed.
  *
- * Needs a stack with PLUGINS_ENABLED=true trusting the throwaway fixtures key (see
- * pluginsPage.spec.ts). Skipped when the platform is off.
+ * Needs a stack trusting the throwaway fixtures key (see pluginsPage.spec.ts).
  */
 const FIXTURES = join(__dirname, '..', '.plugin-fixtures')
 const SEED_USER = process.env.REDAMON_USER || 'cmrzlj3xk0000ob3vo67o3igg'
@@ -78,8 +77,6 @@ async function clearSkill(skill = SKILL) {
 }
 
 test.beforeEach(async ({ context, baseURL }) => {
-  const status = await api.get('/api/plugins/status')
-  test.skip(status.status() === 404, 'The plugin platform is off on this stack (PLUGINS_ENABLED).')
   test.skip(!admin, 'No admin user in this database.')
   await signIn(context, admin, baseURL!)
   await context.addInitScript(() => {
@@ -142,7 +139,7 @@ test('review a proposed skill version from project settings, approve it, then re
  * (delete, reset to factory) and a third run whose number is never a reused one (TD-19); the
  * model gate; uninstall keeping the data, reinstall restoring it, uninstall deleting everything.
  *
- * Needs, besides the platform switched on:
+ * Needs:
  * - Skiller packed and signed into SKILLER_DIST (default ../../redamon-plugins/dist):
  *   skiller-1.0.0.tar.gz, catalog.json and catalog.json.sig (redamon-plugins README.md,
  *   "Developing a plugin against a local RedAmon"), with the signing key's public half in
@@ -306,7 +303,6 @@ test.describe.serial('Skiller', () => {
 
   test.beforeAll(async () => {
     if (!FROM_CATALOG && !SKILLER_FILES.every((f) => existsSync(join(SKILLER_DIST, f)))) return
-    if ((await api.get('/api/plugins/status')).status() === 404) return
     stub = spawn(process.execPath, [join(__dirname, '..', 'scripts', 'stub-llm-server.mjs'), '0', agentHost()], {
       env: { ...process.env, STUB_LLM_DELAY_MS: '5000' },
       stdio: ['ignore', 'pipe', 'inherit'],
@@ -353,9 +349,7 @@ test.describe.serial('Skiller', () => {
 
   test('analyse a session from the chat menu, review and approve, twice', async ({ page }) => {
     test.setTimeout(600_000)
-    test.skip(!ready, FROM_CATALOG
-      ? 'Switch the platform on (see the comment above).'
-      : 'Pack and sign Skiller into SKILLER_DIST and switch the platform on (see the comment above).')
+    test.skip(!ready, 'Pack and sign Skiller into SKILLER_DIST (see the comment above).')
     const projects = (await (await api.get('/api/projects')).json()) as { id: string }[]
     projectId = projects[0]?.id ?? ''
     test.skip(!projectId, 'No project to seed a session into.')

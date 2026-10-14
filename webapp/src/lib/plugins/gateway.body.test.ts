@@ -27,7 +27,6 @@ beforeEach(() => {
   db = createFakePrisma()
   h.db = db as unknown as Record<string, unknown>
   seedWorld(db)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   setNowForTests(() => new Date('2026-10-09T10:00:00.000Z'))

@@ -46,9 +46,35 @@
   border: 1px solid color-mix(in srgb, var(--status-error, #ef4444) 30%, transparent);
 }
 
+/* The summary + changelog: a padded block so the bullets never sit on the modal's edge. */
 .note {
   font-size: var(--text-sm);
   color: var(--text-secondary);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default, #334155);
+  border-radius: var(--radius-default);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.note :first-child {
+  margin-top: 0;
+}
+
+.note :last-child {
+  margin-bottom: 0;
+}
+
+.note ul {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+}
+
+.note li {
+  margin: var(--space-1) 0;
+}
+
+.note p {
+  margin: 0 0 var(--space-2);
 }
 
 .risks {
@@ -138,4 +164,10 @@
 
 .spin {
   animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

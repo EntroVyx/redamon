@@ -8,9 +8,9 @@
 # the only door out of the plugins network and never joins `redamon`, where
 # Postgres, Neo4j and the agent's unauthenticated routes live; both internal
 # networks drop the host-side bridge address (`gateway_mode_ipv4: isolated`,
-# experiment E1). And a user who never turns plugins on must get the webapp
-# wired exactly as before: the only change to it lives in the overlay
-# docker-compose.plugins.yml, which redamon.sh loads only while the switch is on.
+# experiment E1). And the platform's only change to the webapp lives in the
+# overlay docker-compose.plugins.yml, which redamon.sh loads on every install,
+# update and up after the plugin preflight passed.
 #
 # Hermetic: `docker compose config` resolves the files without a daemon; the
 # compose files are fed on stdin and the env file is /dev/null, so neither the
@@ -169,7 +169,7 @@ eq "proxy healthcheck is the proxy probe" \
 
 echo
 echo "== the webapp gets every plugin setting (it has no env_file) =="
-WEBAPP_VARS="PLUGINS_ENABLED PLUGINS_DIR PLUGIN_RUNNER_URL PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET \
+WEBAPP_VARS="PLUGINS_DIR PLUGIN_RUNNER_URL PLUGIN_RUNNER_KEY PLUGIN_CALL_TOKEN_SECRET \
 PLUGINS_CATALOG_URL PLUGINS_DOWNLOAD_HOSTS PLUGINS_EXTRA_TRUSTED_KEYS PLUGIN_ACTION_MAX_TIMEOUT \
 PLUGIN_ARCHIVE_MAX_BYTES PLUGIN_TRANSCRIPT_MAX_BYTES PLUGIN_DATA_MAX_ROWS PLUGIN_DATA_MAX_BYTES \
 PLUGIN_DATA_MAX_VALUE_BYTES PLUGIN_DATA_MAX_ROWS_PER_OWNER PLUGIN_GATEWAY_CALLS_PER_TOKEN \
@@ -185,7 +185,7 @@ eq "the webapp's plugins folder is outside /app" \
    "$(q "$C" "c['services']['webapp']['environment']['PLUGINS_DIR']")" "/data/plugins"
 
 echo
-echo "== switch off: the webapp is wired exactly as before the platform (R-75) =="
+echo "== base file alone: the webapp is wired exactly as before the platform (R-75) =="
 WEB="c['services']['webapp']"
 WIRING="(sorted($WEB['networks']), sorted((v['type'], v.get('source'), v['target'], v.get('read_only')) for v in $WEB.get('volumes',[])), $WEB.get('ports'), $WEB.get('image'))"
 OFFC="$(config_json <<<"$BASE")"
@@ -201,7 +201,7 @@ else
 fi
 
 echo
-echo "== switch on: the overlay adds plugins-edge and the volume, nothing else =="
+echo "== with the overlay: it adds plugins-edge and the volume, nothing else =="
 eq "the overlay changes only the webapp" \
    "$(python3 -c 'import sys,json; import re; t=open(sys.argv[1]).read(); print(re.findall(r"^  ([a-z0-9-]+):$", t, re.M))' "$OVERLAY")" "['webapp']"
 ONC="$(config_json -f "$OVERLAY" --profile plugins <<<"$BASE")"

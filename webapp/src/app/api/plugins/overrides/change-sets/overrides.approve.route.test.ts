@@ -65,7 +65,6 @@ beforeEach(() => {
   h.effective = 'alice'
   h.audits = []
   clearSkillPartsCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
 })
 
 describe('approve', () => {

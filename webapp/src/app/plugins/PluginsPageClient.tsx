@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Upload } from 'lucide-react'
-import { useAlertModal } from '@/components/ui'
+import { ExternalLink, Upload } from 'lucide-react'
+import { useAlertModal, WikiInfoButton } from '@/components/ui'
 import { CatalogStatus } from '@/components/plugins/CatalogStatus'
 import { ConsentDialog } from '@/components/plugins/ConsentDialog'
 import { OfflineInstallDialog } from '@/components/plugins/OfflineInstallDialog'
@@ -14,6 +14,8 @@ import { UninstallDialog } from '@/components/plugins/UninstallDialog'
 import { PluginApiError, usePluginAction, usePluginsPage } from '@/hooks/usePlugins'
 import type { PluginEntry } from '@/lib/plugins/pageModel'
 import styles from './page.module.css'
+
+const CATALOG_REPO_URL = 'https://github.com/samugit83/redamon-plugins'
 
 type Dialog =
   | { kind: 'install'; entry: PluginEntry; restoreCount: number }
@@ -104,10 +106,16 @@ export function PluginsPageClient() {
     <div className={styles.page}>
       <div className={styles.header}>
         <div>
-          <h1 className={styles.title}>Plugins</h1>
+          <div className={styles.titleRow}>
+            <h1 className={styles.title}>Plugins</h1>
+            <WikiInfoButton target="plugins" title="Open Plugins wiki page" size={15} />
+          </div>
           <p className={styles.subtitle}>
-            Optional features installed from the RedAmon plugin catalog. To connect MCP servers to the agent, use Global
-            Settings → MCP Tool Plugins.
+            Optional features installed from the RedAmon plugin catalog:{' '}
+            <a className={styles.catalogLink} href={CATALOG_REPO_URL} target="_blank" rel="noopener noreferrer">
+              github.com/samugit83/redamon-plugins
+              <ExternalLink size={12} />
+            </a>
           </p>
           <div className={styles.platform}>RedAmon plugin platform {data.platformVersion}</div>
         </div>

@@ -134,7 +134,7 @@ describe('the behaviour table of design §9.1, row by row', () => {
       false,
       false,
     ])
-    expect(dormantReason(r as never, { switchOn: true, agentSupportsSeam: true })).toBe('revoked')
+    expect(dormantReason(r as never, { agentSupportsSeam: true })).toBe('revoked')
   })
 
   test('overrides need the override:skill.text permission granted', () => {
@@ -144,11 +144,10 @@ describe('the behaviour table of design §9.1, row by row', () => {
 })
 
 describe('dormantReason', () => {
-  const on = { switchOn: true, agentSupportsSeam: true }
+  const on = { agentSupportsSeam: true }
   const base = { status: 'ready', enabled: true, revokedReason: null, grantedPermissions: ['override:skill.text'] }
 
   test.each([
-    ['switch_off', base, { ...on, switchOn: false }],
     ['uninstalled', null, on],
     ['uninstalled', { ...base, status: 'available' }, on],
     ['uninstalled', { ...base, status: 'uninstalling' }, on],
@@ -158,7 +157,7 @@ describe('dormantReason', () => {
     ['not_ready', { ...base, status: 'incompatible' }, on],
     ['not_ready', { ...base, status: 'installing' }, on],
     ['permission_missing', { ...base, grantedPermissions: [] }, on],
-    ['agent_outdated', base, { ...on, agentSupportsSeam: false }],
+    ['agent_outdated', base, { agentSupportsSeam: false }],
   ])('%s', (reason, r, env) => {
     expect(dormantReason(r as never, env)).toBe(reason)
   })
@@ -168,19 +167,16 @@ describe('dormantReason', () => {
     expect(dormantReason({ ...base, status: 'updating' } as never, on)).toBeNull()
   })
 
-  test('null exactly when the switch is on, the agent has the seam and overrides qualify', () => {
+  test('null exactly when the agent has the seam and overrides qualify', () => {
     for (const status of PLUGIN_STATUSES) {
       for (const enabled of [true, false]) {
         for (const revokedReason of [null, 'x']) {
           for (const grantedPermissions of [[], ['override:skill.text']]) {
-            for (const switchOn of [true, false]) {
-              for (const agentSupportsSeam of [true, false]) {
-                const r = { status, enabled, revokedReason, grantedPermissions }
-                const env = { switchOn, agentSupportsSeam }
-                expect(dormantReason(r as never, env) === null).toBe(
-                  switchOn && agentSupportsSeam && overridesQualify(r as never),
-                )
-              }
+            for (const agentSupportsSeam of [true, false]) {
+              const r = { status, enabled, revokedReason, grantedPermissions }
+              expect(dormantReason(r as never, { agentSupportsSeam }) === null).toBe(
+                agentSupportsSeam && overridesQualify(r as never),
+              )
             }
           }
         }

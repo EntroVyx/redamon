@@ -1,7 +1,7 @@
 /**
  * GET /api/plugins/status: the platform version this webapp runs and what the runner
  * reports, for the Plugins page's runner banner (D-21 runner-down half, D-74). A
- * signed-in session; 404 with the switch off; never a 5xx when the runner is down.
+ * signed-in session; never a 5xx when the runner is down.
  *
  * @vitest-environment node
  */
@@ -19,19 +19,12 @@ import { PLUGIN_PLATFORM_VERSION } from '@/lib/plugins/platformVersion'
 const KEY = 'k'.repeat(64)
 
 beforeEach(() => {
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_RUNNER_KEY', KEY)
   mockUser.fn.mockResolvedValue({ userId: 'u1', role: 'standard' })
 })
 afterEach(async () => {
   vi.unstubAllEnvs()
   await closeAllFakeServers()
-})
-
-test('switch off: 404', async () => {
-  vi.stubEnv('PLUGINS_ENABLED', '0')
-  const res = await GET()
-  expect(res.status).toBe(404)
 })
 
 test('no session: the 401 of requireEffectiveUser', async () => {

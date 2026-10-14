@@ -2,8 +2,7 @@
  * Every state of the /plugins page (R-04) and of a plugin card (README.PLUGINS.md §7.1):
  * loading, each card state with its admin actions, the catalog unreachable (installed plugins
  * still listed and manageable, Install disabled with the reason), invalid or untrusted, an
- * extra-key catalog, the runner down, an empty catalog, 404 with the switch off. The subtitle
- * tells the page apart from Global Settings → MCP Tool Plugins (R-03). Confirmations go
+ * extra-key catalog, the runner down, an empty catalog. Confirmations go
  * through useAlertModal, never window.confirm.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -23,11 +22,9 @@ vi.mock('@/components/ui/AlertModal/AlertModal', async (orig) => ({
   useAlertModal: () => alertSpies,
 }))
 vi.mock('@/components/ui', async (orig) => ({ ...((await orig()) as Record<string, unknown>), useAlertModal: () => alertSpies }))
-const nav = vi.hoisted(() => ({ notFound: vi.fn(() => { throw new Error('NEXT_NOT_FOUND') }) }))
-vi.mock('next/navigation', () => ({ notFound: nav.notFound, usePathname: () => '/plugins', useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/plugins', useRouter: () => ({ push: vi.fn() }) }))
 
 import { PluginsPageClient } from './PluginsPageClient'
-import Page from './page'
 import type { PluginEntry, PluginsPage } from '@/lib/plugins/pageModel'
 import { PERMISSION_TEXT } from '@/lib/plugins/permissions'
 
@@ -50,7 +47,7 @@ function entry(state: PluginEntry['state'], over: Partial<PluginEntry> = {}): Pl
 
 function model(plugins: PluginEntry[], over: Partial<PluginsPage> = {}): PluginsPage {
   return {
-    enabled: true, platformVersion: '1.0.0', isAdmin: true,
+    platformVersion: '1.0.0', isAdmin: true,
     catalog: { state: 'ok', message: null, official: true, extraKey: false, replayed: false, serial: 3 },
     plugins, ...over,
   }
@@ -84,7 +81,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
-  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
@@ -109,11 +105,16 @@ describe('the page', () => {
     await screen.findByTestId('plugin-card-echo')
   })
 
-  test('the header: title, the subtitle that names MCP Tool Plugins, the platform version', async () => {
+  test('the header: title, wiki link, the catalog repository link, the platform version', async () => {
     show()
     expect(await screen.findByRole('heading', { name: 'Plugins' })).toBeTruthy()
     expect(screen.getByText(/Optional features installed from the RedAmon plugin catalog/)).toBeTruthy()
-    expect(screen.getByText(/To connect MCP servers to the agent, use Global Settings → MCP Tool Plugins/)).toBeTruthy()
+    const wiki = screen.getByRole('link', { name: 'Open Plugins wiki page' })
+    expect(wiki.getAttribute('href')).toBe('https://github.com/samugit83/redamon/wiki/Plugins')
+    const repo = screen.getByRole('link', { name: /github\.com\/samugit83\/redamon-plugins/ })
+    expect(repo.getAttribute('href')).toBe('https://github.com/samugit83/redamon-plugins')
+    expect(repo.getAttribute('target')).toBe('_blank')
+    expect(screen.queryByText(/MCP Tool Plugins/)).toBeNull()
     expect(screen.getByText(/platform 1\.0\.0/i)).toBeTruthy()
   })
 
@@ -153,13 +154,6 @@ describe('the page', () => {
     show()
     const banner = await screen.findByTestId('runner-banner')
     expect(banner.textContent).toMatch(/Plugin actions are unavailable; approved skill versions keep applying/)
-  })
-
-  test('404 with the switch off (the server page)', () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    expect(() => Page()).toThrow('NEXT_NOT_FOUND')
-    vi.stubEnv('PLUGINS_ENABLED', 'true')
-    expect(Page()).toBeTruthy()
   })
 })
 

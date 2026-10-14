@@ -31,8 +31,8 @@ interface PluginFeature {
   description: string
 }
 
-// While the plugin platform is off the list answers 404: no plugin tile, nothing else
-// changes. A failure is treated the same; the core features never wait on it.
+// A failed list means no plugin tile and nothing else changes; the core features never
+// wait on it.
 async function fetchPluginFeatures(): Promise<PluginFeature[]> {
   try {
     const res = await fetch('/api/plugins/llm-features', { cache: 'no-store' })

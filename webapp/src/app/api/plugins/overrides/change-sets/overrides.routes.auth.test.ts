@@ -56,17 +56,9 @@ beforeEach(() => {
   h.session = { userId: 'alice', role: 'standard' }
   h.effective = 'alice'
   clearSkillPartsCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
 })
 
 describe('access', () => {
-  test('switch off: 404 plugins_disabled', async () => {
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    const res = await call(GET, 'anything')
-    expect(res.status).toBe(404)
-    expect((await res.json()).code).toBe('plugins_disabled')
-  })
-
   test('another user’s user-scope set: 404', async () => {
     const cs = await seedProposal(userScope('bob'), { workflow: 'W' }, { createdBy: 'bob' })
     expect((await call(GET, cs)).status).toBe(404)

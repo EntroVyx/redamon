@@ -16,7 +16,6 @@ import { RunnerError, RunnerUnavailableError, cancelJob, runAction } from './run
 import { crossOriginResponse, sameOrigin } from './sameOrigin'
 import { ACTION_ID_RE } from './schemas/common'
 import { actionMaxTimeoutSeconds } from './settings'
-import { pluginsDisabledResponse, pluginsEnabled } from './switch'
 
 /**
  * A plugin action started from the UI (README.PLUGINS.md §7.7): POST
@@ -144,7 +143,6 @@ export async function handleAction(request: NextRequest, pluginId: string, actio
 }
 
 async function act(request: NextRequest, pluginId: string, actionId: string): Promise<NextResponse> {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const parsed = await readJsonBody(request)
   if (parsed instanceof NextResponse) return parsed

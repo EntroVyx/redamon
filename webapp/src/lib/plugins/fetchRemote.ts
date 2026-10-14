@@ -3,11 +3,12 @@ import https from 'node:https'
 import net from 'node:net'
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http'
 import { isPublicIp } from '@/lib/llm-url-guard'
+import { ICON_MAX_BYTES } from './schemas/catalog'
 
 /**
- * The plugin platform's only outbound fetch: the signed catalog and plugin archives
- * (README.PLUGINS.md §6.2, §10). A catalog entry decides the archive URL, so every rule
- * here is what stops it from pointing the webapp at an internal address:
+ * The plugin platform's only outbound fetch: the signed catalog, plugin archives and the icons
+ * the catalog names (README.PLUGINS.md §6.2, §10). A catalog entry decides the archive and icon
+ * URLs, so every rule here is what stops it from pointing the webapp at an internal address:
  *
  * - `https:` only, on the default port, with no credentials in the URL;
  * - the host is in PLUGINS_DOWNLOAD_HOSTS on EVERY hop; redirects (at most five) are
@@ -36,6 +37,7 @@ const USER_AGENT = 'RedAmon-plugin-manager/1'
 export const FETCH_DEFAULTS = {
   catalog: { maxBytes: 1_048_576, timeoutMs: 15_000 },
   archive: () => ({ maxBytes: archiveMaxBytes(), timeoutMs: 60_000 }),
+  icon: { maxBytes: ICON_MAX_BYTES, timeoutMs: 15_000 },
 }
 
 export function archiveMaxBytes(): number {
@@ -152,7 +154,7 @@ export interface FetchDeps {
 }
 
 export interface FetchOptions {
-  kind: 'catalog' | 'archive'
+  kind: 'catalog' | 'archive' | 'icon'
   maxBytes?: number
   timeoutMs?: number
 }
@@ -290,7 +292,7 @@ function oneHop(
 }
 
 export async function fetchRemote(url: string, opts: FetchOptions, deps: FetchDeps = {}): Promise<FetchResult> {
-  const defaults = opts.kind === 'catalog' ? FETCH_DEFAULTS.catalog : FETCH_DEFAULTS.archive()
+  const defaults = opts.kind === 'archive' ? FETCH_DEFAULTS.archive() : FETCH_DEFAULTS[opts.kind]
   const maxBytes = opts.maxBytes ?? defaults.maxBytes
   const deadline = Date.now() + (opts.timeoutMs ?? defaults.timeoutMs)
   const transport = deps.request ?? (https.request as Transport)

@@ -53,6 +53,10 @@
   max-width: 768px;
 }
 
+.modalXLarge {
+  max-width: min(1000px, calc(100vw - var(--space-8)));
+}
+
 .modalFull {
   max-width: calc(100vw - var(--space-8));
   max-height: calc(100vh - var(--space-8));

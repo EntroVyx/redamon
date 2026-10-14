@@ -40,12 +40,6 @@ beforeEach(() => {
   h.agent = agentHandler(agent)
   h.effective = 'alice'
   clearSkillPartsCache()
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
-})
-
-test('switch off: 404 plugins_disabled', async () => {
-  vi.stubEnv('PLUGINS_ENABLED', 'false')
-  expect((await get('point=skill.text&group=ssrf')).status).toBe(404)
 })
 
 test('an unknown skill: 404', async () => {

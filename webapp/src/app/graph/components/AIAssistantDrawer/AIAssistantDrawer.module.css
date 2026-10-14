@@ -315,7 +315,9 @@
   top: 100%;
   right: 0;
   margin-top: 4px;
-  min-width: 160px;
+  /* Anchored to the small gear button, so its width collapses to this floor. Sized to keep
+     "Improve skill from this session" (~161px at 12px) on one line beside its icon. */
+  min-width: 224px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-default);
@@ -371,9 +373,20 @@
   color: var(--text-tertiary);
 }
 
+/* The global reset makes every svg a block, so an inline icon landed on its own line above
+   the label. A flex row keeps it beside the label; flex-start plus a 2px nudge centres the
+   12px icon on the first 16px line if a long plugin label still wraps. Must follow
+   .settingsDropdownItem so this display wins. */
+.pluginItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 16px;
+}
+
 .pluginItemIcon {
-  margin-right: 6px;
-  vertical-align: -2px;
+  flex-shrink: 0;
+  margin-top: 2px;
   color: var(--text-tertiary);
 }
 

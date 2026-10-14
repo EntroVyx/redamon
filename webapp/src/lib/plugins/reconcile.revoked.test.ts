@@ -48,14 +48,12 @@ beforeEach(async () => {
 afterEach(async () => {
   await w.close()
   setNowForTests(null)
-  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
 const row = () => db.rows('pluginInstall').find((r) => r.pluginId === 'echo')!
 
 async function runListIds(): Promise<string[]> {
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   const res = await runList(new NextRequest('http://webapp:3000/api/plugin-runner/v1/run-list', { headers: { 'x-plugin-runner-key': RUNNER_KEY } }))
   return ((await res.json()).plugins as { id: string }[]).map((p) => p.id)
 }

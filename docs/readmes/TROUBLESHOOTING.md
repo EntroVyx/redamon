@@ -4,7 +4,7 @@
 
 ## Operating System Compatibility
 
-RedAmon is fully Dockerized and runs on **any OS** that supports Docker and Docker Compose v2+. Below are common OS-specific issues and their fixes.
+RedAmon is fully Dockerized and runs on **any OS** that supports Docker Engine 28.0.0 or newer and Docker Compose v2+. Below are common OS-specific issues and their fixes.
 
 ### Linux
 
@@ -44,6 +44,17 @@ RedAmon is fully Dockerized and runs on **any OS** that supports Docker and Dock
 | SYN scans (naabu, masscan) miss hosts on the local LAN | `network_mode: host` joins Docker Desktop's LinuxKit VM, not the Mac's network | Expected on Docker Desktop. Internet targets work normally; for LAN scans, run RedAmon on a Linux host |
 | Login fails after install with no error in logs | Non-interactive shell (CI, agents, some multiplexers) injected a `\u0001` SOH byte into the admin email/password prompt | Run `./redamon.sh create-admin` to (re)create the admin cleanly (`reset-password` only works once an admin already exists) |
 | No admin prompt appeared at install / can't log in | Webapp was slow to come up on first boot (common with `--gvm` or a small VM), so the automatic admin prompt was skipped | Run `./redamon.sh create-admin` once the stack is up (`./redamon.sh status`); it waits for the webapp, then prompts. Safe to re-run |
+
+---
+
+## `install`, `update` or `up` stops before starting anything
+
+Both checks run before any core service is (re)created, so a stack that was running keeps running.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `RedAmon needs Docker Engine 28.0.0 or newer; this host runs <version>.` (or `Could not read the Docker Engine version`) | The plugin platform's networks use `gateway_mode_ipv4: isolated`, which older engines reject. `install`, `update` (before its `git pull`) and `up` check the engine before building anything. An unreadable version means the Docker daemon is not running | Upgrade Docker ([Docker Engine](https://docs.docker.com/engine/install/), or the latest Docker Desktop), confirm with `docker version --format '{{.Server.Version}}'`, then rerun the command. An update that already pulled says the code is updated but not rebuilt: run `./redamon.sh update` again and it finishes that update (`.update-pending` records where it started). Until then `./redamon.sh up` warns that some images may be older than the code |
+| `The plugin platform cannot run on this host: <reason>.` | The plugin preflight found the named problem: `INTERNAL_API_KEY` unset or `changeme`; `PLUGIN_RUNNER_KEY` or `PLUGIN_CALL_TOKEN_SECRET` empty, `changeme`, too short or equal to another secret; the runner image does not build; or Docker refuses the plugin networks, volume or containers (for example another network already uses `10.213.80.0/24` or `10.213.81.0/24`) | Follow the hint after the reason. For a secret, delete its line from `.env` and rerun: `install`, `update` and `up` generate a new one. For the image, `docker compose build plugin-runner` shows the error; for the networks, `docker compose --profile plugins up --no-start plugin-runner plugin-gateway`. `./redamon.sh status` repeats the reason. An update that stopped here finishes when you run `./redamon.sh update` again |
 
 ---
 

@@ -208,7 +208,6 @@ describe('while it runs', () => {
     try {
       expect(row()).toMatchObject({ status: 'updating', activeVersion: '1.1.0', pendingVersion: '1.1.1' })
       expect((row().manifest as { version: string }).version).toBe('1.1.0')
-      vi.stubEnv('PLUGINS_ENABLED', 'true')
       vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', 'g'.repeat(64))
       const req = new NextRequest('http://localhost:3000/api/plugins/echo/actions/echo', {
         method: 'POST',

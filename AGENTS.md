@@ -95,7 +95,7 @@ scanners/             the 11 scan tools, each its own container image
   ai_attack_surface_scan/  LLM/AI attack-surface scanning
   gvm_scan/  github_secret_hunt/  trufflehog_scan/  baddns_scan/  wcvs/  codefix_sandbox/
 services/             supporting services (docker_broker, knowledge_base, postgres_db,
-                      plugin_runner: the optional plugin runner + plugin-gateway proxy image)
+                      plugin_runner: the plugin runner + plugin-gateway proxy image)
 testing/              e2e/ (Playwright) + guinea_pigs/ (vulnerable targets)
 tooling/              scripts/ (e.g. pytest_isolated.py), hooks/, deploy/
 docs/                 readmes/ (prose docs) + assets/ (media)

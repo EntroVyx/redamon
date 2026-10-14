@@ -6,7 +6,6 @@ import { bodyOwnerMatches, ownsScope } from '@/lib/plugins/changeSetAccess'
 import * as ov from '@/lib/plugins/overrides'
 import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
 import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill, validateSkillParts } from '@/lib/plugins/skillPartsRegistry'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /**
  * POST /api/plugins/overrides/change-sets/[id]/approve: make a proposed version active
@@ -26,7 +25,6 @@ const refuse = (status: number, code: string, error: string, extra: Record<strin
   NextResponse.json({ error, code, ...extra }, { status })
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   if (!sameOrigin(request)) return crossOriginResponse()
   const parsed = await readJsonBody(request)
   if (parsed instanceof NextResponse) return parsed

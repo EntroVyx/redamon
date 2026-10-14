@@ -3,7 +3,6 @@ import { skillDisplayName } from './overrideOps'
 import { dormantReason, findInstall, type DormantReason } from './registry'
 import { addedRiskLines, type RiskLine } from './riskFlags'
 import { SkillPartsRegistryError, clearSkillPartsCache, registrySkill, type RegistrySkill } from './skillPartsRegistry'
-import { pluginsEnabled } from './switch'
 
 /**
  * What the core review modal shows for one change set (design §6 core override routes;
@@ -153,7 +152,7 @@ export async function buildReviewModel(changeSetId: string): Promise<ReviewModel
     note: set.note,
     meta,
     replaces,
-    dormantReason: dormantReason(install, { switchOn: pluginsEnabled(), agentSupportsSeam: registryError !== 'agent_outdated' }),
+    dormantReason: dormantReason(install, { agentSupportsSeam: registryError !== 'agent_outdated' }),
     pendingCount: pending,
     registryError,
   }

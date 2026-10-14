@@ -19,9 +19,9 @@ const NONE = { bySkill: new Map<string, SkillSummary>(), rowActions: [] as Proje
 
 /**
  * The plugin facts the Agent Skills section needs for a saved project: the per-skill override
- * summary and the `project.skills.row` contributions. Both come from endpoints that 404 while
- * the platform is off, which resolves to "nothing" here — the section must never break on a
- * core page (RV-52). Null projectId (create mode) fetches nothing.
+ * summary and the `project.skills.row` contributions. A failed or refused fetch of either
+ * resolves to "nothing" here — the section must never break on a core page (RV-52). Null
+ * projectId (create mode) fetches nothing.
  *
  * State is only ever set from a finished fetch, filed under its project: a reload keeps the
  * current rows on screen until the new answer replaces them (so a focused Versions button

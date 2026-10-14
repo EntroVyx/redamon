@@ -44,7 +44,6 @@ beforeEach(() => {
   h.session = { userId: 'alice', role: 'standard' }
   h.effective = 'alice'
   h.audits = []
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
 })
 
 test('clears the active user-scope version and audits', async () => {

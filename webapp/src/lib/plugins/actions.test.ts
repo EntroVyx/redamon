@@ -42,7 +42,6 @@ beforeEach(async () => {
   seedWorld(db)
   h.eff = { userId: ALICE }
   h.session = { userId: ALICE, role: 'standard' }
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', 'a'.repeat(64))
   vi.stubEnv('ACCESS_ENFORCE', '')
@@ -188,12 +187,9 @@ describe('refusals before the runner is called', () => {
     expect((await run('think')).status).toBe(200)
   })
 
-  test('no session: 401; switch off: 404', async () => {
+  test('no session: 401', async () => {
     h.eff = null
     expect((await run('echo')).status).toBe(401)
-    h.eff = { userId: ALICE }
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    expect((await run('echo')).status).toBe(404)
     expect(runner.actionCalls).toEqual([])
   })
 })

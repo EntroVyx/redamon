@@ -70,6 +70,36 @@ describe('next change', () => {
     expect(screen.getByText('Change 1 of 2')).toBeInTheDocument()
   })
 
+  test('the unified view scrolls to and marks each run of changes too, and keeps it across the toggle', () => {
+    // jsdom has no scrollIntoView; record which element each jump scrolls to.
+    const scrolled: Element[] = []
+    const proto = Element.prototype as { scrollIntoView?: (arg?: ScrollIntoViewOptions) => void }
+    const original = proto.scrollIntoView
+    proto.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    try {
+      render(<TextDiff before={'a\nb\nc\nd\ne'} after={'a\nB\nc\nd\nE'} />)
+      fireEvent.click(screen.getByRole('button', { name: /unified/i }))
+      const lines = () => screen.getAllByTestId('textdiff-unified-line')
+      const next = screen.getByRole('button', { name: /next change/i })
+      fireEvent.click(next)
+      expect(screen.getByText('Change 1 of 2')).toBeInTheDocument()
+      expect(lines()[1]).toHaveAttribute('data-current', 'true')
+      expect(scrolled[scrolled.length - 1]).toBe(lines()[1])
+      fireEvent.click(next)
+      expect(screen.getByText('Change 2 of 2')).toBeInTheDocument()
+      // ops: a, -b, +B, c, d, -e, +E
+      expect(lines()[5]).toHaveAttribute('data-current', 'true')
+      expect(scrolled[scrolled.length - 1]).toBe(lines()[5])
+      fireEvent.click(screen.getByRole('button', { name: /side by side/i }))
+      expect(rows()[4]).toHaveAttribute('data-current', 'true')
+    } finally {
+      if (original) proto.scrollIntoView = original
+      else delete proto.scrollIntoView
+    }
+  })
+
   test('identical texts say so, and next change is disabled', () => {
     render(<TextDiff before={'same\ntext'} after={'same\ntext'} />)
     expect(screen.getByText('No changes')).toBeInTheDocument()

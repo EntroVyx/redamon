@@ -33,7 +33,6 @@ beforeEach(() => {
   db = createFakePrisma()
   h.db = db as unknown as Record<string, unknown>
   seedWorld(db)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   vi.stubEnv('PLUGIN_CALL_TOKEN_SECRET', CALL_SECRET)
   vi.stubEnv('AUTH_SECRET', AUTH)
   vi.stubEnv('INTERNAL_API_KEY', INTERNAL)
@@ -50,14 +49,6 @@ afterEach(() => {
 const getBody = { collection: 'notes', key: 'k1', owner: 'user' }
 
 describe('before anything is read', () => {
-  test('switch off: 404 plugins_disabled even with a valid token', async () => {
-    const t = await token()
-    vi.stubEnv('PLUGINS_ENABLED', 'false')
-    const r = await answer(await dataGet(gatewayRequest('data/get', getBody, { token: t })))
-    expect(r.status).toBe(404)
-    expect(r.body.code).toBe('plugins_disabled')
-  })
-
   test.each([null, 'text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x'])(
     'content type %s: 415',
     async (contentType) => {

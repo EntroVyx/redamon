@@ -130,7 +130,7 @@ export function OverrideReviewModal({
   )
 
   return (
-    <Modal isOpen onClose={onClose} title={title} size="large" closeOnOverlayClick={false} footer={footer}>
+    <Modal isOpen onClose={onClose} title={title} size="xlarge" closeOnOverlayClick={false} footer={footer}>
       {!model && !loadError && (
         <div className={styles.loading}>
           <Loader2 size={14} className={styles.spin} /> Loading the proposal…

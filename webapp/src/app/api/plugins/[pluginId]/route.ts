@@ -3,14 +3,12 @@ import { requireEffectiveUser } from '@/lib/access'
 import { isValidPluginId } from '@/lib/plugins/ids'
 import { buildPluginDetail, viewerIsAdmin } from '@/lib/plugins/pageModel'
 import { getSession } from '@/lib/session'
-import { pluginsDisabledResponse, pluginsEnabled } from '@/lib/plugins/switch'
 
 /** GET /api/plugins/[pluginId]: one plugin's entry; versions on disk, data usage and rollback for an admin. */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ pluginId: string }> }) {
-  if (!pluginsEnabled()) return pluginsDisabledResponse()
   const user = await requireEffectiveUser()
   if (user instanceof NextResponse) return user
   const { pluginId } = await params

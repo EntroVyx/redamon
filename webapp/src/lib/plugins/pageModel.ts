@@ -6,8 +6,9 @@ import { likePrefix } from './dataStore'
 import { hasKeptAnything, rollbackCheck, type RollbackCheck } from './lifecycle'
 import { PERMISSION_TEXT, isPluginPermission } from './permissions'
 import { PLUGIN_PLATFORM_VERSION } from './platformVersion'
+import { pluginIconPath } from './pluginIcon'
 import { overridesQualify } from './registry'
-import type { CatalogRelease } from './schemas/catalog'
+import type { CatalogRelease, PluginCatalog } from './schemas/catalog'
 import { dataLimits } from './settings'
 import { listVersions } from './staging'
 
@@ -61,6 +62,10 @@ export interface PluginEntry {
   id: string
   displayName: string
   description: string
+  /** Same-origin URL of the avatar the catalog names (api/plugins/[pluginId]/icon); absent when it names none. */
+  icon?: string
+  /** The plugin's documentation page, from the catalog. */
+  docsUrl?: string
   /** null while the catalog cannot be read: whether it still lists the plugin is unknown. */
   inCatalog: boolean | null
   state: CardState
@@ -77,7 +82,6 @@ export interface PluginEntry {
 }
 
 export interface PluginsPage {
-  enabled: true
   platformVersion: string
   isAdmin: boolean
   catalog: CatalogView
@@ -156,7 +160,7 @@ function installedView(row: PluginInstall, isAdmin: boolean): InstalledView {
 
 function entryOf(
   id: string,
-  meta: { displayName: string; description: string } | null,
+  meta: Pick<PluginCatalog['plugins'][number], 'displayName' | 'description' | 'icon' | 'docsUrl'> | null,
   releases: CatalogRelease[] | null,
   row: PluginInstall | null,
   loaded: LoadedCatalog | null,
@@ -198,6 +202,8 @@ function entryOf(
     update,
     installBlocked,
   }
+  if (meta?.icon) entry.icon = pluginIconPath(id, meta.icon.sha256)
+  if (meta?.docsUrl) entry.docsUrl = meta.docsUrl
   if (isAdmin && row && !installedState) entry.lastAttemptError = row.lastError
   return entry
 }
@@ -235,7 +241,7 @@ export async function buildPluginsPage(isAdmin: boolean): Promise<PluginsPage> {
     }
   }
   plugins.sort((a, b) => a.displayName.localeCompare(b.displayName))
-  return { enabled: true, platformVersion: PLUGIN_PLATFORM_VERSION, isAdmin, catalog: catalogView(loaded, error), plugins }
+  return { platformVersion: PLUGIN_PLATFORM_VERSION, isAdmin, catalog: catalogView(loaded, error), plugins }
 }
 
 export interface PluginDetail {

@@ -1,8 +1,7 @@
 /**
  * Models by feature shows one tile per plugin the user can choose a model for (F-16,
  * F-17, D-47): after the core tiles, badged "plugin", "Not set" by default, saved under
- * `plugin:<id>` like any feature. With the platform off its list answers 404 and the
- * section is exactly as before.
+ * `plugin:<id>` like any feature. When its list fails the section is exactly as before.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react'
@@ -100,7 +99,6 @@ describe('plugin tiles', () => {
   })
 
   test.each([
-    ['answers 404 (platform off)', { status: 404, body: { code: 'plugins_disabled' } }],
     ['fails', { status: 500, body: {} }],
     ['answers something that is not a list', { status: 200, body: { features: [] } }],
   ])('when the list %s: no plugin tile, the core tiles as before', async (_n, answer) => {

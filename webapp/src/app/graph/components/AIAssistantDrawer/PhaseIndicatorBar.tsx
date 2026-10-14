@@ -293,7 +293,7 @@ export function PhaseIndicatorBar({
                 {plugin.chatSessionActions.map((item) => (
                   <button
                     key={item.key}
-                    className={styles.settingsDropdownItem}
+                    className={`${styles.settingsDropdownItem} ${styles.pluginItem}`}
                     disabled={!conversationId}
                     title={conversationId ? undefined : 'Send a message first'}
                     onClick={() => {

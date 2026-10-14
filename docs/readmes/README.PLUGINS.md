@@ -15,9 +15,9 @@ What a specific plugin does (for example the first one, **`skiller`**) is docume
 that plugin's own folder in `redamon-plugins`, never here. This file describes the host;
 the plugins are its guests.
 
-> **Status: built, plugin platform 1.0.0, off by default** (`PLUGINS_ENABLED=false`). The plugin
-> tables and stores, the platform switch, the Plugin Manager and the Plugins page, the catalog
-> signature check, the Gateway, the UI host
+> **Status: built, plugin platform 1.0.0, part of every RedAmon install** (it needs Docker
+> Engine 28.0.0 or newer, §5.4). The plugin tables and stores, the Plugin Manager and the
+> Plugins page, the catalog signature check, the Gateway, the UI host
 > ([`webapp/src/lib/plugins/`](../../webapp/src/lib/plugins/)) and the Runner
 > ([`services/plugin_runner/`](../../services/plugin_runner/)) all exist. The plugin repository is
 > public at [`samugit83/redamon-plugins`](https://github.com/samugit83/redamon-plugins) with a
@@ -183,7 +183,7 @@ flowchart TB
 The six platform components (§7) are all **generic**: none contains logic for `skiller` or
 any other plugin. The Runner sits alone on `plugins-net`, an internal network with no route out.
 The only way between it and the webapp is the `plugin-gateway` proxy, a small container on
-`plugins-net` and `plugins-edge` (which the webapp joins while plugins are on) that passes
+`plugins-net` and `plugins-edge` (which the webapp joins through the overlay of §5.4) that passes
 plugin code's calls to the Gateway routes and the run list, and the webapp's calls to the
 supervisor, and nothing else. Neither network publishes a host port, and the proxy is not on the
 `redamon` network where Postgres, Neo4j and the agent listen. The dashed line is the only way plugin output can change core behaviour:
@@ -254,19 +254,36 @@ loads plugin code into its own process:
 
 ### 5.4 How it runs, and what happens when it is down
 
-The Runner is a service of the stack that runs only while the platform is on. Its two
-services, `plugin-runner` and the `plugin-gateway` proxy (one image, `redamon-plugin-runner`),
-are in the `plugins` compose profile, and the webapp's plugin wiring (the `plugins-edge`
-network and the plugins volume) is in the `docker-compose.plugins.yml` overlay. `./redamon.sh
-install` and `update` build the image in a separate step whose failure never stops them;
-`./redamon.sh up` loads the overlay and starts the profile only while `PLUGINS_ENABLED` is
-effectively on, and removes both services otherwise. With the switch off nothing plugin-related
-is created, and plain `docker compose up -d` never loads the overlay.
+The Runner is a service of every RedAmon stack. Its two services, `plugin-runner` and the
+`plugin-gateway` proxy (one image, `redamon-plugin-runner`), are in the `plugins` compose
+profile, and the webapp's plugin wiring (the `plugins-edge` network and the plugins volume) is
+in the `docker-compose.plugins.yml` overlay. `./redamon.sh install`, `update`, `up` and `up dev`
+load the overlay, and only they start the profile, once the core services are up
+(`plugins_converge`, which also recreates both services after a runner rebuild). `install`
+builds the image, `update` rebuilds it when its sources or a compose file changed, and `up`
+builds it when it is missing; a build that fails stops the command. A plain `docker compose up
+-d` starts neither service and does not load the overlay: the webapp then has no plugin network
+or volume, and every plugin action fails until `./redamon.sh up`. `update` recreates the running
+webapp when it is not on `redamon-plugins-edge` or the overlay changed. Only
+`./redamon.sh purge` removes the plugins volume.
 
-Turning it on needs Docker Engine 28.0.0 or newer (the networks use `gateway_mode_ipv4:
-isolated`). A host that cannot run the platform (an older engine, a weak internal key, a
-missing secret, a runner image that does not build, too little memory) starts everything else
-with plugins off for that run, prints the reason, and `./redamon.sh status` repeats it.
+RedAmon needs **Docker Engine 28.0.0 or newer**, because both plugin networks use
+`gateway_mode_ipv4: isolated` (without it a worker reaches the host itself). `install`,
+`update` (before its `git pull`), `up` and `up dev` check the engine before building anything
+and stop on an older one. After the secrets are generated and before any core service is
+created, a preflight checks that this host can run the platform: `INTERNAL_API_KEY`,
+`PLUGIN_RUNNER_KEY` and `PLUGIN_CALL_TOKEN_SECRET` set and not `changeme`; the token secret at
+least 32 characters and different from `AUTH_SECRET`, `PLUGIN_RUNNER_KEY`, `INTERNAL_API_KEY`
+and `AGENT_WS_TICKET_SECRET`; the engine; the runner image; and Docker accepting the plugin
+networks, volume and containers. A failure stops the command with `The plugin platform cannot
+run on this host: <reason>.`, and `./redamon.sh status` prints the same reason. The memory gate
+always budgets the runner, so a host too small for it gets the ordinary memory refusal. When
+the core is up but the two plugin services do not start, the command stops with `The plugin
+services did not start` and prints no ready banner. An update that stops after its `git pull`
+leaves `.update-pending` (gitignored) holding the commit it started from: fix the cause and run
+`./redamon.sh update` again, which diffs from that commit ("Finishing the update that started
+at ...") and so rebuilds everything the release changed. Until then `./redamon.sh up` still
+starts the stack but warns that some images may be older than the code.
 
 The Runner is small, and idle when no plugin is installed. It has container limits
 (`mem_limit` sized by the memory governor, `pids_limit`, `cpus`), a healthcheck, and `json-file`
@@ -288,7 +305,7 @@ plugin code (§8.2).
 redamon-plugins/
 ├── catalog.json                 # written by the release, revoke and re-sign workflows, never by hand
 ├── catalog.json.sig             # detached signature over catalog.json
-├── .github/workflows/           # ci.yml, release.yml, revoke.yml, catalog-resign.yml
+├── .github/workflows/           # ci.yml, release.yml, revoke.yml, catalog-resign.yml, listings.yml
 ├── .platform-sdk/<version>/     # unedited copy of the platform SDK and schemas, per platform version
 ├── tools/                       # validate, pack, catalog, sign, gen_key, semver, sync_sdk, run_tests
 ├── skiller/
@@ -298,6 +315,8 @@ redamon-plugins/
 │   ├── ui/                      # screen descriptions (JSON), drawn by the UI host
 │   ├── migrations/              # data migrations: 0002_up.py, 0002_down.py, ... (§9.5)
 │   ├── tests/                   # never packed
+│   ├── listing.json             # optional, never packed: the card's icon and documentation link (§6.2)
+│   ├── icon.jpg                 # optional, never packed: that icon (JPEG, PNG or WebP, square, at most 256 KiB)
 │   ├── CHANGELOG.md
 │   └── README.md                # what skiller does is documented HERE, not in base
 ├── <next-plugin>/
@@ -328,9 +347,9 @@ The signing key lives in that environment; release tags are protected. CODEOWNER
 for every plugin folder and for the tools, but it is enforced only through pull-request review,
 which the `master` ruleset does not require (one maintainer pushes directly), so the reviewer of
 the `release` environment is the gate that matters: one key signs every plugin in the repo.
-§6.4 covers the keys, the workflows and the one-time repository setup. The maintainer's
-step-by-step for releasing a new version or adding a plugin is in the plugin repository's
-[README](https://github.com/samugit83/redamon-plugins#releases) ("Releases", "Adding a plugin").
+§6.4 covers the keys, the workflows and the one-time repository setup. Who may add or change a
+plugin, and how, differs for an administrator with write access and an outside author working
+through a pull request: §6.6.
 
 **Why one repository carries independent versions.** A tag marks one commit, and CI packs
 only the tagged plugin's folder as it was at that commit. `skiller-v1.0.0` and
@@ -348,6 +367,11 @@ whose range includes it.
       "id": "skiller",
       "displayName": "Skiller",
       "description": "…",
+      "icon": {                             // optional, from listing.json
+        "url": "https://raw.githubusercontent.com/<owner>/redamon-plugins/master/skiller/icon.jpg",
+        "sha256": "…", "size": 43586, "type": "image/jpeg"
+      },
+      "docsUrl": "https://github.com/samugit83/redamon/wiki/Plugin-Skiller",   // optional
       "releases": [
         {
           "version": "1.0.0",
@@ -404,6 +428,16 @@ whose range includes it.
   under a size cap and a timeout.
 - **Consent first.** Permissions are listed per release, so the Plugins page can show the
   consent prompt *before* anything is downloaded.
+- **Listing.** `icon` and `docsUrl` are presentation only. They come from the plugin folder's
+  `listing.json`, not from the manifest, so they are not part of the plugin's contract: a
+  catalog that carries them still installs on a platform that predates them, which ignores the
+  fields. Release CI writes them with each release, and the hand-run `listings.yml`
+  (`tools/catalog.py listings`) refreshes them without one. The icon URL is a file on a branch,
+  which can change after signing, so the webapp shows it only when the bytes it fetched match
+  the signed `sha256` and their magic bytes match `type`. It fetches the icon through the same
+  download guard as an archive (at most 256 KiB) and serves it from its own origin, because the
+  CSP of the plugin pages allows no other image source. `docsUrl` must be `https`, because it
+  becomes a link on the card.
 
 ### 6.3 The manifest (`plugin.json`)
 
@@ -604,6 +638,76 @@ harness in `skiller/eval/`. It uses only generic platform surfaces: `session:rea
 window. The base repository holds it only as test data: the `pluginsSkiller.spec.ts` flows
 and their fixtures.
 
+### 6.6 Adding a plugin: administrators and outside contributors
+
+A plugin reaches the repository by one of two paths, and reaches users through one gate. The
+gate is the **release**, not the merge: one key signs every plugin in the catalog, and only an
+administrator can create a release tag or approve the `release` environment that holds it.
+
+| | Administrator (write access to `redamon-plugins`) | Outside contributor (no write access) |
+|---|---|---|
+| Where the code goes | Pushes to `master` directly: the `master` ruleset requires no pull request, because the release bot commits the catalog there | Works in a fork and opens a pull request against `master` |
+| CI (`ci.yml`) | Runs on the push | Runs on the pull request, with a read-only token and no secrets; GitHub may hold a first-time contributor's run until an administrator starts it |
+| Review and merge | The administrator's own | An administrator reviews, may ask for changes, and is the only one who can merge |
+| Release tag `<id>-v<x.y.z>` | Creates it (ruleset `release tags` lets only an admin) | Cannot |
+| Catalog signature | Approves the `release` deployment (its required reviewer is the owner) | Cannot |
+| Procedure | `redamon-plugins` README: "Adding a plugin (maintainers)", "Releasing a new version of a plugin", "Merging a contributed plugin (maintainers)" | `redamon-plugins` [CONTRIBUTING.md](https://github.com/samugit83/redamon-plugins/blob/master/CONTRIBUTING.md); for users, the wiki page [Building a Plugin](https://github.com/samugit83/redamon/wiki/Building-a-Plugin) |
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#EEF2F7", "primaryTextColor": "#0F172A", "primaryBorderColor": "#475569", "secondaryColor": "#E2E8F0", "tertiaryColor": "#F8FAFC", "lineColor": "#7B8794", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#94A3B8", "titleColor": "#0F172A", "edgeLabelBackground": "#FFFFFF", "relationLabelBackground": "#FFFFFF", "relationLabelColor": "#0F172A", "attributeBackgroundColorOdd": "#FFFFFF", "attributeBackgroundColorEven": "#F8FAFC", "actorBkg": "#EEF2F7", "actorBorder": "#475569", "actorTextColor": "#0F172A", "actorLineColor": "#7B8794", "signalColor": "#7B8794", "signalTextColor": "#0F172A", "labelBoxBkgColor": "#E2E8F0", "labelBoxBorderColor": "#475569", "labelTextColor": "#0F172A", "loopTextColor": "#0F172A", "noteBkgColor": "#FFF7D6", "noteTextColor": "#0F172A", "noteBorderColor": "#B7A24A", "sequenceNumberColor": "#FFFFFF"}}}%%
+flowchart LR
+    subgraph EXT["outside contributor"]
+        F["fork + branch<br/>build, tools/run.sh validate,<br/>tools/run_tests.sh"] --> PR["pull request<br/>to master"]
+    end
+    subgraph ADM["administrator (write access)"]
+        OWN["own plugin:<br/>push to master"]
+        REV["review the diff,<br/>run it, ask for changes"] --> MRG["merge"]
+        TAG["tag &lt;id&gt;-v&lt;x.y.z&gt;<br/>on a reviewed commit"] --> APR["approve the<br/>release environment"]
+    end
+    PR -- "CI: no secrets" --> REV
+    MRG --> TAG
+    OWN -- "CI green" --> TAG
+    APR --> CAT["archive published,<br/>catalog signed"]
+    CAT --> RA["every RedAmon: the release<br/>appears on the Plugins page;<br/>each admin installs it"]
+```
+
+**Outside contributor, step by step** (the commands are in CONTRIBUTING.md):
+
+1. Optional, recommended for anything larger than a fix: open an issue in `redamon-plugins`
+   describing the plugin, its permissions and where it appears. A plugin that needs a platform
+   capability that does not exist yet (an extension point, an SDK call, a screen primitive)
+   starts as an issue in this repository instead (§11.4).
+2. Fork `samugit83/redamon-plugins` and create `<id>/` (§6.1, the manifest of §6.3,
+   [README.PLUGIN_SDK.md](README.PLUGIN_SDK.md)): version `1.0.0`, `dataVersion` 1, the fewest
+   permissions that work, tests against the SDK's fakes, a README that says what it reads, stores
+   and proposes, and a `CHANGELOG.md`.
+3. Check it with `tools/run.sh validate <id>` and `tools/run_tests.sh <id>`, both in the pinned
+   tools image; optionally install it on a local RedAmon from a catalog signed with a development
+   key (`PLUGINS_EXTRA_TRUSTED_KEYS`, **Install from file**, §9.7).
+4. Add `/<id>/ @samugit83` to `CODEOWNERS` and the plugin's block to the README; touch nothing
+   else (not the catalog, `tools/`, the workflows, `.platform-sdk/` or another plugin).
+5. Open the pull request, then **wait for an administrator**: the review, any requested changes,
+   and the merge are theirs.
+6. After the merge an administrator releases it; the contributor has no step left. The release
+   appears on every installation's Plugins page within about six minutes, as **Not installed**.
+
+A new version of a contributed plugin takes the same path, with `version` raised and a
+`CHANGELOG.md` section. A contributor is never given write access for their plugin:
+`CODEOWNERS` names an administrator for every folder.
+
+**Administrator, own plugin:** create the folder on `master` with the same files and checks,
+push, wait for CI, then tag `<id>-v<x.y.z>`, push the tag and approve the `release` deployment.
+
+**Administrator, merging a contributed plugin:** read the whole diff before starting a held CI
+run (it has no secrets, but it runs the contributor's code); check the permissions, that the code
+is readable and `vendor/` is pure Python with its licences, that no real target data is in the
+tests or fixtures, that nothing writes transcripts to the log, and that the pull request touches
+only its plugin's folder, `CODEOWNERS` line and README block. Run it yourself
+(`gh pr checkout <n>`, the two commands above, and a local install when the plugin changes what
+the agent reads). Merge, then release from your own clone with the tag on the merge commit.
+**Never tag a commit whose plugin folder you have not reviewed**: `CODEOWNERS` is advisory here
+(§6.2), so the tag and the approval are the review that counts.
+
 ---
 
 ## 7. The platform components
@@ -617,11 +721,9 @@ whole lifecycle of §9, including **reconciliation and crash recovery** (§9.7).
 bar ([GlobalHeader.tsx](../../webapp/src/components/layout/GlobalHeader/GlobalHeader.tsx))
 and a page under `webapp/src/app/plugins/`.
 
-- **The platform switch.** `PLUGINS_ENABLED` in `.env`, off by default
-  ([switch.ts](../../webapp/src/lib/plugins/switch.ts)). While it is off, every plugin route
-  answers 404, the Plugins button is hidden and the product behaves as if plugins did not
-  exist. There are two gates: whoever runs the server turns the platform on, then an admin
-  installs.
+- **Always served.** The Plugins page, every plugin route and the Plugins entry in the top bar
+  exist on every install. Until an admin installs a plugin, the product behaves exactly as
+  without one; a runner that is down is a state the page shows, not a reason to hide it.
 - **Who can do what.** Installing, updating, enabling, disabling and uninstalling are
   **instance-wide, admin-only** actions, because they put code on the host. The lifecycle
   routes read the admin role from the database on every request
@@ -683,16 +785,18 @@ What a plugin does with that single installation stays scoped:
   [`reconcile.ts`](../../webapp/src/lib/plugins/reconcile.ts) and
   [`exportData.ts`](../../webapp/src/lib/plugins/exportData.ts): §9.
 - Routes under `/api/plugins/`: `GET /` and `GET /[pluginId]` for every signed-in user (admins
-  also see errors, versions on disk, data usage and the rollback check); for admins
+  also see errors, versions on disk, data usage and the rollback check), and
+  `GET /[pluginId]/icon` ([pluginIcon.ts](../../webapp/src/lib/plugins/pluginIcon.ts)), which
+  serves the catalog's icon only when it matches the signed hash (§6.2); for admins
   `POST /[pluginId]/{install,update,rollback,enable,disable,uninstall}`,
   `GET /[pluginId]/{export,logs}` and `POST /offline-install` (at most 10 MiB, what Next passes
   through middleware); and `POST /api/internal/plugins/reconcile` for the recon orchestrator.
-  Every one answers 404 while the switch is off; a lease conflict is `409 plugin_busy`, an
-  operation another one overtook `409 plugin_changed`. A rollback names the version the admin
-  confirmed (`{toVersion}`); the export refuses a cross-site request, since it opens the purge
-  gate.
+  A lease conflict is `409 plugin_busy`, an operation another one overtook
+  `409 plugin_changed`. A rollback names the version the admin confirmed (`{toVersion}`); the
+  export refuses a cross-site request, since it opens the purge gate.
 - The page: one card per catalog plugin (and per installed or kept plugin the catalog does not
-  list) with the actions its state allows, the consent prompt, the uninstall dialog (keep, or
+  list), two to a row, each with the catalog's icon beside its text (a placeholder when there is
+  none), its documentation link in the header, and the actions its state allows, the consent prompt, the uninstall dialog (keep, or
   export then delete everything with the plugin id typed; the same gates for Delete kept data),
   Install from file (worded as an update for an installed plugin, with the restore question
   when one is needed), the catalog's state, a banner when the runner is down, and for admins a
@@ -943,11 +1047,9 @@ webapp/src/app/plugins/
   unreachable. Those names are reserved plugin ids
   ([ids.ts](../../webapp/src/lib/plugins/ids.ts)), and a test fails when a new static folder
   is not added there.
-- The route shows the not-found screen when the switch is off, when the plugin is not enabled
-  and `ready`, or when the screen is not listed in its manifest. With the switch off the
-  middleware gives it a 404 status; otherwise the status stays 200, because the root layout
-  renders every page inside a Suspense boundary (a known limit). When none of these apply, the
-  screen is validated again
+- The route shows the not-found screen when the plugin is not enabled and `ready`, or when the
+  screen is not listed in its manifest. The status stays 200, because the root layout renders
+  every page inside a Suspense boundary (a known limit). Otherwise the screen is validated again
   against the schema and drawn by the host, which fetches its data from
   `POST /api/plugins/<id>/actions/<action>`.
 - Contributions reach the browser from `GET /api/plugins/contributions`, built from the
@@ -1067,8 +1169,8 @@ repo still grows, but only in **generic capability**, never in plugin logic.
 **As built (platform 1.0.0, UI host and the core review screens).** Where a person meets
 plugin UI, and where the skill-version decisions live:
 
-- **Contributions** come from `GET /api/plugins/contributions` (signed-in, 404 while the switch
-  is off), built from the manifest copy of every plugin that shows contributions (enabled,
+- **Contributions** come from `GET /api/plugins/contributions` (signed-in), built from the
+  manifest copy of every plugin that shows contributions (enabled,
   `ready` or `updating`, not revoked). An `updating` plugin keeps its entries, marked
   "updating". Icons are an allowlist; any other name draws the plugin mark.
 - **Plugin pages** (`/plugins/<id>[/<screen>]`) draw the `nav` screen, or another screen the
@@ -1132,7 +1234,7 @@ flowchart LR
 ```
 
 The manifest is copied into the `PluginInstall` row at install, so a page load never reads the
-volume. The contributions route answers 404 while the switch is off, and the hooks then show no
+volume. With no plugin enabled the route returns an empty list, and the hooks then show no
 plugin UI at all.
 
 | Point | Drawn where | Drawn by |
@@ -1735,8 +1837,9 @@ flowchart TB
   (§7.2), so a Runner restart never needs database access.
 
 **As built.** The recon orchestrator asks for a reconcile every `PLUGIN_RECONCILE_INTERVAL`
-(300 s by default), in the background of its reaper so a slow webapp never delays it, and only
-while `PLUGINS_ENABLED` is on (TD-20).
+(300 s by default), in the background of its reaper so a slow webapp never delays it (TD-20).
+Only a 404 (a webapp image without the route) makes it stop asking, until the orchestrator
+restarts; any other failure is retried at the next interval.
 
 - **One reconcile at a time**, under a platform-wide lease; a second answers `skipped: busy`.
   Each run does bounded work: at most one heal download and a 20-second budget.
@@ -1756,35 +1859,39 @@ while `PLUGINS_ENABLED` is on (TD-20).
 - A failed plugin is retried; expired data rows are deleted; a job past its deadline is
   failed with `timeout`.
 
-### 9.8 Turning the platform on, off and back: the operator's checklist
+### 9.8 Install, upgrade and roll back: the operator's checklist
 
-**Turning it on**
+**Installing or upgrading RedAmon**
 
-1. `./redamon.sh update` (or `install`): builds the runner image and writes `PLUGINS_ENABLED=false`,
-   `PLUGIN_RUNNER_KEY` and `PLUGIN_CALL_TOKEN_SECRET` into `.env`.
-2. Check that `docker version --format '{{.Server.Version}}'` reports 28.0.0 or newer.
-3. Set `PLUGINS_ENABLED=true` in `.env` and run `./redamon.sh up`. It starts `plugin-runner` and
-   `plugin-gateway` and recreates the webapp with the overlay; if the preflight fails it prints
-   why and starts everything else with plugins off (`./redamon.sh status` repeats the reason).
-4. As an admin: **Plugins** → the plugin's card → **Install**, and accept its permissions.
-5. Each user who runs a plugin that calls a model: Global Settings → LLM Providers → Models by
+1. Check that `docker version --format '{{.Server.Version}}'` reports 28.0.0 or newer. An older
+   engine stops `install` and `update` before they build anything (`update` before its
+   `git pull`).
+2. `./redamon.sh install`, or `./redamon.sh update` on an existing install. Either writes
+   `PLUGIN_RUNNER_KEY` and `PLUGIN_CALL_TOKEN_SECRET` into `.env` when they are missing or
+   empty (and removes a leftover `PLUGINS_ENABLED` line), builds the runner image, and starts
+   `plugin-runner` and `plugin-gateway` after the core services. When the plugin preflight
+   fails, the command stops and names the cause (§5.4); `./redamon.sh status` repeats it. When
+   an update stops after its `git pull`, fix the cause and run `./redamon.sh update` again: it
+   finishes the stopped update.
+3. As an admin: **Plugins** → the plugin's card → **Install**, and accept its permissions.
+4. Each user who runs a plugin that calls a model: Global Settings → LLM Providers → Models by
    feature → the plugin's tile → choose a model.
-6. For Skiller: in a finished chat, gear menu → **Improve skill from this session**; review;
+5. For Skiller: in a finished chat, gear menu → **Improve skill from this session**; review;
    approve.
 
-On a single-host deploy, set the flag in the deploy's `.env` and run `./deploy.sh update`; the
-server needs outbound HTTPS to the catalog and release hosts (§6.2).
+On a single-host deploy, `./deploy.sh init`, `harden` and `update` upgrade Docker to 28.0.0 or
+newer when it is older (`update` before its pull), and the secrets gate refuses a weak plugin
+secret. The server needs outbound HTTPS to
+the catalog and release hosts (§6.2).
 
-**Undoing**
+**Rolling back**
 
 - One skill: **Skill versions** (or Versions in project settings) → **Reset to factory**. It
   works whatever state the plugin is in.
-- One plugin: **Disable** (code and data stay) or **Uninstall** (keep the data, or export then
-  purge, §9.6).
-- The platform: `PLUGINS_ENABLED=false` and `./redamon.sh up`. Menus, the page and the plugin
-  services go away, plugin routes answer 404, and the agent uses the factory text from its next
-  turn (a run in progress keeps the text it started with). Tables and the plugins volume stay and
-  come back when the switch is turned on again.
+- One plugin: **Roll back** to its previous version (§9.5), **Disable** (code and data stay) or
+  **Uninstall** (keep the data, or export then purge, §9.6). A disabled or uninstalled plugin's
+  overrides stop applying from the agent's next turn (a run in progress keeps the text it
+  started with).
 - **Before running an older RedAmon image on this database**, export: each plugin's Details →
   Export data, or `docker compose exec postgres pg_dump -U redamon -d redamon -t 'plugin_*' >
   plugins-backup.sql`. The older image's `prisma db push --accept-data-loss` drops the plugin
@@ -1888,8 +1995,7 @@ it (principle 5).
   its result; Skiller does not use this point. An action's own `resultScreen` is accepted and
   checked at install but opened by no point (a form's `resultScreen` is). Both are candidates for
   a minor platform release.
-- A plugin page the route refuses while the switch is on shows the not-found screen with HTTP
-  status 200 (§7.5).
+- A plugin page the route refuses shows the not-found screen with HTTP status 200 (§7.5).
 
 ---
 

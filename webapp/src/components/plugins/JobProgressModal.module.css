@@ -16,6 +16,66 @@
   animation: spin 1s linear infinite;
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A long stage (a model call can run for minutes) shows only a small spinner, which reads
+   as frozen. This indeterminate bar keeps moving so the action never looks stuck. */
+.jobProgressTrack {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-primary, #6366f1) 14%, transparent);
+  overflow: hidden;
+}
+
+.jobProgressBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--accent-primary, #6366f1);
+  animation: jobIndeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes jobIndeterminate {
+  0%   { left: -40%; width: 40%; }
+  50%  { left: 30%;  width: 55%; }
+  100% { left: 100%; width: 40%; }
+}
+
+/* 1 of 3 → 2 of 3 → 3 of 3, parsed from the plugin's "Stage" progress field. */
+.jobSteps {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.jobStep {
+  flex: 1;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border-default, #334155);
+}
+
+.jobStepOn {
+  background: var(--accent-primary, #6366f1);
+}
+
+.jobStepActive {
+  background: var(--accent-primary, #6366f1);
+  animation: jobStepPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes jobStepPulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+
 .jobFields {
   display: flex;
   flex-direction: column;

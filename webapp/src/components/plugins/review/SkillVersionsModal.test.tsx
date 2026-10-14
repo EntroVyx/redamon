@@ -94,6 +94,12 @@ describe('rows', () => {
     expect(within(factory).queryByRole('button', { name: /^Delete$/ })).toBeNull()
   })
 
+  test('the dialog is the wider review size', async () => {
+    draw()
+    await screen.findByTestId('version-factory')
+    expect(screen.getByRole('dialog').className).toContain('modalXLarge')
+  })
+
   test('the skill selector lists the 14 built-in skills and defaults to the initial one', async () => {
     draw()
     const select = (await screen.findByLabelText(/skill/i)) as HTMLSelectElement

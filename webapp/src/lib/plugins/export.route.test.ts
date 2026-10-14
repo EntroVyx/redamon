@@ -35,7 +35,6 @@ beforeEach(() => {
   h.audit = []
   h.session = { userId: 'user-admin', role: 'admin' }
   setNowForTests(() => NOW)
-  vi.stubEnv('PLUGINS_ENABLED', 'true')
   db.seed('user', [
     { id: 'user-admin', email: 'admin@example.com', role: 'admin' },
     { id: 'user-alice', email: 'alice@example.com', role: 'standard' },
@@ -61,7 +60,6 @@ beforeEach(() => {
 
 afterEach(() => {
   setNowForTests(null)
-  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
