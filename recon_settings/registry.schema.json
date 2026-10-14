@@ -53,6 +53,8 @@
         "traffic": { "$ref": "#/definitions/traffic" },
         "roe_capped": { "type": "boolean" },
         "mcp": { "enum": ["settable", "create_only", "never"] },
+        "roe_parse": { "enum": ["allow", "deny", "tighten_only"] },
+        "roe_safe_value": {},
         "rescope": { "type": "boolean" },
         "meaning": { "type": "string", "minLength": 1 },
         "bounds": {

@@ -21,6 +21,11 @@
  *   3. THE RESULT IS A PROPOSAL. Nothing here writes. It returns a diff for a
  *      person to confirm.
  *
+ * Two registry classes narrow what an operator may set to what a DOCUMENT may
+ * set (`roe_parse`): `deny` for system prompts, callback hosts, tunnels and the
+ * model, and `tighten_only` for the safety switches a document may turn on but
+ * never off. Both are reported as rejected, with the reason.
+ *
  * There is no literal field-name list in this file, and there must never be one.
  * Field names appear in the parse path in exactly one place: the registry.
  */
@@ -61,8 +66,26 @@ export interface ParseProposal {
  * quietly narrowing what a document can do.
  */
 export function isParseWritable(spec: RegistryField): boolean {
+  if (spec.roe_parse === 'deny') return false
   if (spec.deny_reason === 'engagement-record') return true
   return spec.mcp === 'settable'
+}
+
+export const DENIED_TO_DOCUMENTS =
+  'a Rules of Engagement document may never set this; change it in the project settings'
+
+/**
+ * Why a value a document proposes for a parse-writable field is refused, or
+ * null. The registry validator first, then the `tighten_only` rule: a safety
+ * switch may only be moved to its safe value.
+ */
+export function parseValueProblem(key: string, spec: RegistryField, value: unknown): string | null {
+  const problem = validateValue(key, spec, value, undefined)
+  if (problem) return problem
+  if (spec.roe_parse === 'tighten_only' && !sameValue(value, spec.roe_safe_value)) {
+    return `a document may only tighten this setting (to ${JSON.stringify(spec.roe_safe_value)})`
+  }
+  return null
 }
 
 /**
@@ -108,12 +131,16 @@ export function buildParseProposal(
     if (value === null || value === undefined) continue
 
     const spec = field(key)
+    if (spec?.roe_parse === 'deny') {
+      rejected.push({ key, value, why: DENIED_TO_DOCUMENTS })
+      continue
+    }
     if (!spec || !isParseWritable(spec)) {
       ignored.push(key)
       continue
     }
 
-    const problem = validateValue(key, spec, value, undefined)
+    const problem = parseValueProblem(key, spec, value)
     if (problem) {
       rejected.push({ key, value, why: problem })
       continue
@@ -135,7 +162,7 @@ export function buildParseProposal(
 }
 
 /** Structural equality, so an unchanged list is not reported as a change. */
-function sameValue(a: unknown, b: unknown): boolean {
+export function sameValue(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((v, i) => sameValue(v, b[i]))

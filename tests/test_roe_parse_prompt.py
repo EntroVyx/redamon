@@ -91,11 +91,16 @@ def test_p10_every_named_key_is_writable_by_the_parse_path():
 
 
 def test_p10_parse_writable_is_settable_plus_the_record_and_nothing_else():
-    """The exact shape of the widening, so it cannot grow by accident."""
+    """The exact shape of the widening, so it cannot grow by accident.
+
+    Minus `roe_parse: deny`: the operator settings a document may never set.
+    """
     writable = {k for k, f in fields().items() if roe_prompt.is_parse_writable(k, f)}
     settable = {k for k, f in fields().items() if f["mcp"] == "settable"}
     record = {k for k, f in fields().items() if f.get("deny_reason") == "engagement-record"}
-    assert writable == settable | record
+    denied = {k for k, f in fields().items() if f.get("roe_parse") == "deny"}
+    assert denied
+    assert writable == (settable | record) - denied
     # And the record really is closed to MCP, or the widening would be moot.
     assert all(fields()[k]["mcp"] == "never" for k in record)
 
@@ -200,6 +205,9 @@ def test_p11_a_stated_type_is_the_enforced_one(key):
     """
     spec = fields()[key]
     stated = _stated_lines()[key]
+    if spec.get("roe_parse") == "tighten_only":
+        assert stated == "only " + json.dumps(spec["roe_safe_value"]), f"{key}: stated {stated!r}"
+        return
     expected = {
         "boolean": "true or false",
         "string-list": "a list of strings",
@@ -315,3 +323,77 @@ def test_p13_the_endpoint_returns_503_naming_both_digests():
     assert "status_code=503" in refusal
     assert "promptRegistryDigest" in refusal
     assert "loadedRegistryDigest" in refusal
+
+
+# --- roe_parse: what an operator may set and a document may not --------------------------
+
+# Validators whose value is free-form enough to carry a host, a URL, a prompt or a
+# payload. A field with one of these, or any agent field, must be classified.
+_FREE_FORM = {"free_text", "hostname", "hostname_list", "url", "json_object"}
+
+
+def test_every_agent_or_free_form_field_a_document_could_reach_is_classified():
+    """A new agent field cannot silently become document-writable.
+
+    Without this, the next system prompt, callback host or approval gate added to
+    the agent would land in the parse catalogue by default, because it is
+    `settable` like every other tuning field.
+    """
+    unclassified = sorted(
+        k for k, f in fields().items()
+        if (f["mcp"] == "settable" or f.get("deny_reason") == "engagement-record")
+        and (f["tool"] == "agent" or f.get("validator") in _FREE_FORM)
+        and f.get("roe_parse") not in ("allow", "deny", "tighten_only")
+    )
+    assert unclassified == []
+
+
+def test_a_denied_field_is_not_in_the_catalogue():
+    denied = {k for k, f in fields().items() if f.get("roe_parse") == "deny"}
+    assert denied
+    assert sorted(denied & set(ROE_PARSE_FIELDS)) == []
+
+
+def test_the_controls_a_document_must_never_relax_are_tighten_only():
+    """The plan's list, by name, because each is a decision rather than a class."""
+    expected = {
+        "agentGuardrailEnabled": True,
+        "agentRequireApprovalForExploitation": True,
+        "agentRequireApprovalForPostExploitation": True,
+        "agentRequireToolConfirmation": True,
+        "agentKaliInstallEnabled": False,
+        "agentNgrokTunnelEnabled": False,
+        "agentChiselTunnelEnabled": False,
+        "agentActivatePostExplPhase": False,
+    }
+    actual = {
+        k: f.get("roe_safe_value") for k, f in fields().items() if f.get("roe_parse") == "tighten_only"
+    }
+    assert actual == expected
+
+
+def test_prompts_callbacks_and_the_model_are_denied():
+    for key in [
+        "agentInformationalSystemPrompt", "agentExplSystemPrompt", "agentPostExplSystemPrompt",
+        "agentLhost", "agentLport", "agentOpenaiModel", "agentToolPhaseMap", "attackSkillConfig",
+        "ssrfOobProvider", "ssrfCustomInternalTargets", "katanaScope",
+    ]:
+        assert fields()[key].get("roe_parse") == "deny", key
+
+
+def test_the_document_artefacts_are_upload_managed_and_not_parseable():
+    """A document cannot describe itself, and a settings save cannot rewrite it."""
+    for key in ["roeDocumentData", "roeDocumentName", "roeDocumentMimeType", "roeRawText", "roeParsedJson"]:
+        spec = fields()[key]
+        assert spec.get("deny_reason") == "upload-managed", key
+        assert spec.get("written_by"), key
+        assert spec.get("readable") is False, key
+        assert key not in ROE_PARSE_FIELDS, key
+
+
+def test_the_webapp_holds_the_same_digest_for_its_handshake():
+    """The agent bakes its registry, so only the webapp can tell it is stale."""
+    ts = (REPO_ROOT / "webapp" / "src" / "lib" / "reconSettings" / "registryDigest.generated.ts")
+    match = re.search(r"REGISTRY_DIGEST = '([0-9a-f]{64})'", ts.read_text(encoding="utf-8"))
+    assert match, "registryDigest.generated.ts has no digest"
+    assert match.group(1) == ROE_PARSE_REGISTRY_DIGEST

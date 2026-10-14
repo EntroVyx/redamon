@@ -84,6 +84,15 @@ function meaningCell(f: NamedField): string {
   if (f.deny_reason === 'derived') {
     notes.push('DERIVED, never written.')
   }
+  if (f.deny_reason === 'upload-managed' && f.written_by) {
+    notes.push(`Written only by ${f.written_by}.`)
+  }
+  if (f.roe_parse === 'deny') {
+    notes.push('A Rules of Engagement document may never set this.')
+  }
+  if (f.roe_parse === 'tighten_only') {
+    notes.push(`A Rules of Engagement document may only set it to \`${JSON.stringify(f.roe_safe_value)}\`.`)
+  }
   if (f.readable === false) {
     notes.push('Withheld from every read on the MCP surface.')
   }

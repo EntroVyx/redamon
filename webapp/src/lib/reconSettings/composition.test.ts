@@ -236,10 +236,10 @@ describe('the surface is the size it claims to be', () => {
   test('most of the model is settable and the closed set is small', () => {
     const total = Object.keys(registry.fields).length
     expect(permittedKeys('update').length / total).toBeGreaterThan(0.85)
-    // The closed set grew by the 24 engagement-RECORD columns, which are not
-    // pipeline parameters at all: the client, the contacts, the dates and the
-    // document. Everything a scan is configured by is still open.
-    expect(fieldsWhere(f => f.mcp === 'never' && f.deny_reason !== 'engagement-record').length)
+    // The closed set grew by the engagement-RECORD group, which is not pipeline
+    // parameters at all: the client, the contacts, the dates and the document
+    // with its text and parse. Everything a scan is configured by is still open.
+    expect(fieldsWhere(f => f.mcp === 'never' && f.group !== 'engagement_record').length)
       .toBeLessThan(25)
   })
 

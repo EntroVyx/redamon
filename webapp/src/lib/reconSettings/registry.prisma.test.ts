@@ -190,7 +190,7 @@ describe('the dispositions cover the model', () => {
     // named list plus ONE class - the engagement record, which is the contract
     // rather than a pipeline parameter.
     expect(counts.settable).toBeGreaterThan(600)
-    const record = fieldsWhere(f => f.deny_reason === 'engagement-record').length
+    const record = fieldsWhere(f => f.group === 'engagement_record').length
     expect(counts.never - record).toBeLessThan(25)
   })
 
@@ -213,13 +213,17 @@ describe('the dispositions cover the model', () => {
     const unclassified = roe.filter(
       c => fields[c].group !== 'engagement_limits' && fields[c].deny_reason !== 'engagement-record'
     )
-    // roeDocumentData is the one that is neither: it is the document's own bytes,
-    // written by the endpoint that receives the file. A JSON-RPC settings write
-    // cannot carry bytes at all, so it was a type error waiting behind a
-    // validator that described it as a string.
-    expect(unclassified).toEqual(['roeDocumentData'])
-    expect(fields.roeDocumentData.mcp).toBe('never')
-    expect(fields.roeDocumentData.deny_reason).toBe('upload-managed')
+    // The document's own artefacts are neither: the bytes, its name and type, the
+    // text and the parse are written by the endpoints that receive the file, so
+    // a settings save (which used to write the text and parse back from a stale
+    // form) and a parsed document (which could describe itself) cannot.
+    const DOCUMENT = ['roeDocumentData', 'roeDocumentMimeType', 'roeDocumentName', 'roeParsedJson', 'roeRawText']
+    expect(unclassified).toEqual(DOCUMENT)
+    for (const c of DOCUMENT) {
+      expect(fields[c].mcp, c).toBe('never')
+      expect(fields[c].deny_reason, c).toBe('upload-managed')
+      expect(fields[c].readable, c).toBe(false)
+    }
 
     const both = roe.filter(
       c => fields[c].group === 'engagement_limits' && fields[c].deny_reason === 'engagement-record'

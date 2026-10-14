@@ -381,9 +381,14 @@ describe('T16 exactly the documented columns are closed', () => {
     jsReconCustomEndpointKeywords: 'upload-managed',
     jsReconCustomFrameworks: 'upload-managed',
     supplyChainSbomFile: 'upload-managed',
-    // A Bytes column, written only by the endpoint that receives the file. The
+    // The Rules of Engagement document and what was derived from it, written
+    // only by the endpoints that receive the file (create, replace, remove). The
     // MCP surface records the document's DIGEST instead.
     roeDocumentData: 'upload-managed',
+    roeDocumentName: 'upload-managed',
+    roeDocumentMimeType: 'upload-managed',
+    roeRawText: 'upload-managed',
+    roeParsedJson: 'upload-managed',
     // Re-derived server-side from the raw host list, because the grouping
     // decides the run order. create_project discards any client-supplied value,
     // so a column nothing may write is internal rather than create-only.
@@ -404,7 +409,7 @@ describe('T16 exactly the documented columns are closed', () => {
     // the CONTRACT. A person writes them, a model reads them, nothing enforces
     // them, and they carry third-party personal data.
     const record = fieldsWhere(f => f.deny_reason === 'engagement-record').map(f => f.key)
-    expect(record.length).toBeGreaterThanOrEqual(20)
+    expect(record.length).toBeGreaterThanOrEqual(18)
     const actual = fieldsWhere(f => f.mcp === 'never').map(f => f.key).sort()
     expect(actual).toEqual([...Object.keys(CLOSED), ...record].sort())
   })

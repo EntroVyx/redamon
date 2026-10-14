@@ -24,8 +24,11 @@ installed there would turn the fail-closed rule into a fail-at-runtime one.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -35,6 +38,7 @@ SCHEMA_PATH = HERE / "registry.schema.json"
 JSON_PATH = HERE / "registry.json"
 WEBAPP_JSON_PATH = REPO_ROOT / "webapp" / "src" / "lib" / "reconSettings" / "registry.json"
 ROE_PROMPT_PATH = HERE / "roe_parse_prompt.py"
+DIGEST_TS_PATH = REPO_ROOT / "webapp" / "src" / "lib" / "reconSettings" / "registryDigest.generated.ts"
 
 sys.path.insert(0, str(REPO_ROOT / "tooling" / "scripts"))
 
@@ -165,6 +169,16 @@ def build(document: dict | None = None) -> dict:
             f"{', '.join(ghosts[:10])}{' ...' if len(ghosts) > 10 else ''}"
         )
 
+    unpaired = sorted(
+        name for name, f in fields.items()
+        if (f.get("roe_parse") == "tighten_only") != ("roe_safe_value" in f)
+    )
+    if unpaired:
+        raise RegistryError(
+            "roe_safe_value must be set on every roe_parse: tighten_only field and on no other: "
+            + ", ".join(unpaired)
+        )
+
     tool_sections = {name: tool.get("form_section") for name, tool in doc["tools"].items()}
 
     out_fields: dict[str, dict] = {}
@@ -213,7 +227,7 @@ def main(argv: list[str]) -> int:
         print(f"registry build FAILED: {exc}", file=sys.stderr)
         return 2
 
-    targets = {JSON_PATH: text, WEBAPP_JSON_PATH: text}
+    targets = {JSON_PATH: text, WEBAPP_JSON_PATH: text, DIGEST_TS_PATH: _digest_module(text)}
 
     # The prompt is generated from the registry AS JUST BUILT, not from whatever
     # registry.json happens to be on disk, so one run cannot leave the two
@@ -221,7 +235,7 @@ def main(argv: list[str]) -> int:
     if check:
         stale = [p for p, body in targets.items()
                  if not p.exists() or p.read_text(encoding="utf-8") != body]
-        prompt_text = _prompt_from(text)
+        prompt_text = _prompt_from(text, write=False)
         if not ROE_PROMPT_PATH.exists() or ROE_PROMPT_PATH.read_text(encoding="utf-8") != prompt_text:
             stale.append(ROE_PROMPT_PATH)
         if stale:
@@ -238,7 +252,7 @@ def main(argv: list[str]) -> int:
     for path, body in targets.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    ROE_PROMPT_PATH.write_text(_prompt_from(text), encoding="utf-8")
+    ROE_PROMPT_PATH.write_text(_prompt_from(text, write=True), encoding="utf-8")
 
     registry = json.loads(text)
     print(
@@ -249,24 +263,60 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def _prompt_from(registry_text: str) -> str:
+def _digest_module(registry_text: str) -> str:
+    """The registry digest as a TypeScript constant, for the webapp's handshake.
+
+    The agent image COPY-bakes `recon_settings/`, so it compares its prompt with
+    its OWN registry and the two always agree: a stale agent parses with an old
+    catalogue and reports no skew at all. The webapp is the side that knows the
+    current registry, so it compares the digest the agent returns with this one.
+    """
+    digest = hashlib.sha256(registry_text.encode("utf-8")).hexdigest()
+    return (
+        "// GENERATED FILE - DO NOT EDIT. Source: recon_settings/registry.yaml.\n"
+        "// Rebuild with: python3 recon_settings/build.py\n"
+        "//\n"
+        "// SHA-256 of the built registry.json. The RoE parse route refuses an agent\n"
+        "// whose prompt was generated from any other registry.\n"
+        f"export const REGISTRY_DIGEST = '{digest}'\n"
+    )
+
+
+def _prompt_from(registry_text: str, *, write: bool) -> str:
     """Render the prompt against the registry text this run produced.
 
     The loader caches, and it reads the file, so a build that wrote a new
     registry and then rendered would otherwise render from the PREVIOUS bytes on
     the first run after a change. Writing the registry first and dropping the
     cache is what keeps the digest in the prompt equal to the digest of the file
-    beside it.
+    beside it. `--check` must not write anything, so it renders from a temporary
+    copy through the loader's override instead.
     """
-    JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-    JSON_PATH.write_text(registry_text, encoding="utf-8")
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     from recon_settings.loader import reload_registry  # noqa: PLC0415
     from recon_settings.roe_prompt import render_module  # noqa: PLC0415
 
-    reload_registry()
-    return render_module()
+    if write:
+        JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
+        JSON_PATH.write_text(registry_text, encoding="utf-8")
+        reload_registry()
+        return render_module()
+
+    previous = os.environ.get("RECON_SETTINGS_REGISTRY")
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate = Path(tmp) / "registry.json"
+        candidate.write_text(registry_text, encoding="utf-8")
+        os.environ["RECON_SETTINGS_REGISTRY"] = str(candidate)
+        try:
+            reload_registry()
+            return render_module()
+        finally:
+            if previous is None:
+                os.environ.pop("RECON_SETTINGS_REGISTRY", None)
+            else:
+                os.environ["RECON_SETTINGS_REGISTRY"] = previous
+            reload_registry()
 
 
 if __name__ == "__main__":

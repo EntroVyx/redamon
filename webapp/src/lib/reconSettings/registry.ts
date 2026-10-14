@@ -61,6 +61,13 @@ export interface RegistryField {
    * existing project, under the project:rescope permission. Absent means no.
    */
   rescope?: boolean
+  /**
+   * What a parsed Rules of Engagement document may do with this field, beyond
+   * the `mcp` disposition: `deny` (never, and absent from the parse catalogue),
+   * `tighten_only` (only `roe_safe_value`), or `allow`. Absent means allow.
+   */
+  roe_parse?: 'allow' | 'deny' | 'tighten_only'
+  roe_safe_value?: unknown
   meaning: string
   bounds?: { min: number; max: number }
   values?: string[]

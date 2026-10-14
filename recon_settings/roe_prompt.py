@@ -57,7 +57,14 @@ def is_parse_writable(name: str, spec: dict[str, Any]) -> bool:
     document is attacker-influenceable - a target can hand you a "scope
     document" - and a parsed document must never be able to re-point the
     platform at something else.
+
+    `roe_parse: deny` narrows "settable" further, for the columns an operator may
+    set and a document may not: the agent's system prompts, callback hosts,
+    tunnels, the model. MCP keeps them; the parse path loses them, and so does
+    the catalogue, so the model is never told they exist.
     """
+    if spec.get("roe_parse") == "deny":
+        return False
     if spec.get("deny_reason") == "engagement-record":
         return True
     return spec.get("mcp") == "settable"
@@ -114,7 +121,12 @@ def accepts(spec: dict[str, Any]) -> str:
     Read back and compared against the registry entry the VALIDATOR reads, by
     P11. The two cannot be allowed to disagree: a tightened bound would
     otherwise produce rejections that look like model errors.
+
+    A `tighten_only` field is a safety control a document may only move to its
+    safe value (approvals on, tunnels off), so the model is told that one value.
     """
+    if spec.get("roe_parse") == "tighten_only":
+        return "only " + json.dumps(spec.get("roe_safe_value"))
     if spec.get("values"):
         allowed = ", ".join(spec["values"])
         # A closed vocabulary on a LIST field still takes a list. Saying "one of"

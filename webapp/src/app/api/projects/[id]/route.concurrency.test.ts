@@ -149,6 +149,20 @@ describe('C-3: the save never writes the row bookkeeping back', () => {
     expect(data).not.toHaveProperty('supplyChainSbomFile')
   })
 
+  test('the Rules of Engagement document and its derived text are never written by a save', async () => {
+    // A form loaded before a RoE replace PUTs document A's text and parse back
+    // over document B's bytes on its next "Update Settings".
+    await put({
+      name: 'p',
+      roeDocumentData: 'AAAA', roeDocumentName: 'old.pdf', roeDocumentMimeType: 'application/pdf',
+      roeRawText: 'document A', roeParsedJson: { applied: { targetDomain: 'evil.test' } },
+    })
+    const data = mockUpdate.mock.calls[0][0].data
+    for (const key of ['roeDocumentData', 'roeDocumentName', 'roeDocumentMimeType', 'roeRawText', 'roeParsedJson']) {
+      expect(data, key).not.toHaveProperty(key)
+    }
+  })
+
   test('a save that changes something writes a ui audit row naming what changed', async () => {
     await put({ name: 'p', katanaDepth: 7 })
     expect(mockAudit).toHaveBeenCalledTimes(1)
