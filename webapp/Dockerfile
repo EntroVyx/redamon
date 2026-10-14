@@ -84,8 +84,11 @@ RUN mkdir -p /data/plugins && chown nextjs:nodejs /data/plugins
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# CLI utility scripts (admin setup, password reset)
+# CLI utility scripts (admin setup, password reset) and the RoE text extractor
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+# The extractor runs as a child process, so its parsers reach the standalone
+# output only through next.config.ts outputFileTracingIncludes. Prove they did.
+RUN node scripts/roe-extract.mjs --self-test
 
 # Prisma schema + CLI for automatic migration on startup
 COPY --from=builder /app/prisma ./prisma

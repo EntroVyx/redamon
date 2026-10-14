@@ -345,6 +345,14 @@ from recon_settings.roe_parse_prompt import (
 # without importing the whole agent.
 from recon_settings.roe_prompt import prompt_skew as _prompt_skew
 
+# The model reads the first ROE_PARSE_MAX_CHARS of a document; the webapp mirrors
+# it as MAX_MODEL_CHARS to tell the reviewer when a tail went unread.
+ROE_PARSE_MAX_CHARS = 50_000
+# Under the webapp's 285 s wait, which is under undici's 300 s default, so the
+# person gets this coded answer rather than a dropped connection. The provider
+# SDKs' own timeouts are per attempt and retried, so they cannot bound the call.
+ROE_PARSE_TIMEOUT_S = 270
+
 
 @app.post("/roe/parse", tags=["RoE"],
           dependencies=[Depends(require_master_internal_auth), Depends(require_internal_auth)])
@@ -388,12 +396,25 @@ async def parse_roe_document(body: RoeParseRequest):
     # System message has instructions only; user document goes in HumanMessage
     # to reduce prompt injection risk from adversarial document content
     system_prompt = ROE_PARSE_PROMPT.strip()
-    doc_text = body.text[:50000]
+    doc_text = body.text[:ROE_PARSE_MAX_CHARS]
     logger.info(f"RoE parse: using model {requested_model}")
-    response, failure = await _invoke_feature_llm("RoE parse", requested_model, llm, [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=f"RoE Document:\n---\n{doc_text}\n---\n\nParse the RoE document above and return the JSON."),
-    ])
+    import time as time_mod
+    started = time_mod.monotonic()
+    try:
+        response, failure = await asyncio.wait_for(
+            _invoke_feature_llm("RoE parse", requested_model, llm, [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"RoE Document:\n---\n{doc_text}\n---\n\nParse the RoE document above and return the JSON."),
+            ]),
+            timeout=ROE_PARSE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"RoE parse: model call stopped after {ROE_PARSE_TIMEOUT_S}s ({len(doc_text)} chars)")
+        return _feature_error(
+            "agent_timeout", requested_model, 504,
+            "The model did not finish reading the document in time. Try again, or pick a faster model.",
+        )
+    logger.info(f"RoE parse: model answered in {time_mod.monotonic() - started:.1f}s ({len(doc_text)} chars)")
     if failure:
         return failure
 

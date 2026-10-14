@@ -22,6 +22,7 @@ vi.mock('@/lib/agentFetch', () => ({
 }))
 
 import { POST } from './route'
+import { REGISTRY_DIGEST } from '@/lib/reconSettings/registryDigest.generated'
 
 function upload(extra: Record<string, string> = {}) {
   const form = new FormData()
@@ -39,7 +40,7 @@ beforeEach(() => {
   mockEff.mockResolvedValue({ userId: 'alice' })
   mockSettings.mockResolvedValue({ featureModels: { roe_parse: 'gpt-5' } })
   mockAgentFetch.mockResolvedValue(new Response(JSON.stringify({
-    fields: {}, unknownKeys: [], registryDigest: 'd', model_used: 'gpt-5',
+    fields: {}, unknownKeys: [], registryDigest: REGISTRY_DIGEST, model_used: 'gpt-5',
   }), { status: 200 }))
 })
 

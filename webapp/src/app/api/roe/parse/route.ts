@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireEffectiveUser } from '@/lib/access'
+import { writeAudit } from '@/lib/audit'
 import { readFeatureModel, featureModelErrorResponse } from '@/lib/featureModels'
 import { callFeatureAgent } from '@/lib/featureAgentCall'
+import { crossOriginResponse, sameOrigin } from '@/lib/plugins/sameOrigin'
 import { buildParseProposal, proposalIsImplausible, MAX_PROPOSED_CHANGES } from '@/lib/reconSettings/roeParse'
+import { REGISTRY_DIGEST } from '@/lib/reconSettings/registryDigest.generated'
+import { actingAdminId } from '@/lib/roe/actor'
+import { agentEnforcementWarning } from '@/lib/roe/agentWarning'
+import { extractRoeText, ExtractError } from '@/lib/roe/extractText'
+import { readRoeUpload } from '@/lib/roe/upload'
+import { MAX_MODEL_CHARS } from '@/lib/roe/limits'
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
-const MAX_PDF_PAGES = 200
-const AGENT_TIMEOUT_MS = 120_000 // 2 minutes for LLM parsing
+// Under undici's 300 s default, and over the agent's own 270 s cap on the model
+// call, so a slow model reaches the person as a coded timeout.
+const AGENT_TIMEOUT_MS = 285_000
 
 /**
  * The form's present values, so the proposal is a diff rather than a list.
@@ -25,9 +33,18 @@ function readCurrentValues(formData: FormData): Record<string, unknown> {
   }
 }
 
+function logOutcome(outcome: string, fields: Record<string, unknown>) {
+  // Names, sizes and counts only: never the document text or a contact field.
+  const parts = Object.entries(fields).map(([k, v]) => `${k}=${v}`)
+  console.info(`[roe-parse] outcome=${outcome} ${parts.join(' ')}`)
+}
+
 // POST /api/roe/parse - Upload RoE document, extract text, forward to agent for LLM parsing
 export async function POST(request: NextRequest) {
+  const started = Date.now()
   try {
+    if (!sameOrigin(request)) return crossOriginResponse()
+
     // The caller's own "RoE parsing" model on their own keys. Checked before the
     // upload is read: without a user there is nobody whose keys may be spent.
     const eff = await requireEffectiveUser()
@@ -35,74 +52,41 @@ export async function POST(request: NextRequest) {
     const model = await readFeatureModel(eff.userId, 'roe_parse')
     if (!model) return featureModelErrorResponse('model_required', 'roe_parse')
 
-    const formData = await request.formData()
-    const file = formData.get('file') as File | null
+    const upload = await readRoeUpload(request)
+    if (upload instanceof NextResponse) return upload
+    const { formData, file, kind, bytes } = upload
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
-    }
-
-    // File size guard
-    if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json(
-        { error: `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${MAX_FILE_SIZE / 1024 / 1024} MB.` },
-        { status: 400 }
-      )
-    }
-
-    // Extract text based on file type
-    const mimeType = file.type || ''
-    const fileName = file.name.toLowerCase()
-    let text = ''
-
-    if (mimeType === 'text/plain' || fileName.endsWith('.txt') || fileName.endsWith('.md')) {
-      text = await file.text()
-    } else if (mimeType === 'application/pdf' || fileName.endsWith('.pdf')) {
-      // Use pdfjs-dist directly - pdf-parse v2 triggers DOMMatrix errors in Node.js
-      // pdfjs-dist is in serverExternalPackages so it's loaded from node_modules at runtime
-      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-      const path = await import('path')
-      pdfjs.GlobalWorkerOptions.workerSrc = path.resolve(
-        process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
-      )
-      const data = new Uint8Array(await file.arrayBuffer())
-      const doc = await pdfjs.getDocument({ data, useSystemFonts: true }).promise
-      try {
-        if (doc.numPages > MAX_PDF_PAGES) {
-          await doc.destroy()
-          return NextResponse.json(
-            { error: `PDF has ${doc.numPages} pages (max ${MAX_PDF_PAGES}). Please use a shorter document.` },
-            { status: 400 }
-          )
-        }
-        const pages: string[] = []
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i)
-          const content = await page.getTextContent()
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          pages.push(content.items.map((item: any) => item.str || '').join(' '))
-        }
-        text = pages.join('\n')
-      } finally {
-        await doc.destroy()
+    let doc
+    try {
+      doc = await extractRoeText(bytes, kind)
+    } catch (err) {
+      if (err instanceof ExtractError) {
+        logOutcome(err.code, { bytes: bytes.length, kind, ms: Date.now() - started })
+        return NextResponse.json({ error: err.message, code: err.code }, { status: err.status })
       }
-    } else if (
-      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      fileName.endsWith('.docx')
-    ) {
-      const mammoth = await import('mammoth')
-      const buffer = Buffer.from(await file.arrayBuffer())
-      const result = await mammoth.extractRawText({ buffer })
-      text = result.value
-    } else {
-      return NextResponse.json(
-        { error: `Unsupported file type: ${mimeType || fileName}. Use .pdf, .txt, .md, or .docx` },
-        { status: 400 }
-      )
+      throw err
     }
 
-    if (!text.trim()) {
-      return NextResponse.json({ error: 'Could not extract text from document' }, { status: 422 })
+    const audit = async (outcome: string, counts: Record<string, number> = {}) => {
+      logOutcome(outcome, {
+        bytes: bytes.length, pages: doc.pages, kind, model, ms: Date.now() - started,
+        ...counts,
+      })
+      await writeAudit({
+        actorId: eff.userId,
+        action: 'roe.parse',
+        targetType: 'create',
+        after: {
+          documentName: file.name,
+          bytesSha256: doc.bytesSha256,
+          bytes: bytes.length,
+          pages: doc.pages,
+          model,
+          outcome,
+          counts,
+          actingAdminId: await actingAdminId(eff),
+        },
+      })
     }
 
     // The model is the one saved in the user's settings, never a form field: a
@@ -111,12 +95,33 @@ export async function POST(request: NextRequest) {
       featureId: 'roe_parse',
       path: '/roe/parse',
       model,
-      body: { text, model, user_id: eff.userId },
+      body: { text: doc.text, model, user_id: eff.userId },
       timeoutMs: AGENT_TIMEOUT_MS,
     })
-    if (!agent.ok) return agent.response
+    if (!agent.ok) {
+      await audit(agent.code ?? 'agent_error')
+      return agent.response
+    }
 
     const parsed = agent.body as { fields?: unknown; unknownKeys?: unknown; registryDigest?: unknown }
+
+    // The agent bakes its own copy of the registry, so it compares its prompt
+    // with itself and never sees that it is stale. This side holds the current
+    // registry: an agent built from another one parsed against a catalogue the
+    // validators below no longer describe.
+    if (parsed?.registryDigest !== REGISTRY_DIGEST) {
+      await audit('agent_registry_outdated')
+      return NextResponse.json(
+        {
+          error:
+            'The agent was built from a different settings registry than this webapp, so it parsed ' +
+            'the document against an outdated field list. Nothing was applied. Rebuild the agent ' +
+            'image: docker compose build agent && docker compose up -d agent.',
+          code: 'agent_registry_outdated',
+        },
+        { status: 503 },
+      )
+    }
 
     // The agent returns what the MODEL said. This turns it into a PROPOSAL: every
     // value re-validated against the same registry bounds an MCP write goes
@@ -131,11 +136,19 @@ export async function POST(request: NextRequest) {
     const fields = (parsed?.fields ?? {}) as Record<string, unknown>
     const current = readCurrentValues(formData)
     const proposal = buildParseProposal(fields, current)
+    const unknownKeys = Array.isArray(parsed?.unknownKeys) ? parsed.unknownKeys.filter(k => typeof k === 'string') : []
+    const counts = {
+      changes: proposal.changes.length,
+      rejected: proposal.rejected.length,
+      ignored: proposal.ignored.length,
+      unknown: unknownKeys.length,
+    }
 
     // A document that would change more settings than any real one ever has is
     // a failed parse, not a demanding policy. Refusing beats asking somebody to
     // review hundreds of rows they did not ask for.
     if (proposalIsImplausible(proposal.changes.length)) {
+      await audit('implausible', counts)
       return NextResponse.json(
         {
           error:
@@ -150,20 +163,38 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const modelTruncated = doc.text.length > MAX_MODEL_CHARS
+    const warnings: string[] = []
+    if (doc.truncated || modelTruncated) {
+      warnings.push(
+        `The document is longer than the model reads: only its first ${MAX_MODEL_CHARS.toLocaleString('en-US')} ` +
+        `characters were parsed. Check that nothing after that point needed to be applied.`
+      )
+    }
+    const resulting = { ...current, ...Object.fromEntries(proposal.changes.map(c => [c.key, c.after])) }
+    const enforcement = agentEnforcementWarning(proposal.changes.map(c => c.key), resulting)
+    if (enforcement) warnings.push(enforcement)
+
+    await audit('ok', counts)
+
     return NextResponse.json({
       ...proposal,
       // Kept separate from the proposal: it is the document, not a setting a
       // person reviews, and the form stores it alongside whatever it confirms.
-      roeRawText: text,
+      roeRawText: doc.text,
       modelUsed: model,
-      unknownKeys: parsed?.unknownKeys ?? [],
-      registryDigest: parsed?.registryDigest ?? null,
+      unknownKeys,
+      registryDigest: REGISTRY_DIGEST,
+      bytesSha256: doc.bytesSha256,
+      textSha256: doc.textSha256,
+      pages: doc.pages,
+      truncated: doc.truncated || modelTruncated,
+      warnings,
     })
   } catch (error) {
+    // The document never reaches this process as anything but bytes and the
+    // extractor's text, so an error here is infrastructure, not the document.
     console.error('RoE parse error:', error)
-    return NextResponse.json(
-      { error: `Failed to parse RoE document: ${error instanceof Error ? error.message : String(error)}` },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to parse the RoE document.' }, { status: 500 })
   }
 }
