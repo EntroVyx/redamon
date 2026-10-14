@@ -133,17 +133,17 @@ export function RoeUploadButton({
         {showModelLine && <FeatureModelLine featureId="roe_parse" />}
       </div>
       {parsing && (
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+        <span style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--form-ink-muted)' }}>
           Large documents can take 2–4 minutes. You can switch tabs; the review waits for you.
         </span>
       )}
       {!parsing && !error && !compact && (
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>
+        <span style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--form-ink-muted)' }}>
           {ALLOWED_EXTENSIONS_LABEL}, up to {MAX_FILE_SIZE / 1024 / 1024} MB.
         </span>
       )}
       {error && (
-        <span role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8rem' }}>{error}</span>
+        <span role="alert" style={{ fontSize: 11, color: 'var(--form-danger)' }}>{error}</span>
       )}
     </div>
   )

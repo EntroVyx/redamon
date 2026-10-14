@@ -21,7 +21,7 @@ export function GvmScanSection({ data, updateField, actions }: GvmScanSectionPro
   const [isOpen, setIsOpen] = useState(true)
 
   return (
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Shield size={16} />
@@ -81,7 +81,7 @@ export function GvmScanSection({ data, updateField, actions }: GvmScanSectionPro
               </div>
             </div>
 
-            <div className={styles.fieldRow}>
+            <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Port List</label>
                 <select

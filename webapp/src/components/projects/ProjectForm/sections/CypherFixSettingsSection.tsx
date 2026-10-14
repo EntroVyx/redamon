@@ -118,7 +118,7 @@ export function CypherFixSettingsSection({ data, updateField }: CypherFixSetting
   const [isOpen, setIsOpen] = useState(true)
 
   return (
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Shield size={16} />
@@ -141,67 +141,64 @@ export function CypherFixSettingsSection({ data, updateField }: CypherFixSetting
             words the fix list, CodeFix writes the fixes.
           </p>
 
-          {/* GitHub Token */}
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>GitHub Token (CypherFix)</label>
-            <input
-              type="password"
-              className="textInput"
-              value={data.cypherfixGithubToken}
-              onChange={(e) => updateField('cypherfixGithubToken', e.target.value)}
-              placeholder="ghp_xxxxxxxxxxxx"
-            />
-            <span className={styles.fieldHint}>
-              Personal access token with <code>repo</code> scope. Used for cloning, pushing branches, and creating PRs.
-            </span>
+          <div className={styles.fieldRow}>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>GitHub Token (CypherFix)</label>
+              <input
+                type="password"
+                className="textInput"
+                value={data.cypherfixGithubToken}
+                onChange={(e) => updateField('cypherfixGithubToken', e.target.value)}
+                placeholder="ghp_xxxxxxxxxxxx"
+              />
+              <span className={styles.fieldHint}>
+                Personal access token with <code>repo</code> scope. Used for cloning, pushing branches, and creating PRs.
+              </span>
+            </div>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Default Repository</label>
+              <input
+                type="text"
+                className="textInput"
+                value={data.cypherfixDefaultRepo}
+                onChange={(e) => updateField('cypherfixDefaultRepo', e.target.value)}
+                placeholder="owner/repo"
+              />
+              <span className={styles.fieldHint}>
+                GitHub repository to fix (owner/repo format). Can be overridden per remediation.
+              </span>
+            </div>
           </div>
 
-          {/* Default Repository */}
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Default Repository</label>
-            <input
-              type="text"
-              className="textInput"
-              value={data.cypherfixDefaultRepo}
-              onChange={(e) => updateField('cypherfixDefaultRepo', e.target.value)}
-              placeholder="owner/repo"
-            />
-            <span className={styles.fieldHint}>
-              GitHub repository to fix (owner/repo format). Can be overridden per remediation.
-            </span>
+          <div className={styles.fieldRow}>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Default Branch</label>
+              <input
+                type="text"
+                className="textInput"
+                value={data.cypherfixDefaultBranch}
+                onChange={(e) => updateField('cypherfixDefaultBranch', e.target.value)}
+                placeholder="main"
+              />
+              <span className={styles.fieldHint}>
+                Base branch for creating fix branches (default: main).
+              </span>
+            </div>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Branch Prefix</label>
+              <input
+                type="text"
+                className="textInput"
+                value={data.cypherfixBranchPrefix}
+                onChange={(e) => updateField('cypherfixBranchPrefix', e.target.value)}
+                placeholder="cypherfix/"
+              />
+              <span className={styles.fieldHint}>
+                Prefix for fix branch names (e.g., cypherfix/rem-abc123).
+              </span>
+            </div>
           </div>
 
-          {/* Default Branch */}
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Default Branch</label>
-            <input
-              type="text"
-              className="textInput"
-              value={data.cypherfixDefaultBranch}
-              onChange={(e) => updateField('cypherfixDefaultBranch', e.target.value)}
-              placeholder="main"
-            />
-            <span className={styles.fieldHint}>
-              Base branch for creating fix branches (default: main).
-            </span>
-          </div>
-
-          {/* Branch Prefix */}
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Branch Prefix</label>
-            <input
-              type="text"
-              className="textInput"
-              value={data.cypherfixBranchPrefix}
-              onChange={(e) => updateField('cypherfixBranchPrefix', e.target.value)}
-              placeholder="cypherfix/"
-            />
-            <span className={styles.fieldHint}>
-              Prefix for fix branch names (e.g., cypherfix/rem-abc123).
-            </span>
-          </div>
-
-          {/* Require Approval */}
           <div className={styles.toggleRow}>
             <div>
               <span className={styles.toggleLabel}>Require Approval</span>
@@ -215,30 +212,34 @@ export function CypherFixSettingsSection({ data, updateField }: CypherFixSetting
             />
           </div>
 
-          <AccountFeatureModels />
+          <div className={styles.fieldRow}>
+            <AccountFeatureModels />
+          </div>
 
           {/* How much a triage run may spend on the AI review */}
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Priority Board: findings the AI reviews</label>
-            <input
-              type="number"
-              min={0}
-              max={1000}
-              step={10}
-              className={styles.input}
-              value={data.triageReviewBudget ?? 150}
-              onChange={(e) =>
-                updateField('triageReviewBudget', parseInt(e.target.value, 10) || 0)
-              }
-            />
-            <span className={styles.fieldHint}>
-              Every finding is scored and ranked in code, for free. This caps how
-              many of them the AI also reviews against their evidence, which is
-              what a run costs. Set it to 0 for a ranked board with no AI at all.
-              Findings whose evidence has not changed since the last review cost
-              nothing, and findings the AI cannot usefully judge (missing headers,
-              dependency advisories) are never sent.
-            </span>
+          <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Priority Board: findings the AI reviews</label>
+              <input
+                type="number"
+                min={0}
+                max={1000}
+                step={10}
+                className="textInput"
+                value={data.triageReviewBudget ?? 150}
+                onChange={(e) =>
+                  updateField('triageReviewBudget', parseInt(e.target.value, 10) || 0)
+                }
+              />
+              <span className={styles.fieldHint}>
+                Every finding is scored and ranked in code, for free. This caps how
+                many of them the AI also reviews against their evidence, which is
+                what a run costs. Set it to 0 for a ranked board with no AI at all.
+                Findings whose evidence has not changed since the last review cost
+                nothing, and findings the AI cannot usefully judge (missing headers,
+                dependency advisories) are never sent.
+              </span>
+            </div>
           </div>
 
         </div>

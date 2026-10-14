@@ -169,7 +169,7 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
   return (
     // id: scroll target for the Other Scans card's settings link. Keep it in
     // sync with PROJECT_SECTION_ANCHORS in lib/projectSettingsLinks.ts.
-    <div className={styles.section} id="trufflehog-scanner">
+    <div className={`${styles.section} ${styles.formSkin}`} id="trufflehog-scanner">
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Search size={16} />
@@ -207,13 +207,9 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
           ) : (
             <>
               {error && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px',
-                  background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)',
-                  borderRadius: '8px', marginBottom: '12px',
-                }}>
-                  <AlertTriangle size={16} style={{ color: '#ef4444', flexShrink: 0 }} />
-                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{error}</span>
+                <div className={`${styles.callout} ${styles.calloutDanger}`} role="alert">
+                  <AlertTriangle size={16} />
+                  <span>{error}</span>
                 </div>
               )}
 
@@ -238,7 +234,7 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
               {unconfigured.length > 0 && (
                 <div className={styles.addSourceRow}>
                   <select
-                    className="textInput"
+                    className="select"
                     value={addingSource}
                     onChange={(e) => setAddingSource(e.target.value)}
                     aria-label="Add a source"
@@ -250,7 +246,7 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
                   </select>
                   <button
                     type="button"
-                    className="primaryButton"
+                    className={styles.actionButton}
                     onClick={addProfile}
                     disabled={!addingSource}
                   >
@@ -293,17 +289,15 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
           <div className={styles.optionRow}>
             <div className={styles.fieldGroup} style={{ flex: 1, minWidth: 0 }}>
               <label className={styles.fieldLabel}>Result types</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+              <div className={styles.checkboxGroup}>
                 {RESULT_TYPES.map(rt => (
                   <label
                     key={rt.value}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px',
-                      opacity: verifies ? 1 : 0.5,
-                    }}
+                    className={`checkboxLabel ${verifies ? '' : styles.checkboxLabelOff}`}
                   >
                     <input
                       type="checkbox"
+                      className="checkbox"
                       checked={resultTypes.includes(rt.value)}
                       disabled={!verifies}
                       onChange={() => toggleResultType(rt.value)}
@@ -368,7 +362,7 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
                 </button>
               </div>
               {unknownInclude.length > 0 && (
-                <span className={styles.fieldHint} style={{ color: '#f59e0b' }}>
+                <span className={`${styles.fieldHint} ${styles.fieldHintCaution}`}>
                   Secret Multiscanner does not know {unknownInclude.join(', ')} and refuses to start. Check the
                   spelling in the list; names are case-sensitive.
                 </span>
@@ -401,7 +395,7 @@ export function TrufflehogSection({ data, updateField, projectId, mode = 'edit',
                 </button>
               </div>
               {unknownExclude.length > 0 && (
-                <span className={styles.fieldHint} style={{ color: '#f59e0b' }}>
+                <span className={`${styles.fieldHint} ${styles.fieldHintCaution}`}>
                   Secret Multiscanner does not know {unknownExclude.join(', ')} and refuses to start. Check the
                   spelling in the list; names are case-sensitive.
                 </span>
@@ -631,7 +625,7 @@ function DetectorPicker({
   return (
     <div className={styles.detectorPicker}>
       <div className={styles.detectorPickerHead}>
-        <strong style={{ fontSize: '13px' }}>
+        <strong className={styles.detectorPickerTitle}>
           Detectors to {target}
         </strong>
         <input
@@ -744,30 +738,24 @@ function ProfileEditor({
     // share a field label ('Endpoint', 'Include paths', ...), so a selector
     // scoped to the whole section resolves to two inputs the moment a project
     // holds more than one profile, which is the normal state, not an edge case.
-    <div id={`trufflehog-source-${src.id}`} style={{
-      border: '1px solid var(--border-primary)', borderRadius: '8px',
-      padding: '10px 14px', marginBottom: '8px',
-    }}>
-      <div
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
-        onClick={onToggle}
-      >
-        <div>
-          <strong style={{ fontSize: '14px' }}>{src.label}</strong>
+    <div id={`trufflehog-source-${src.id}`} className={styles.subSection}>
+      <div className={styles.sourceCardHead} onClick={onToggle}>
+        <div className={styles.sourceCardHeading}>
+          <strong className={styles.sourceCardTitle}>{src.label}</strong>
           {errors.length > 0 && (
-            <span style={{ marginLeft: '8px', fontSize: '12px', color: '#f59e0b' }}>
+            <span className={`${styles.fieldHint} ${styles.fieldHintCaution}`}>
               needs configuration
             </span>
           )}
           {missing.length > 0 && (
-            <span style={{ marginLeft: '8px', fontSize: '12px', color: '#ef4444' }}>
+            <span className={styles.inlineError}>
               missing {missing.map(m => m.label).join(', ')}
             </span>
           )}
         </div>
         <button
           type="button"
-          className="iconButton"
+          className={styles.removeButton}
           onClick={(e) => { e.stopPropagation(); onDelete() }}
           aria-label={`Remove the ${src.label} source`}
         >
@@ -793,7 +781,7 @@ function ProfileEditor({
           {missing.length > 0 && (
             <p className={styles.sectionRequirement}>
               {src.label} requires {missing.map(m => m.label).join(', ')}. Set it below, or in{' '}
-              <Link href={`${SETTINGS_KEYS_HREF}#trufflehog-keys`} style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
+              <Link href={`${SETTINGS_KEYS_HREF}#trufflehog-keys`}>
                 Global Settings &gt; API Keys &gt; Secret Multiscanner
               </Link>
               . Until then this source cannot start.
@@ -830,7 +818,7 @@ function ProfileEditor({
           </div>
 
           {errors.map(e => (
-            <p key={e} className={styles.fieldHint} style={{ color: '#f59e0b' }}>{e}</p>
+            <p key={e} className={`${styles.fieldHint} ${styles.fieldHintCaution}`}>{e}</p>
           ))}
         </div>
       )}
@@ -884,7 +872,7 @@ function FieldInput({
       {field.type === 'select' ? (
         <select
           id={inputId}
-          className="textInput"
+          className="select"
           value={asText}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
@@ -897,7 +885,7 @@ function FieldInput({
       ) : field.type === 'pathfile' || field.type === 'textarea' ? (
         <textarea
           id={inputId}
-          className="textInput"
+          className="textarea"
           rows={3}
           value={asText}
           disabled={disabled}

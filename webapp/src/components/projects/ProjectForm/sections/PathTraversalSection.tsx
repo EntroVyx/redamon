@@ -1,6 +1,7 @@
 'use client'
 
 import type { Project } from '@prisma/client'
+import { Toggle } from '@/components/ui/Toggle/Toggle'
 import { WikiInfoButton } from '@/components/ui/WikiInfoButton'
 import styles from '../ProjectForm.module.css'
 
@@ -11,117 +12,84 @@ interface PathTraversalSectionProps {
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
 }
 
-const ROW_STYLE: React.CSSProperties = {
-  marginBottom: 'var(--space-4)',
-}
-
-const GROUP_HEADER_STYLE: React.CSSProperties = {
-  fontSize: 'var(--text-sm)',
-  fontWeight: 'var(--font-semibold)',
-  color: 'var(--text-primary)',
-  marginTop: 'var(--space-5)',
-  marginBottom: 'var(--space-3)',
-  paddingBottom: 'var(--space-2)',
-  borderBottom: '1px solid var(--border-subtle, var(--border-default))',
-}
-
-const FIRST_GROUP_HEADER_STYLE: React.CSSProperties = {
-  ...GROUP_HEADER_STYLE,
-  marginTop: 'var(--space-3)',
-}
-
-const CHECKBOX_LABEL_STYLE: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-2)',
-}
-
 export function PathTraversalSection({ data, updateField }: PathTraversalSectionProps) {
   return (
-    <div style={{ padding: 'var(--space-3) var(--space-4)', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 8, right: 16 }}>
+    <div className={styles.skillSettings}>
+      <div className={styles.skillSettingsHead}>
+        <p className={styles.sectionDescription}>
+          Configure which Path Traversal / LFI / RFI sub-workflows to inject into the agent
+          prompt and tune probe parameters. Disable sub-sections you don&apos;t want for this engagement.
+        </p>
         <WikiInfoButton target="https://github.com/samugit83/redamon/wiki/Agent-Skills" title="Open Agent Skills wiki page" />
       </div>
-      <p className={styles.sectionDescription} style={{ marginBottom: 'var(--space-4)', paddingRight: '2.5rem' }}>
-        Configure which Path Traversal / LFI / RFI sub-workflows to inject into the agent
-        prompt and tune probe parameters. Disable sub-sections you don&apos;t want for this engagement.
-      </p>
 
-      {/* === Sub-workflow toggles === */}
-      <h3 style={FIRST_GROUP_HEADER_STYLE}>Sub-workflow injection</h3>
+      <h3 className={styles.subSectionTitle}>Sub-workflow injection</h3>
 
-      <div className={styles.fieldRow} style={ROW_STYLE}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel} style={CHECKBOX_LABEL_STYLE}>
-            <input
-              type="checkbox"
-              checked={data.pathTraversalOobCallbackEnabled ?? true}
-              onChange={(e) => updateField('pathTraversalOobCallbackEnabled', e.target.checked)}
-            />
-            OOB callback workflow (interactsh)
-          </label>
-          <span className={styles.fieldHint}>
-            Adds the RFI / blind-LFI sub-prompt. Sends DNS and HTTP probes to the configured OOB provider.
-            Disable when external callbacks are forbidden.
-          </span>
+      <div>
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>OOB callback workflow (interactsh)</span>
+            <p className={styles.toggleDescription}>
+              Adds the RFI / blind-LFI sub-prompt. Sends DNS and HTTP probes to the configured OOB provider.
+              Disable when external callbacks are forbidden.
+            </p>
+          </div>
+          <Toggle
+            checked={data.pathTraversalOobCallbackEnabled ?? true}
+            onChange={(checked) => updateField('pathTraversalOobCallbackEnabled', checked)}
+            aria-label="OOB callback workflow (interactsh)"
+          />
+        </div>
+
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>PHP wrappers + log poisoning sub-section</span>
+            <p className={styles.toggleDescription}>
+              Adds php://filter, data://, expect://, zip:// payloads and the log-poisoning chain.
+              Disable for non-PHP targets to reduce prompt bloat.
+            </p>
+          </div>
+          <Toggle
+            checked={data.pathTraversalPhpWrappersEnabled ?? true}
+            onChange={(checked) => updateField('pathTraversalPhpWrappersEnabled', checked)}
+            aria-label="PHP wrappers + log poisoning sub-section"
+          />
+        </div>
+
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>Archive extraction (Zip Slip) write tests</span>
+            <p className={styles.toggleDescription}>
+              Allows the agent to upload crafted ZIP / TAR archives whose entries escape the destination
+              directory. WRITES files to the target filesystem -- enable only with explicit RoE permission.
+            </p>
+          </div>
+          <Toggle
+            checked={data.pathTraversalArchiveExtractionEnabled ?? false}
+            onChange={(checked) => updateField('pathTraversalArchiveExtractionEnabled', checked)}
+            aria-label="Archive extraction (Zip Slip) write tests"
+          />
+        </div>
+
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>Bypass + encoding payload reference table</span>
+            <p className={styles.toggleDescription}>
+              Injects the encoding / dot-trick / wrapper / parser-mismatch payload reference and the
+              real-world precedents table (~3 KB extra). Disable for a leaner prompt.
+            </p>
+          </div>
+          <Toggle
+            checked={data.pathTraversalPayloadReferenceEnabled ?? true}
+            onChange={(checked) => updateField('pathTraversalPayloadReferenceEnabled', checked)}
+            aria-label="Bypass + encoding payload reference table"
+          />
         </div>
       </div>
 
-      <div className={styles.fieldRow} style={ROW_STYLE}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel} style={CHECKBOX_LABEL_STYLE}>
-            <input
-              type="checkbox"
-              checked={data.pathTraversalPhpWrappersEnabled ?? true}
-              onChange={(e) => updateField('pathTraversalPhpWrappersEnabled', e.target.checked)}
-            />
-            PHP wrappers + log poisoning sub-section
-          </label>
-          <span className={styles.fieldHint}>
-            Adds php://filter, data://, expect://, zip:// payloads and the log-poisoning chain.
-            Disable for non-PHP targets to reduce prompt bloat.
-          </span>
-        </div>
-      </div>
+      <h3 className={styles.subSectionTitle}>Probe parameters</h3>
 
-      <div className={styles.fieldRow} style={ROW_STYLE}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel} style={CHECKBOX_LABEL_STYLE}>
-            <input
-              type="checkbox"
-              checked={data.pathTraversalArchiveExtractionEnabled ?? false}
-              onChange={(e) => updateField('pathTraversalArchiveExtractionEnabled', e.target.checked)}
-            />
-            Archive extraction (Zip Slip) write tests
-          </label>
-          <span className={styles.fieldHint}>
-            Allows the agent to upload crafted ZIP / TAR archives whose entries escape the destination
-            directory. WRITES files to the target filesystem -- enable only with explicit RoE permission.
-          </span>
-        </div>
-      </div>
-
-      <div className={styles.fieldRow} style={ROW_STYLE}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel} style={CHECKBOX_LABEL_STYLE}>
-            <input
-              type="checkbox"
-              checked={data.pathTraversalPayloadReferenceEnabled ?? true}
-              onChange={(e) => updateField('pathTraversalPayloadReferenceEnabled', e.target.checked)}
-            />
-            Bypass + encoding payload reference table
-          </label>
-          <span className={styles.fieldHint}>
-            Injects the encoding / dot-trick / wrapper / parser-mismatch payload reference and the
-            real-world precedents table (~3 KB extra). Disable for a leaner prompt.
-          </span>
-        </div>
-      </div>
-
-      {/* === Probe parameters === */}
-      <h3 style={GROUP_HEADER_STYLE}>Probe parameters</h3>
-
-      <div className={styles.fieldRow} style={ROW_STYLE}>
+      <div className={styles.fieldRow}>
         <div className={styles.fieldGroup}>
           <label className={styles.fieldLabel}>Request Timeout (seconds)</label>
           <input

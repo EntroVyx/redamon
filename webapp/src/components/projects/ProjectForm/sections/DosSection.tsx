@@ -14,14 +14,14 @@ interface DosSectionProps {
 
 export function DosSection({ data, updateField }: DosSectionProps) {
   return (
-    <div style={{ padding: 'var(--space-3) var(--space-4)', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 8, right: 16 }}>
+    <div className={styles.skillSettings}>
+      <div className={styles.skillSettingsHead}>
+        <p className={styles.sectionDescription}>
+          Configure availability testing settings. These control test intensity,
+          duration limits, and whether to perform assessment-only (non-destructive) checks.
+        </p>
         <WikiInfoButton target="https://github.com/samugit83/redamon/wiki/Agent-Skills" title="Open Agent Skills wiki page" />
       </div>
-      <p className={styles.sectionDescription} style={{ paddingRight: '2.5rem' }}>
-        Configure availability testing settings. These control test intensity,
-        duration limits, and whether to perform assessment-only (non-destructive) checks.
-      </p>
 
       {/* Max Duration + Max Attempts */}
       <div className={styles.fieldRow}>
@@ -56,7 +56,7 @@ export function DosSection({ data, updateField }: DosSectionProps) {
       </div>
 
       {/* Concurrent Connections */}
-      <div className={styles.fieldRow}>
+      <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
         <div className={styles.fieldGroup}>
           <label className={styles.fieldLabel}>Concurrent Connections</label>
           <input
@@ -73,22 +73,18 @@ export function DosSection({ data, updateField }: DosSectionProps) {
         </div>
       </div>
 
-      {/* Assessment Only toggle */}
-      <div className={styles.fieldRow} style={{ marginTop: 'var(--space-4)' }}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>
-            <input
-              type="checkbox"
-              checked={data.dosAssessmentOnly ?? false}
-              onChange={(e) => updateField('dosAssessmentOnly', e.target.checked)}
-              style={{ marginRight: '8px' }}
-            />
-            Assessment Only
-          </label>
-          <span className={styles.fieldHint}>
+      <div className={styles.toggleRow}>
+        <div>
+          <span className={styles.toggleLabel}>Assessment Only</span>
+          <p className={styles.toggleDescription}>
             Only check for availability vulnerabilities (nmap scripts, nuclei) without active testing.
-          </span>
+          </p>
         </div>
+        <Toggle
+          checked={data.dosAssessmentOnly ?? false}
+          onChange={(checked) => updateField('dosAssessmentOnly', checked)}
+          aria-label="Assessment Only"
+        />
       </div>
     </div>
   )

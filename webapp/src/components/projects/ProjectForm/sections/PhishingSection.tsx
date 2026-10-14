@@ -13,32 +13,28 @@ interface PhishingSectionProps {
 
 export function PhishingSection({ data, updateField }: PhishingSectionProps) {
   return (
-    <div style={{ padding: 'var(--space-3) var(--space-4)', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 8, right: 16 }}>
+    <div className={styles.skillSettings}>
+      <div className={styles.skillSettingsHead}>
+        <p className={styles.sectionDescription}>
+          Configure SMTP settings for social engineering simulation email delivery. The agent uses these when sending
+          payloads or documents via email. Leave empty to be asked at runtime.
+        </p>
         <WikiInfoButton target="https://github.com/samugit83/redamon/wiki/Project-Settings-Reference#social-engineering-simulation" title="Open Social Engineering wiki section" />
       </div>
-      <p className={styles.sectionDescription} style={{ paddingRight: '2.5rem' }}>
-        Configure SMTP settings for social engineering simulation email delivery. The agent uses these when sending
-        payloads or documents via email. Leave empty to be asked at runtime.
-      </p>
 
-      {/* SMTP Configuration Textarea */}
-      <div className={styles.fieldRow}>
-        <div className={styles.fieldGroup} style={{ flex: 1 }}>
-          <label className={styles.fieldLabel}>SMTP Configuration (optional)</label>
-          <textarea
-            className="textInput"
-            value={data.phishingSmtpConfig ?? ''}
-            onChange={(e) => updateField('phishingSmtpConfig', e.target.value)}
-            placeholder={`SMTP_HOST: smtp.gmail.com\nSMTP_PORT: 587\nSMTP_USER: pentest@gmail.com\nSMTP_PASS: abcd efgh ijkl mnop\nSMTP_FROM: it-support@company.com\nUSE_TLS: true`}
-            rows={6}
-            style={{ fontFamily: 'monospace', fontSize: '13px', resize: 'vertical' }}
-          />
-          <span className={styles.fieldHint}>
-            Free-text SMTP settings injected into the agent prompt for social engineering email delivery.
-            The agent reads this as-is when the social engineering simulation skill is active.
-          </span>
-        </div>
+      <div className={styles.fieldGroup}>
+        <label className={styles.fieldLabel}>SMTP Configuration (optional)</label>
+        <textarea
+          className={`textarea ${styles.monoTextarea}`}
+          value={data.phishingSmtpConfig ?? ''}
+          onChange={(e) => updateField('phishingSmtpConfig', e.target.value)}
+          placeholder={`SMTP_HOST: smtp.gmail.com\nSMTP_PORT: 587\nSMTP_USER: pentest@gmail.com\nSMTP_PASS: abcd efgh ijkl mnop\nSMTP_FROM: it-support@company.com\nUSE_TLS: true`}
+          rows={6}
+        />
+        <span className={styles.fieldHint}>
+          Free-text SMTP settings injected into the agent prompt for social engineering email delivery.
+          The agent reads this as-is when the social engineering simulation skill is active.
+        </span>
       </div>
     </div>
   )

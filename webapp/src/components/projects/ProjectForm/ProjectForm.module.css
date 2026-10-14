@@ -1920,6 +1920,21 @@
   display: flex;
 }
 
+/* The row gap runs between those four tracks too, so at the 16px column gap a
+   field with no hint trailed ~40px of dead space before the next row. Matching
+   the group's own 4px makes the empty tracks cost almost nothing. Once groups
+   wrap onto a second line, the gap separates a hint from the next group's label
+   and needs the room back. */
+.formSkin .fieldRow {
+  row-gap: var(--space-1);
+}
+
+@media (max-width: 720px) {
+  .formSkin .fieldRow {
+    row-gap: var(--space-3);
+  }
+}
+
 /* ---- Fields ---- */
 
 .formSkin :global(.textInput),
@@ -2526,7 +2541,8 @@
 }
 
 .chip {
-  --chip-accent: var(--form-focus);
+  /* Info, not focus: the focus blue as text over its own tint is 4.4:1 in light. */
+  --chip-accent: var(--form-info);
   padding: 4px 10px;
   font-size: var(--text-xs);
   color: var(--form-ink-muted);
@@ -2600,4 +2616,550 @@
   font-size: 9px;
   font-weight: var(--font-semibold);
   color: var(--form-success);
+}
+
+/* A disabled chip is one a guard holds (the last runtime that cannot be
+   removed), so it has to look held. */
+.chip:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chip:disabled:not(.chipOn):hover {
+  border-color: var(--form-field-border);
+}
+
+/* =============================================================================
+   Skin coverage for the RoE, Other Scans, AI Agent and CypherFix sections
+   ============================================================================= */
+
+/* A read-only field (a saved RoE's record, the extracted document text) wears
+   the locked look. Painted as editable, it invited typing that went nowhere. */
+.formSkin :global(.textInput)[readonly],
+.formSkin :global(.textarea)[readonly] {
+  background-color: var(--form-field-disabled-bg);
+  border-style: dashed;
+  color: var(--form-ink-muted);
+}
+
+.formSkin :global(.textInput)[readonly]:hover,
+.formSkin :global(.textarea)[readonly]:hover {
+  border-color: var(--form-field-border);
+}
+
+.formSkin .toggleBlock {
+  border-bottom-color: var(--form-divider);
+}
+
+.formSkin .sectionHeaderButton {
+  color: var(--form-ink);
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .sectionHeaderButton:hover:not(:disabled) {
+  color: var(--form-ink);
+  background: color-mix(in srgb, var(--form-ink) 6%, var(--form-field-bg));
+  border-color: var(--form-field-border-hover);
+}
+
+.formSkin .sectionHeaderButtonPrimary {
+  color: var(--form-success);
+  background: color-mix(in srgb, var(--form-success) 12%, var(--form-field-bg));
+  border-color: color-mix(in srgb, var(--form-success) 45%, transparent);
+}
+
+.formSkin .sectionHeaderButtonPrimary:hover:not(:disabled) {
+  color: var(--form-success);
+  background: color-mix(in srgb, var(--form-success) 22%, var(--form-field-bg));
+  border-color: var(--form-success);
+}
+
+.formSkin .sectionHeaderButton:disabled {
+  opacity: 1;
+  color: var(--form-ink-faint);
+  background: var(--form-field-disabled-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .suggestionRow {
+  font-size: 11px;
+  color: var(--form-ink-muted);
+}
+
+.formSkin .suggestionButton {
+  font-size: 11px;
+  color: var(--form-info);
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .suggestionButton:hover {
+  background: color-mix(in srgb, var(--form-info) 12%, var(--form-field-bg));
+  border-color: var(--form-info);
+}
+
+.formSkin .apiKeyToggle {
+  color: var(--form-ink-muted);
+}
+
+.formSkin .apiKeyToggle:hover {
+  color: var(--form-ink);
+}
+
+/* Tool Matrix: the grid is a list, so it sits recessed like a field, under a
+   header band in the panel shade. */
+.formSkin .toolPhaseGrid {
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .toolPhaseHeader {
+  background: var(--form-panel-bg);
+  border-bottom-color: var(--form-field-border);
+}
+
+.formSkin .toolPhaseHeaderLabel {
+  color: var(--form-ink-muted);
+}
+
+.formSkin .toolPhaseRow {
+  border-bottom-color: var(--form-divider);
+}
+
+.formSkin .toolPhaseRow:hover {
+  background: color-mix(in srgb, var(--form-ink) 4%, var(--form-field-bg));
+}
+
+.formSkin .toolPhaseName {
+  color: var(--form-ink);
+}
+
+/* Trufflehog detector picker and Supply-Chain source picker. */
+.formSkin .browseButton {
+  color: var(--form-info);
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .browseButton:hover {
+  background: color-mix(in srgb, var(--form-info) 12%, var(--form-field-bg));
+  border-color: var(--form-info);
+}
+
+.formSkin .detectorPicker {
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .detectorGrid {
+  border-color: var(--form-divider);
+}
+
+.formSkin .detectorChip {
+  color: var(--form-ink-muted);
+  background: transparent;
+  border-color: var(--form-field-border);
+}
+
+.formSkin .detectorChip:hover {
+  color: var(--form-ink);
+  background: color-mix(in srgb, var(--form-ink) 5%, var(--form-field-bg));
+  border-color: var(--form-field-border-hover);
+}
+
+.formSkin .detectorChipOn,
+.formSkin .detectorChipOn:hover {
+  color: var(--form-info);
+  background: color-mix(in srgb, var(--form-info) 12%, var(--form-field-bg));
+  border-color: var(--form-info);
+}
+
+.formSkin .inputSourceOption {
+  color: var(--form-ink-muted);
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border);
+}
+
+.formSkin .inputSourceOption:hover:not(:disabled) {
+  color: var(--form-ink);
+  border-color: var(--form-field-border-hover);
+}
+
+.formSkin .inputSourceOption:disabled {
+  opacity: 1;
+  color: var(--form-ink-faint);
+  background: var(--form-field-disabled-bg);
+}
+
+.formSkin .inputSourceOptionActive,
+.formSkin .inputSourceOptionActive:hover:not(:disabled) {
+  font-weight: var(--font-medium);
+  color: var(--form-info);
+  background: color-mix(in srgb, var(--form-info) 12%, var(--form-field-bg));
+  border-color: var(--form-info);
+}
+
+.formSkin .inputPanel {
+  background: var(--form-panel-bg);
+  border-color: var(--form-panel-border);
+}
+
+.formSkin .activeFile,
+.formSkin .inputHintList {
+  color: var(--form-ink-muted);
+}
+
+.formSkin .activeFileName {
+  color: var(--form-ink);
+}
+
+.formSkin .localTargetNote {
+  color: var(--form-ink);
+  background: color-mix(in srgb, var(--form-info) 10%, var(--form-field-bg));
+  border-color: color-mix(in srgb, var(--form-info) 35%, transparent);
+}
+
+/* ModelPicker's open list: the field's own shade, so it reads as the field
+   unfolded rather than another panel. */
+.formSkin .modelDropdown {
+  background: var(--form-field-bg);
+  border-color: var(--form-field-border-hover);
+}
+
+.formSkin .modelGroup {
+  border-bottom-color: var(--form-divider);
+}
+
+.formSkin .modelGroupHeader {
+  color: var(--form-ink-muted);
+  background: var(--form-panel-bg);
+}
+
+.formSkin .modelOption:hover {
+  background: color-mix(in srgb, var(--form-ink) 6%, var(--form-field-bg));
+}
+
+.formSkin .modelOptionSelected,
+.formSkin .modelOptionSelected:hover {
+  background: color-mix(in srgb, var(--form-focus) 14%, var(--form-field-bg));
+}
+
+.formSkin .modelOptionName {
+  color: var(--form-ink);
+}
+
+.formSkin .modelOptionCtx {
+  color: var(--form-ink-muted);
+  background: var(--form-panel-bg);
+  border-color: var(--form-panel-border);
+}
+
+.formSkin .modelDropdownEmpty,
+.formSkin .modelOptionDesc {
+  color: var(--form-ink-muted);
+}
+
+/* A row holding one short control (a select). Auto-fit stretched it across the
+   whole panel; two fixed tracks keep it at the width it has beside a neighbour. */
+.fieldRowHalf {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 720px) {
+  .fieldRowHalf {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The Engagement Record's compliance frameworks, one chip per standard. */
+.complianceChip {
+  composes: chip;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* Plus when unpicked, check when picked: both 12px, so picking one does not
+   shift its neighbours along the row. */
+.complianceChip > svg {
+  flex-shrink: 0;
+}
+
+/* A saved RoE's frameworks are disabled because the document owns them, not
+   because a guard holds them: the picked set is the information, so it keeps
+   full colour. */
+.complianceChip:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+/* The RoE parse leaves the extracted text for reference only. */
+.rawDocumentText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* ---- Skin: Other Scans ---- */
+
+/* Secret Multiscanner result types while verification is off: they filter
+   nothing then, so the label steps down beside the globally faded box. */
+.formSkin .checkboxLabelOff {
+  color: var(--form-ink-faint);
+  cursor: not-allowed;
+}
+
+/* A configured Secret Multiscanner source is a panel; its header row folds it. */
+.sourceCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.sourceCardHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.sourceCardTitle {
+  font-size: 13px;
+  font-weight: var(--font-semibold);
+  color: var(--form-ink);
+}
+
+.detectorPickerTitle {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--form-ink);
+}
+
+/* ---- Skin: Agent Skills ---- */
+
+/* One panel per skill: its switch row, then, while the skill is on, its
+   settings under a divider in the same panel, so a skill and its tuning read
+   as one block on the card. */
+.skillList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.skillPanel {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3);
+  background: var(--form-panel-bg);
+  border: 1px solid var(--form-panel-border);
+  border-radius: var(--radius-default);
+}
+
+.skillHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.skillInfo {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skillName {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: 13px;
+  font-weight: var(--font-semibold);
+  color: var(--form-ink);
+}
+
+/* Off reads from the muted name and the empty switch track. Fading the whole
+   row instead put every line of it under 4.5:1. */
+.skillPanelOff .skillName {
+  color: var(--form-ink-muted);
+}
+
+/* A fixed box, so the 14px and 16px icons leave every name at one indent. */
+.skillIcon {
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+}
+
+/* Lines under the name start where the name does, past its icon. */
+.skillDetail {
+  padding-left: calc(16px + var(--space-1-5));
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--form-ink-muted);
+}
+
+.skillWarning {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.skillDetailEmpty {
+  font-style: italic;
+}
+
+.skillVersionBadge {
+  composes: metaBadge;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.skillFlagDanger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--form-danger);
+}
+
+/* Out-ranks the global .iconButton, which paints from the pre-skin tokens. */
+.formSkin .skillIconButton {
+  flex-shrink: 0;
+  color: var(--form-ink-muted);
+}
+
+.formSkin .skillIconButton:hover {
+  color: var(--form-ink);
+  background: color-mix(in srgb, var(--form-ink) 8%, transparent);
+}
+
+.skillSettings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--form-divider);
+}
+
+.skillSettingsHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.formSkin .skillSettings .sectionDescription {
+  font-size: var(--text-xs);
+}
+
+/* A group title heads the rows below it, so it keeps more room above than below. */
+.skillSettings > .subSectionTitle {
+  margin-top: var(--space-2);
+}
+
+.monoTextarea {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* User skills: search, the "Enabled only" filter and the count. */
+.skillFilterBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.skillSearch {
+  display: inline-flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--form-ink-muted);
+}
+
+.skillFilterCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--form-ink);
+  cursor: pointer;
+}
+
+.skillListNote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  padding: var(--space-4);
+  color: var(--form-ink-muted);
+}
+
+.skillEmptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--form-ink-muted);
+}
+
+/* A link dressed as a button, which `.formSkin a` would otherwise underline. */
+.skillEmptyLink {
+  composes: actionButton;
+}
+
+.formSkin .skillEmptyLink {
+  text-decoration: none;
+}
+
+/* ---- Skin: AI Agent & CypherFix ---- */
+
+/* A <details> fold inside a panel (LATS advanced knobs, one MCP plugin's
+   tools). Stays display: list-item so the native marker still says it folds. */
+.disclosureSummary {
+  padding: 2px 0;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--form-ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+details[open] > .disclosureSummary {
+  margin-bottom: var(--space-2);
+}
+
+.disclosureMeta {
+  margin-left: var(--space-2);
+  font-weight: var(--font-normal);
+  color: var(--form-ink-muted);
+}
+
+/* The Tool Matrix API-key prompt opens in a portal, outside .formSkin, where
+   the global hint ink (--text-tertiary) and a crimson link both fall under
+   4.5:1. The --form-* tokens are global, so they still apply here. */
+.keyModalHint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--form-ink-muted);
+}
+
+.keyModalHint a {
+  color: var(--form-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }

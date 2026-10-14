@@ -1,6 +1,7 @@
 'use client'
 
 import type { Project } from '@prisma/client'
+import { Toggle } from '@/components/ui/Toggle/Toggle'
 import { WikiInfoButton } from '@/components/ui/WikiInfoButton'
 import styles from '../ProjectForm.module.css'
 
@@ -11,12 +12,15 @@ interface HydraSectionProps {
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
 }
 
+// Hydra's -e flags, stored concatenated in hydraExtraChecks.
+const EXTRA_CHECKS = [
+  { flag: 'n', label: 'Null/empty password (n)' },
+  { flag: 's', label: 'Username as password (s)' },
+  { flag: 'r', label: 'Reversed username (r)' },
+]
+
 export function HydraSection({ data, updateField }: HydraSectionProps) {
-  // Parse extra checks string into individual flags
   const extraChecks = (data.hydraExtraChecks ?? 'nsr') as string
-  const hasNull = extraChecks.includes('n')
-  const hasLoginAsPass = extraChecks.includes('s')
-  const hasReversed = extraChecks.includes('r')
 
   const toggleExtraCheck = (flag: string) => {
     let current = extraChecks
@@ -29,14 +33,14 @@ export function HydraSection({ data, updateField }: HydraSectionProps) {
   }
 
   return (
-    <div style={{ padding: 'var(--space-3) var(--space-4)', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 8, right: 16 }}>
+    <div className={styles.skillSettings}>
+      <div className={styles.skillSettingsHead}>
+        <p className={styles.sectionDescription}>
+          Configure THC Hydra credential testing settings. Hydra supports 50+ protocols
+          including SSH, FTP, RDP, SMB, HTTP forms, databases, and more.
+        </p>
         <WikiInfoButton target="https://github.com/samugit83/redamon/wiki/Project-Settings-Reference#hydra-credential-testing" title="Open Hydra wiki section" />
       </div>
-      <p className={styles.sectionDescription} style={{ paddingRight: '2.5rem' }}>
-        Configure THC Hydra credential testing settings. Hydra supports 50+ protocols
-        including SSH, FTP, RDP, SMB, HTTP forms, databases, and more.
-      </p>
 
       {/* Threads + Wait Between Connections */}
       <div className={styles.fieldRow}>
@@ -102,72 +106,56 @@ export function HydraSection({ data, updateField }: HydraSectionProps) {
         </div>
       </div>
 
-      {/* Stop On First Found + Verbose */}
-      <div className={styles.fieldRow}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>
-            <input
-              type="checkbox"
-              checked={data.hydraStopOnFirstFound ?? true}
-              onChange={(e) => updateField('hydraStopOnFirstFound', e.target.checked)}
-              style={{ marginRight: '8px' }}
-            />
-            Stop On First Found (-f)
-          </label>
-          <span className={styles.fieldHint}>
-            Stop immediately when valid credentials are found.
-          </span>
+      <div>
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>Stop On First Found (-f)</span>
+            <p className={styles.toggleDescription}>
+              Stop immediately when valid credentials are found.
+            </p>
+          </div>
+          <Toggle
+            checked={data.hydraStopOnFirstFound ?? true}
+            onChange={(checked) => updateField('hydraStopOnFirstFound', checked)}
+            aria-label="Stop On First Found (-f)"
+          />
         </div>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>
-            <input
-              type="checkbox"
-              checked={data.hydraVerbose ?? true}
-              onChange={(e) => updateField('hydraVerbose', e.target.checked)}
-              style={{ marginRight: '8px' }}
-            />
-            Verbose Output (-V)
-          </label>
-          <span className={styles.fieldHint}>
-            Show each login attempt in output for progress tracking.
-          </span>
+        <div className={styles.toggleRow}>
+          <div>
+            <span className={styles.toggleLabel}>Verbose Output (-V)</span>
+            <p className={styles.toggleDescription}>
+              Show each login attempt in output for progress tracking.
+            </p>
+          </div>
+          <Toggle
+            checked={data.hydraVerbose ?? true}
+            onChange={(checked) => updateField('hydraVerbose', checked)}
+            aria-label="Verbose Output (-V)"
+          />
         </div>
       </div>
 
-      {/* Extra Password Checks */}
-      <div className={styles.fieldRow}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>Extra Password Checks (-e)</label>
-          <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
-              <input
-                type="checkbox"
-                checked={hasNull}
-                onChange={() => toggleExtraCheck('n')}
-              />
-              Null/empty password (n)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
-              <input
-                type="checkbox"
-                checked={hasLoginAsPass}
-                onChange={() => toggleExtraCheck('s')}
-              />
-              Username as password (s)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
-              <input
-                type="checkbox"
-                checked={hasReversed}
-                onChange={() => toggleExtraCheck('r')}
-              />
-              Reversed username (r)
-            </label>
-          </div>
-          <span className={styles.fieldHint}>
-            Additional password variations tried before the wordlist. Common quick wins.
-          </span>
+      <div className={styles.fieldGroup}>
+        <span className={styles.fieldLabel}>Extra Password Checks (-e)</span>
+        <div className={styles.chipGroup} role="group" aria-label="Extra Password Checks (-e)">
+          {EXTRA_CHECKS.map(check => {
+            const on = extraChecks.includes(check.flag)
+            return (
+              <button
+                key={check.flag}
+                type="button"
+                aria-pressed={on}
+                className={`${styles.chip} ${on ? styles.chipOn : ''}`}
+                onClick={() => toggleExtraCheck(check.flag)}
+              >
+                {check.label}
+              </button>
+            )
+          })}
         </div>
+        <span className={styles.fieldHint}>
+          Additional password variations tried before the wordlist. Common quick wins.
+        </span>
       </div>
     </div>
   )

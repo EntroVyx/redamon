@@ -34,7 +34,7 @@ export function GithubSection({ data, updateField, hasGithubToken = false, actio
   return (
     // id: scroll target for the Other Scans card's settings link. Keep it in
     // sync with PROJECT_SECTION_ANCHORS in lib/projectSettingsLinks.ts.
-    <div className={styles.section} id="github-secret-hunting">
+    <div className={`${styles.section} ${styles.formSkin}`} id="github-secret-hunting">
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Github size={16} />
@@ -58,7 +58,7 @@ export function GithubSection({ data, updateField, hasGithubToken = false, actio
 
           <p className={styles.sectionRequirement}>
             Requires a GitHub Access Token in{' '}
-            <Link href={SETTINGS_KEYS_HREF} style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
+            <Link href={SETTINGS_KEYS_HREF}>
               Global Settings
             </Link>
             . Mandatory even for public repositories: without one GitHub allows 60 requests
@@ -74,83 +74,85 @@ export function GithubSection({ data, updateField, hasGithubToken = false, actio
             <CredentialShortcut settingsKey="githubAccessToken" keys={keys} />
           </div>
 
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Target Organization</label>
-            <input
-              type="text"
-              className="textInput"
-              value={data.githubTargetOrg}
-              onChange={(e) => updateField('githubTargetOrg', e.target.value)}
-              placeholder="organization-name"
-              disabled={!tokenSet}
-            />
-          </div>
+          <div className={styles.fieldRow}>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Target Organization</label>
+              <input
+                type="text"
+                className="textInput"
+                value={data.githubTargetOrg}
+                onChange={(e) => updateField('githubTargetOrg', e.target.value)}
+                placeholder="organization-name"
+                disabled={!tokenSet}
+              />
+            </div>
 
-          <div className={styles.fieldGroup}>
-            <label className={styles.fieldLabel}>Target Repositories</label>
-            <input
-              type="text"
-              className="textInput"
-              value={data.githubTargetRepos}
-              onChange={(e) => updateField('githubTargetRepos', e.target.value)}
-              placeholder="repo1, repo2, repo3"
-              disabled={!tokenSet}
-            />
-            <span className={styles.fieldHint}>
-              Comma-separated list. Leave empty to scan all repositories.
-            </span>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Target Repositories</label>
+              <input
+                type="text"
+                className="textInput"
+                value={data.githubTargetRepos}
+                onChange={(e) => updateField('githubTargetRepos', e.target.value)}
+                placeholder="repo1, repo2, repo3"
+                disabled={!tokenSet}
+              />
+              <span className={styles.fieldHint}>
+                Comma-separated list. Leave empty to scan all repositories.
+              </span>
+            </div>
           </div>
 
           {tokenSet && (
-            <>
-              <div className={styles.subSection}>
-                <h3 className={styles.subSectionTitle}>Scan Options</h3>
-                <div className={styles.toggleRow}>
-                  <div>
-                    <span className={styles.toggleLabel}>Scan Member Repositories</span>
-                    <p className={styles.toggleDescription}>Include repositories of organization members</p>
-                  </div>
-                  <Toggle
-                    checked={data.githubScanMembers}
-                    onChange={(checked) => updateField('githubScanMembers', checked)}
-                  />
+            <div className={styles.subSection}>
+              <h3 className={styles.subSectionTitle}>Scan Options</h3>
+              <div className={styles.toggleRow}>
+                <div>
+                  <span className={styles.toggleLabel}>Scan Member Repositories</span>
+                  <p className={styles.toggleDescription}>Include repositories of organization members</p>
                 </div>
-                <div className={styles.toggleRow}>
-                  <div>
-                    <span className={styles.toggleLabel}>Scan Gists</span>
-                    <p className={styles.toggleDescription}>Search for secrets in gists</p>
-                  </div>
-                  <Toggle
-                    checked={data.githubScanGists}
-                    onChange={(checked) => updateField('githubScanGists', checked)}
-                  />
+                <Toggle
+                  checked={data.githubScanMembers}
+                  onChange={(checked) => updateField('githubScanMembers', checked)}
+                />
+              </div>
+              <div className={styles.toggleRow}>
+                <div>
+                  <span className={styles.toggleLabel}>Scan Gists</span>
+                  <p className={styles.toggleDescription}>Search for secrets in gists</p>
                 </div>
-                <div className={styles.toggleRow}>
-                  <div>
-                    <span className={styles.toggleLabel}>Scan Commits</span>
-                    <p className={styles.toggleDescription}>Search commit history for secrets</p>
-                    <TimeEstimate estimate="Most expensive operation - disabling saves 50%+ time" />
-                  </div>
-                  <Toggle
-                    checked={data.githubScanCommits}
-                    onChange={(checked) => updateField('githubScanCommits', checked)}
-                  />
+                <Toggle
+                  checked={data.githubScanGists}
+                  onChange={(checked) => updateField('githubScanGists', checked)}
+                />
+              </div>
+              <div className={styles.toggleRow}>
+                <div>
+                  <span className={styles.toggleLabel}>Scan Commits</span>
+                  <p className={styles.toggleDescription}>Search commit history for secrets</p>
+                  <TimeEstimate estimate="Most expensive operation - disabling saves 50%+ time" />
                 </div>
+                <Toggle
+                  checked={data.githubScanCommits}
+                  onChange={(checked) => updateField('githubScanCommits', checked)}
+                />
               </div>
 
               {data.githubScanCommits && (
-                <div className={styles.fieldGroup}>
-                  <label className={styles.fieldLabel}>Max Commits to Scan</label>
-                  <input
-                    type="number"
-                    className="textInput"
-                    value={data.githubMaxCommits}
-                    onChange={(e) => updateField('githubMaxCommits', parseInt(e.target.value) || 100)}
-                    min={1}
-                    max={1000}
-                  />
-                  <span className={styles.fieldHint}>Number of commits to scan per repository</span>
-                  <TimeEstimate estimate="Scales linearly: 100 = default, 1000 = ~10x slower" />
+                <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel}>Max Commits to Scan</label>
+                    <input
+                      type="number"
+                      className="textInput"
+                      value={data.githubMaxCommits}
+                      onChange={(e) => updateField('githubMaxCommits', parseInt(e.target.value) || 100)}
+                      min={1}
+                      max={1000}
+                    />
+                    <span className={styles.fieldHint}>Number of commits to scan per repository</span>
+                    <TimeEstimate estimate="Scales linearly: 100 = default, 1000 = ~10x slower" />
+                  </div>
                 </div>
               )}
 
@@ -164,7 +166,7 @@ export function GithubSection({ data, updateField, hasGithubToken = false, actio
                   onChange={(checked) => updateField('githubOutputJson', checked)}
                 />
               </div>
-            </>
+            </div>
           )}
         </div>
       )}

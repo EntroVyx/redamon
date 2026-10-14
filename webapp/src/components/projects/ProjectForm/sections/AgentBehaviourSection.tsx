@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, Bot, AlertTriangle } from 'lucide-react'
+import { ChevronDown, Bot, AlertTriangle, Info } from 'lucide-react'
 import { Toggle, WikiInfoButton } from '@/components/ui'
 import { useProject } from '@/providers/ProjectProvider'
 import type { Project } from '@prisma/client'
@@ -65,7 +65,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
   }
 
   return (
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Bot size={16} />
@@ -110,7 +110,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                 onChange={(checked) => updateField('agentActivatePostExplPhase', checked)}
               />
             </div>
-            <div className={styles.fieldRow}>
+            <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Post-Exploitation Type</label>
                 <select
@@ -127,7 +127,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
             <div className={styles.fieldGroup}>
               <label className={styles.fieldLabel}>Informational Phase System Prompt</label>
               <textarea
-                className="textInput"
+                className="textarea"
                 value={data.agentInformationalSystemPrompt}
                 onChange={(e) => updateField('agentInformationalSystemPrompt', e.target.value)}
                 placeholder="Custom system prompt for the informational/recon phase..."
@@ -138,7 +138,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
             <div className={styles.fieldGroup}>
               <label className={styles.fieldLabel}>Exploitation Phase System Prompt</label>
               <textarea
-                className="textInput"
+                className="textarea"
                 value={data.agentExplSystemPrompt}
                 onChange={(e) => updateField('agentExplSystemPrompt', e.target.value)}
                 placeholder="Custom system prompt for the exploitation phase..."
@@ -149,7 +149,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
             <div className={styles.fieldGroup}>
               <label className={styles.fieldLabel}>Post-Exploitation Phase System Prompt</label>
               <textarea
-                className="textInput"
+                className="textarea"
                 value={data.agentPostExplSystemPrompt}
                 onChange={(e) => updateField('agentPostExplSystemPrompt', e.target.value)}
                 placeholder="Custom system prompt for the post-exploitation phase..."
@@ -162,13 +162,13 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
           {/* Payload Direction */}
           <div className={styles.subSection}>
             <h3 className={styles.subSectionTitle}>Payload Direction</h3>
-            <p className={styles.toggleDescription} style={{ marginBottom: 'var(--space-2)' }}>
+            <p className={styles.sectionDescription}>
               <strong>Reverse</strong>: target connects back to you (LHOST + LPORT). <strong>Bind</strong>: you connect to the target (leave LPORT empty).
             </p>
             <div className={styles.fieldGroup}>
               <label className={styles.fieldLabel}>Tunnel Provider</label>
               <select
-                className="textInput"
+                className="select"
                 value={data.agentNgrokTunnelEnabled ? 'ngrok' : data.agentChiselTunnelEnabled ? 'chisel' : 'none'}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -187,10 +187,14 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
               </span>
             </div>
             {(data.agentNgrokTunnelEnabled || data.agentChiselTunnelEnabled) ? (
-              <p className={styles.toggleDescription} style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-1)' }}>
-                {data.agentNgrokTunnelEnabled && 'LHOST and LPORT are auto-detected from the ngrok tunnel. No manual configuration needed.'}
-                {data.agentChiselTunnelEnabled && 'LHOST is derived from the VPS hostname. Both handler (4444) and web delivery (8080) ports are tunneled. No manual configuration needed.'}
-              </p>
+              <div className={`${styles.callout} ${styles.calloutInfo}`}>
+                <Info size={14} />
+                <span>
+                  <strong>No manual configuration needed.</strong>{' '}
+                  {data.agentNgrokTunnelEnabled && 'LHOST and LPORT are auto-detected from the ngrok tunnel.'}
+                  {data.agentChiselTunnelEnabled && 'LHOST is derived from the VPS hostname. Both handler (4444) and web delivery (8080) ports are tunneled.'}
+                </span>
+              </div>
             ) : (
               <div className={styles.fieldRow}>
                 <div className={styles.fieldGroup}>
@@ -282,16 +286,18 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
             return (
               <div className={styles.subSection}>
                 <h3 className={styles.subSectionTitle}>Fireteam (multi-agent)</h3>
-                <div className={styles.fieldHint} style={{ marginBottom: 8 }}>
-                  When on, the agent can deploy up to N specialist sub-agents in parallel on independent attack surfaces.
-                  Parent stays in charge of safety approvals and phase transitions.
-                </div>
                 <div className={styles.toggleRow}>
+                  <div>
+                    <span className={styles.toggleLabel}>Enable Fireteam</span>
+                    <p className={styles.toggleDescription}>
+                      When on, the agent can deploy up to N specialist sub-agents in parallel on independent attack surfaces.
+                      Parent stays in charge of safety approvals and phase transitions.
+                    </p>
+                  </div>
                   <Toggle
                     checked={fireteamEnabled}
                     onChange={(v) => updateField('fireteamEnabled' as any, v as any)}
-                    labelOn="Fireteam enabled"
-                    labelOff="Fireteam disabled"
+                    aria-label="Enable Fireteam"
                   />
                 </div>
                 {fireteamEnabled && (
@@ -386,15 +392,16 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                     </div>
                     <div className={styles.fieldGroup}>
                       <label className={styles.fieldLabel}>Allowed phases</label>
-                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <div className={styles.checkboxGroup}>
                         {(['informational', 'exploitation', 'post_exploitation'] as const).map(p => (
-                          <label key={p} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <label key={p} className="checkboxLabel">
                             <input
                               type="checkbox"
+                              className="checkbox"
                               checked={allowedPhases.includes(p)}
                               onChange={() => togglePhase(p)}
                             />
-                            <span style={{ fontSize: '0.85rem' }}>{p}</span>
+                            {p}
                           </label>
                         ))}
                       </div>
@@ -418,7 +425,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                         }}
                         style={{ width: '100%' }}
                       />
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted, #888)', marginTop: 2 }}>
+                      <div className={styles.fieldHint} style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)' }}>
                         <span>1 - only very complex tasks</span>
                         <span>3 - balanced (default)</span>
                         <span>5 - deploy aggressively</span>
@@ -428,8 +435,8 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                       </span>
                     </div>
                     {crossError && (
-                      <div className={styles.shodanWarning} style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.08)' }}>
-                        <AlertTriangle size={14} style={{ color: '#ef4444' }} />
+                      <div className={`${styles.callout} ${styles.calloutDanger}`} role="alert">
+                        <AlertTriangle size={14} />
                         <span>{crossError}</span>
                       </div>
                     )}
@@ -459,52 +466,62 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                   Exploit-Path Search (LATS)
                   <WikiInfoButton target="Lats" />
                 </h3>
-                <div className={styles.fieldHint} style={{ marginBottom: 8 }}>
-                  Systematic tree search over exploit probes. Turns on only when the agent finds &gt;= 2 credible
-                  attack paths on a discovered surface, then concentrates the budget on the highest-value line and
-                  backs out of WAF/403 dead ends.
-                </div>
                 <div className={styles.toggleRow}>
+                  <div>
+                    <span className={styles.toggleLabel}>Enable Exploit-Path Search</span>
+                    <p className={styles.toggleDescription}>
+                      Systematic tree search over exploit probes. Turns on only when the agent finds &gt;= 2 credible
+                      attack paths on a discovered surface, then concentrates the budget on the highest-value line and
+                      backs out of WAF/403 dead ends.
+                    </p>
+                  </div>
                   <Toggle
                     checked={latsEnabled}
                     onChange={(v) => updateField('agentLatsEnabled' as any, v as any)}
-                    labelOn="Exploit-Path Search enabled"
-                    labelOff="Exploit-Path Search disabled"
+                    aria-label="Enable Exploit-Path Search"
                   />
                 </div>
                 {latsEnabled && (
                   <>
                     {shadowMode && (
-                      <div className={styles.shodanWarning} style={{ borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.08)' }}>
-                        <span>Observe-only mode: the search tree is built and visualized but the normal agent drives the actual probes.</span>
+                      <div className={`${styles.callout} ${styles.calloutInfo}`}>
+                        <Info size={14} />
+                        <span>
+                          <strong>Observe-only mode:</strong> the search tree is built and visualized but the normal agent drives the actual probes.
+                        </span>
                       </div>
                     )}
                     <div className={styles.toggleRow}>
+                      <div>
+                        <span className={styles.toggleLabel}>Shadow mode (observe only)</span>
+                        <p className={styles.toggleDescription}>When off, the search drives the probes.</p>
+                      </div>
                       <Toggle
                         checked={shadowMode}
                         onChange={(v) => updateField('agentLatsShadowMode' as any, v as any)}
-                        labelOn="Shadow mode (observe only)"
-                        labelOff="Shadow mode off (search drives)"
+                        aria-label="Shadow mode (observe only)"
                       />
                     </div>
                     <div className={styles.fieldGroup}>
                       <label className={styles.fieldLabel}>Search in phases</label>
-                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div className={styles.checkboxGroup}>
+                        <label className="checkboxLabel">
                           <input
                             type="checkbox"
+                            className="checkbox"
                             checked={phaseExpl}
                             onChange={(e) => updateField('agentLatsPhaseExploitation' as any, e.target.checked as any)}
                           />
-                          <span style={{ fontSize: '0.85rem' }}>exploitation</span>
+                          exploitation
                         </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <label className="checkboxLabel">
                           <input
                             type="checkbox"
+                            className="checkbox"
                             checked={phasePostExpl}
                             onChange={(e) => updateField('agentLatsPhasePostExpl' as any, e.target.checked as any)}
                           />
-                          <span style={{ fontSize: '0.85rem' }}>post-exploitation <em>(experimental)</em></span>
+                          <span>post-exploitation <em>(experimental)</em></span>
                         </label>
                       </div>
                       <span className={styles.fieldHint}>At least one phase required. Post-exploitation scoring is experimental (§6.1).</span>
@@ -595,58 +612,62 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                         <span className={styles.fieldHint}>2-4. Competing hypotheses needed before the search turns on. Higher = more selective.</span>
                       </div>
                     </div>
-                    <details className={styles.fieldGroup}>
-                      <summary style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>Advanced</summary>
-                      <div className={styles.fieldGroup} style={{ marginTop: 8 }}>
-                        <label className={styles.fieldLabel}>Exploration vs focus: <strong>{Number(uctC).toFixed(1)}</strong></label>
-                        <input
-                          type="range"
-                          min={0.5}
-                          max={2.5}
-                          step={0.1}
-                          value={uctC}
-                          onChange={(e) => updateField('agentLatsUctC' as any, parseFloat(e.target.value) as any)}
-                          style={{ width: '100%' }}
-                        />
-                        <span className={styles.fieldHint}>Low = laser-focus the single best line. High = also develop secondary footholds.</span>
-                      </div>
-                      <div className={styles.fieldGroup}>
-                        <label className={styles.fieldLabel}>Prune aggressiveness: <strong>{Number(pruneFloor).toFixed(2)}</strong></label>
-                        <input
-                          type="range"
-                          min={0.0}
-                          max={0.5}
-                          step={0.05}
-                          value={pruneFloor}
-                          onChange={(e) => updateField('agentLatsPruneFloor' as any, parseFloat(e.target.value) as any)}
-                          style={{ width: '100%' }}
-                        />
-                        <span className={styles.fieldHint}>Value below which a branch is abandoned. Higher = give up on weak branches sooner.</span>
-                      </div>
-                      <div className={styles.fieldGroup}>
-                        <label className={styles.fieldLabel}>Hard node cap</label>
-                        <input
-                          type="number"
-                          className="textInput"
-                          value={maxTreeNodes}
-                          min={10}
-                          max={1000}
-                          onChange={(e) => {
-                            const raw = e.target.value
-                            updateField('agentLatsMaxTreeNodes' as any, (raw === '' ? '' : parseInt(raw)) as any)
-                          }}
-                          onBlur={(e) => {
-                            const n = parseInt(e.target.value)
-                            const v = Number.isFinite(n) ? Math.max(10, Math.min(1000, n)) : 120
-                            updateField('agentLatsMaxTreeNodes' as any, v as any)
-                          }}
-                        />
-                        <span className={styles.fieldHint}>10-1000. Hard tree-size cap.</span>
+                    <details>
+                      <summary className={styles.disclosureSummary}>Advanced</summary>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                        <div className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>Exploration vs focus: <strong>{Number(uctC).toFixed(1)}</strong></label>
+                          <input
+                            type="range"
+                            min={0.5}
+                            max={2.5}
+                            step={0.1}
+                            value={uctC}
+                            onChange={(e) => updateField('agentLatsUctC' as any, parseFloat(e.target.value) as any)}
+                            style={{ width: '100%' }}
+                          />
+                          <span className={styles.fieldHint}>Low = laser-focus the single best line. High = also develop secondary footholds.</span>
+                        </div>
+                        <div className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>Prune aggressiveness: <strong>{Number(pruneFloor).toFixed(2)}</strong></label>
+                          <input
+                            type="range"
+                            min={0.0}
+                            max={0.5}
+                            step={0.05}
+                            value={pruneFloor}
+                            onChange={(e) => updateField('agentLatsPruneFloor' as any, parseFloat(e.target.value) as any)}
+                            style={{ width: '100%' }}
+                          />
+                          <span className={styles.fieldHint}>Value below which a branch is abandoned. Higher = give up on weak branches sooner.</span>
+                        </div>
+                        <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
+                          <div className={styles.fieldGroup}>
+                            <label className={styles.fieldLabel}>Hard node cap</label>
+                            <input
+                              type="number"
+                              className="textInput"
+                              value={maxTreeNodes}
+                              min={10}
+                              max={1000}
+                              onChange={(e) => {
+                                const raw = e.target.value
+                                updateField('agentLatsMaxTreeNodes' as any, (raw === '' ? '' : parseInt(raw)) as any)
+                              }}
+                              onBlur={(e) => {
+                                const n = parseInt(e.target.value)
+                                const v = Number.isFinite(n) ? Math.max(10, Math.min(1000, n)) : 120
+                                updateField('agentLatsMaxTreeNodes' as any, v as any)
+                              }}
+                            />
+                            <span className={styles.fieldHint}>10-1000. Hard tree-size cap.</span>
+                          </div>
+                        </div>
                       </div>
                     </details>
                     {noPhase && (
-                      <div className={styles.shodanWarning} style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.08)' }}>
-                        <AlertTriangle size={14} style={{ color: '#ef4444' }} />
+                      <div className={`${styles.callout} ${styles.calloutDanger}`} role="alert">
+                        <AlertTriangle size={14} />
                         <span>Select at least one phase for the search to run.</span>
                       </div>
                     )}
@@ -713,14 +734,14 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
             <h3 className={styles.subSectionTitle}>Approval Gates</h3>
 
             {(!data.agentRequireApprovalForExploitation || !data.agentRequireApprovalForPostExploitation || !(data.agentGuardrailEnabled ?? true) || !(data.agentRequireToolConfirmation ?? true)) && (
-              <div className={styles.shodanWarning} style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.08)' }}>
-                <AlertTriangle size={14} style={{ color: '#ef4444' }} />
+              <div className={`${styles.callout} ${styles.calloutDanger}`}>
+                <AlertTriangle size={14} />
                 <span>
                   <strong>Autonomous operation risk:</strong> One or more safety gates are disabled.
                   The AI agent may perform exploitation, post-exploitation, dangerous tool executions, or out-of-scope actions without human approval.
                   This significantly increases the risk of unintended damage to target systems.
                   You assume full responsibility for all autonomous agent actions.
-                  See <a href="https://github.com/samugit83/redamon/blob/master/DISCLAIMER.md" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>DISCLAIMER.md</a> for details.
+                  See <a href="https://github.com/samugit83/redamon/blob/master/DISCLAIMER.md" target="_blank" rel="noopener noreferrer">DISCLAIMER.md</a> for details.
                 </span>
               </div>
             )}
@@ -794,7 +815,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                 <div className={styles.fieldGroup}>
                   <label className={styles.fieldLabel}>Authorized Packages</label>
                   <textarea
-                    className="textInput"
+                    className="textarea"
                     value={data.agentKaliInstallAllowedPackages}
                     onChange={(e) => updateField('agentKaliInstallAllowedPackages', e.target.value)}
                     rows={2}
@@ -805,7 +826,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
                 <div className={styles.fieldGroup}>
                   <label className={styles.fieldLabel}>Forbidden Packages</label>
                   <textarea
-                    className="textInput"
+                    className="textarea"
                     value={data.agentKaliInstallForbiddenPackages}
                     onChange={(e) => updateField('agentKaliInstallForbiddenPackages', e.target.value)}
                     rows={2}
@@ -908,7 +929,7 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
               window - are in Target &amp; Modules.
             </p>
 
-            <div className={styles.fieldRow}>
+            <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Max allowed phase</label>
                 <select
@@ -927,41 +948,41 @@ export function AgentBehaviourSection({ data, updateField, detectedHostIp }: Age
               </div>
             </div>
 
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Forbidden tools</label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {FORBIDDEN_TOOLS.map(tool => (
-                    <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={(data.roeForbiddenTools || []).includes(tool)}
-                        onChange={() => toggleForbiddenTool(tool)}
-                      />
-                      <code>{tool}</code>
-                    </label>
-                  ))}
-                </div>
-                <span className={styles.fieldHint}>
-                  Whatever that tool&apos;s own enable flag says. Refused before the tool
-                  executes, by exact name: these are the agent&apos;s real tool names, so a
-                  ban can never be recorded against something that will not match.
-                </span>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Forbidden tools</label>
+              <div className={styles.checkboxGroup}>
+                {FORBIDDEN_TOOLS.map(tool => (
+                  <label key={tool} className="checkboxLabel">
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={(data.roeForbiddenTools || []).includes(tool)}
+                      onChange={() => toggleForbiddenTool(tool)}
+                    />
+                    <code>{tool}</code>
+                  </label>
+                ))}
               </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Forbidden categories</label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {FORBIDDEN_CATEGORIES.map(cat => (
-                    <label key={cat.value} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={(data.roeForbiddenCategories || []).includes(cat.value)}
-                        onChange={() => toggleForbiddenCategory(cat.value)}
-                      />
-                      {cat.label}
-                    </label>
-                  ))}
-                </div>
+              <span className={styles.fieldHint}>
+                Whatever that tool&apos;s own enable flag says. Refused before the tool
+                executes, by exact name: these are the agent&apos;s real tool names, so a
+                ban can never be recorded against something that will not match.
+              </span>
+            </div>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Forbidden categories</label>
+              <div className={styles.checkboxGroup}>
+                {FORBIDDEN_CATEGORIES.map(cat => (
+                  <label key={cat.value} className="checkboxLabel">
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={(data.roeForbiddenCategories || []).includes(cat.value)}
+                      onChange={() => toggleForbiddenCategory(cat.value)}
+                    />
+                    {cat.label}
+                  </label>
+                ))}
               </div>
             </div>
 

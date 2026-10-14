@@ -340,7 +340,7 @@ export function AttackSkillsSection({ data, updateField, projectId }: AttackSkil
   return (
     <>
       {/* Built-in Agent Skills */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${styles.formSkin}`}>
         <div className={styles.sectionHeader} onClick={() => setBuiltInOpen(!builtInOpen)}>
           <h2 className={styles.sectionTitle}>
             <Bug size={16} />
@@ -361,119 +361,93 @@ export function AttackSkillsSection({ data, updateField, projectId }: AttackSkil
               from classifying requests into that skill type and using its prompts.
             </p>
 
-            {BUILT_IN_SKILLS.map(skill => {
-              const enabled = isBuiltInEnabled(skill.id)
-              return (
-                <div
-                  key={skill.id}
-                  style={{
-                    marginBottom: 'var(--space-4)',
-                    opacity: enabled ? 1 : 0.5,
-                    transition: 'opacity 0.2s ease',
-                  }}
-                >
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-3)',
-                    marginBottom: enabled ? 'var(--space-3)' : 0,
-                    padding: 'var(--space-3)',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-default)',
-                    borderRadius: 'var(--radius-default)',
-                  }}>
-                    <Toggle
-                      checked={enabled}
-                      onChange={(v) => toggleBuiltIn(skill.id, v)}
-                      size="large"
-                    />
-                    <div style={{ flex: 1 }}>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-1-5)',
-                        fontSize: 'var(--text-sm)',
-                        fontWeight: 'var(--font-semibold)',
-                        color: 'var(--text-primary)',
-                      }}>
-                        {skill.icon}
-                        {skill.name}
-                        <span className={styles.badgeActive}>Active</span>
-                      </div>
-                      <div style={{
-                        fontSize: 'var(--text-xs)',
-                        color: 'var(--text-tertiary)',
-                        marginTop: '2px',
-                      }}>
-                        {skill.description}
+            <div className={styles.skillList}>
+              {BUILT_IN_SKILLS.map(skill => {
+                const enabled = isBuiltInEnabled(skill.id)
+                return (
+                  <div key={skill.id} className={`${styles.skillPanel} ${enabled ? '' : styles.skillPanelOff}`}>
+                    <div className={styles.skillHead}>
+                      <Toggle
+                        checked={enabled}
+                        onChange={(v) => toggleBuiltIn(skill.id, v)}
+                        size="large"
+                        aria-label={skill.name}
+                      />
+                      <div className={styles.skillInfo}>
+                        <div className={styles.skillName}>
+                          <span className={styles.skillIcon}>{skill.icon}</span>
+                          {skill.name}
+                          <span className={styles.badgeActive}>Active</span>
+                        </div>
+                        <div className={styles.skillDetail}>{skill.description}</div>
                       </div>
                     </div>
+
+                    {/* Sub-settings rendered when skill is ON */}
+                    {enabled && skill.id === 'brute_force_credential_guess' && (
+                      <HydraSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'phishing_social_engineering' && (
+                      <PhishingSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'denial_of_service' && (
+                      <DosSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'sql_injection' && (
+                      <SqliSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'ssrf' && (
+                      <SsrfSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'rce' && (
+                      <RceSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'path_traversal' && (
+                      <PathTraversalSection data={data} updateField={updateField} />
+                    )}
+                    {enabled && skill.id === 'deserialization' && (
+                      <DeserializationSection data={data} updateField={updateField} />
+                    )}
+
+                    {savedProjectId && (
+                      <PluginSkillRow
+                        skillId={skill.id}
+                        projectId={savedProjectId}
+                        scopeOwnerId={userId}
+                        summary={bySkill.get(skill.id)}
+                        rowActions={rowActions}
+                        onVersions={setVersionsSkill}
+                        onPending={setVersionsSkill}
+                        onReset={reloadOverrides}
+                      />
+                    )}
                   </div>
-
-                  {/* Sub-settings rendered when skill is ON */}
-                  {enabled && skill.id === 'brute_force_credential_guess' && (
-                    <HydraSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'phishing_social_engineering' && (
-                    <PhishingSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'denial_of_service' && (
-                    <DosSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'sql_injection' && (
-                    <SqliSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'ssrf' && (
-                    <SsrfSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'rce' && (
-                    <RceSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'path_traversal' && (
-                    <PathTraversalSection data={data} updateField={updateField} />
-                  )}
-                  {enabled && skill.id === 'deserialization' && (
-                    <DeserializationSection data={data} updateField={updateField} />
-                  )}
-
-                  {savedProjectId && (
-                    <PluginSkillRow
-                      skillId={skill.id}
-                      projectId={savedProjectId}
-                      scopeOwnerId={userId}
-                      summary={bySkill.get(skill.id)}
-                      rowActions={rowActions}
-                      onVersions={setVersionsSkill}
-                      onPending={setVersionsSkill}
-                      onReset={reloadOverrides}
-                    />
-                  )}
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
         )}
       </div>
 
       {/* User Agent Skills */}
-      <div className={styles.section}>
+      <div className={`${styles.section} ${styles.formSkin}`}>
         <div className={styles.sectionHeader} onClick={() => setUserOpen(!userOpen)}>
           <h2 className={styles.sectionTitle}>
             <Swords size={16} />
             User Agent Skills
             <WikiInfoButton target="https://github.com/samugit83/redamon/wiki/Agent-Skills#community-skills" title="Open Community Agent Skills wiki section" />
           </h2>
-          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+          <div className={styles.sectionHeaderRight}>
             <button
               type="button"
-              className="secondaryButton"
+              className={styles.sectionHeaderButton}
               onClick={(e) => { e.stopPropagation(); importCommunityAgentSkills() }}
               disabled={importing || !userId}
               title="Import all community attack skills into your library and enable them for this project"
             >
               {importing
-                ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                : <Download size={14} />}
+                ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                : <Download size={12} />}
               Import from Community
             </button>
             <ChevronDown
@@ -493,8 +467,8 @@ export function AttackSkillsSection({ data, updateField, projectId }: AttackSkil
             </p>
 
             {userSkills.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', flex: '1 1 220px', color: 'var(--text-tertiary)' }}>
+              <div className={styles.skillFilterBar}>
+                <label className={styles.skillSearch}>
                   <Search size={14} aria-hidden />
                   <input
                     className="textInput"
@@ -506,146 +480,103 @@ export function AttackSkillsSection({ data, updateField, projectId }: AttackSkil
                     style={{ flex: 1, minWidth: 0 }}
                   />
                 </label>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1-5)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                <label className={styles.skillFilterCheck}>
                   <input type="checkbox" checked={enabledOnly} onChange={e => setEnabledOnly(e.target.checked)} />
                   Enabled only
                 </label>
-                <span data-testid="user-skill-enabled-count" style={{ fontSize: 'var(--text-xs)', color: atEnabledLimit ? 'var(--status-warning)' : 'var(--text-tertiary)' }}>
+                <span
+                  data-testid="user-skill-enabled-count"
+                  className={`${styles.fieldHint} ${atEnabledLimit ? styles.fieldHintCaution : ''}`}
+                >
                   {enabledCount} of {MAX_ENABLED_USER_SKILLS_PER_PROJECT} enabled
                 </span>
               </div>
             )}
 
             {loading ? (
-              <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--text-tertiary)' }}>
+              <div className={styles.skillListNote}>
                 <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Loading...
               </div>
             ) : userSkills.length === 0 ? (
-              <div style={{
-                textAlign: 'center',
-                padding: 'var(--space-6) var(--space-4)',
-                color: 'var(--text-tertiary)',
-                fontSize: 'var(--text-sm)',
-              }}>
-                <p style={{ marginBottom: 'var(--space-3)' }}>
+              <div className={styles.skillEmptyState}>
+                <p>
                   No user skills uploaded yet. Upload <code>.md</code> skill files from Global Settings to create custom attack workflows.
                 </p>
-                <Link
-                  href={SETTINGS_SKILLS_HREF}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-1-5)',
-                    padding: 'var(--space-2) var(--space-3)',
-                    fontSize: 'var(--text-xs)',
-                    fontWeight: 'var(--font-medium)',
-                    color: 'var(--text-primary)',
-                    background: 'var(--bg-hover)',
-                    border: '1px solid var(--border-default)',
-                    borderRadius: 'var(--radius-default)',
-                    textDecoration: 'none',
-                    transition: 'var(--transition-all)',
-                  }}
-                >
+                <Link href={SETTINGS_SKILLS_HREF} className={styles.skillEmptyLink}>
                   <Settings size={13} />
                   Go to Global Settings
                 </Link>
               </div>
             ) : shownUserSkills.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--text-tertiary)', fontSize: 'var(--text-sm)' }}>
+              <div className={styles.skillListNote}>
                 No skill matches.
               </div>
             ) : (
-              shownUserSkills.map(skill => {
-                const enabled = isUserEnabled(skill.id)
-                const quarantined = !!skill.quarantinedAt
-                const blockedByLimit = !enabled && atEnabledLimit
-                const sibling = enabled && skill.lineageRootId
-                  ? (familyOn.get(skill.lineageRootId) ?? []).find(o => o.id !== skill.id)
-                  : undefined
-                return (
-                  <div
-                    key={skill.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-3)',
-                      marginBottom: 'var(--space-2)',
-                      padding: 'var(--space-3)',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border-default)',
-                      borderRadius: 'var(--radius-default)',
-                      opacity: enabled ? 1 : 0.5,
-                      transition: 'opacity 0.2s ease',
-                    }}
-                  >
-                    <span
-                      title={quarantined ? 'Quarantined: release it in Global Settings to turn it on' : blockedByLimit ? LIMIT_TOOLTIP : undefined}
-                      data-testid={`user-skill-toggle-${skill.id}`}
-                    >
-                      <Toggle
-                        checked={enabled}
-                        onChange={(v) => toggleUser(skill.id, v)}
-                        size="large"
-                        disabled={(quarantined && !enabled) || blockedByLimit}
-                      />
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: 'var(--space-1-5)',
-                        fontSize: 'var(--text-sm)',
-                        fontWeight: 'var(--font-semibold)',
-                        color: 'var(--text-primary)',
-                      }}>
-                        <Swords size={14} />
-                        <span style={{ overflowWrap: 'anywhere' }}>{skill.name}</span>
-                        {skill.version != null && (
-                          <span className={styles.badgeActive} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                            <GitBranch size={10} aria-hidden /> v{skill.version}{skill.derivedFromName ? ` · from ${skill.derivedFromName}` : ''}
-                          </span>
-                        )}
-                        {quarantined && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--text-xs)', color: 'var(--status-error, #ef4444)' }}>
-                            <ShieldOff size={11} aria-hidden /> Quarantined
-                          </span>
-                        )}
-                      </div>
-                      {sibling && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--status-warning)', marginTop: 2 }}>
-                          <AlertTriangle size={11} aria-hidden /> {sibling.name} is also on: the agent sees two versions of the same skill.
+              <div className={styles.skillList}>
+                {shownUserSkills.map(skill => {
+                  const enabled = isUserEnabled(skill.id)
+                  const quarantined = !!skill.quarantinedAt
+                  const blockedByLimit = !enabled && atEnabledLimit
+                  const sibling = enabled && skill.lineageRootId
+                    ? (familyOn.get(skill.lineageRootId) ?? []).find(o => o.id !== skill.id)
+                    : undefined
+                  return (
+                    <div key={skill.id} className={`${styles.skillPanel} ${enabled ? '' : styles.skillPanelOff}`}>
+                      <div className={styles.skillHead}>
+                        <span
+                          title={quarantined ? 'Quarantined: release it in Global Settings to turn it on' : blockedByLimit ? LIMIT_TOOLTIP : undefined}
+                          data-testid={`user-skill-toggle-${skill.id}`}
+                        >
+                          <Toggle
+                            checked={enabled}
+                            onChange={(v) => toggleUser(skill.id, v)}
+                            size="large"
+                            disabled={(quarantined && !enabled) || blockedByLimit}
+                            aria-label={skill.name}
+                          />
+                        </span>
+                        <div className={styles.skillInfo}>
+                          <div className={styles.skillName}>
+                            <span className={styles.skillIcon}><Swords size={14} /></span>
+                            <span style={{ overflowWrap: 'anywhere' }}>{skill.name}</span>
+                            {skill.version != null && (
+                              <span className={styles.skillVersionBadge}>
+                                <GitBranch size={10} aria-hidden /> v{skill.version}{skill.derivedFromName ? ` · from ${skill.derivedFromName}` : ''}
+                              </span>
+                            )}
+                            {quarantined && (
+                              <span className={styles.skillFlagDanger}>
+                                <ShieldOff size={11} aria-hidden /> Quarantined
+                              </span>
+                            )}
+                          </div>
+                          {sibling && (
+                            <div className={`${styles.fieldHint} ${styles.fieldHintCaution} ${styles.skillDetail} ${styles.skillWarning}`}>
+                              <AlertTriangle size={11} aria-hidden /> {sibling.name} is also on: the agent sees two versions of the same skill.
+                            </div>
+                          )}
+                          <div className={styles.skillDetail}>
+                            {skill.description || (
+                              <span className={styles.skillDetailEmpty}>No description</span>
+                            )}
+                          </div>
+                          <div className={styles.skillDetail}>
+                            Uploaded {new Date(skill.createdAt).toLocaleDateString()}
+                          </div>
                         </div>
-                      )}
-                      <div style={{
-                        fontSize: 'var(--text-xs)',
-                        color: 'var(--text-tertiary)',
-                        marginTop: '2px',
-                      }}>
-                        {skill.description || (
-                          <span style={{ opacity: 0.5, fontStyle: 'italic' }}>No description</span>
-                        )}
-                      </div>
-                      <div style={{
-                        fontSize: 'var(--text-xs)',
-                        color: 'var(--text-tertiary)',
-                        marginTop: '2px',
-                      }}>
-                        Uploaded {new Date(skill.createdAt).toLocaleDateString()}
+                        <button
+                          type="button"
+                          className={`iconButton ${styles.skillIconButton}`}
+                          title="Download .md"
+                          onClick={() => downloadSkill(skill.id, skill.name)}
+                        >
+                          <Download size={14} />
+                        </button>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="iconButton"
-                      title="Download .md"
-                      onClick={() => downloadSkill(skill.id, skill.name)}
-                    >
-                      <Download size={14} />
-                    </button>
-                  </div>
-                )
-              })
+                  )
+                })}
+              </div>
             )}
           </div>
         )}

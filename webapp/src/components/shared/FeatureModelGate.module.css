@@ -131,7 +131,7 @@
   gap: var(--space-1);
   min-width: 0;
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .lineValue {

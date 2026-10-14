@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, Shield } from 'lucide-react'
-import { WikiInfoButton, useToast } from '@/components/ui'
+import { AlertTriangle, Check, ChevronDown, Info, Plus, Shield } from 'lucide-react'
+import { Toggle, WikiInfoButton, useToast } from '@/components/ui'
 import type { Project } from '@prisma/client'
 import { currentValuesForDiff, type ParseChange } from '@/lib/reconSettings/roeParse'
 import { announceProjectWrite } from '@/lib/projectVersion'
@@ -49,6 +49,24 @@ const DATA_HANDLING_OPTIONS = [
 ]
 
 const COMPLIANCE_OPTIONS = ['PCI-DSS', 'HIPAA', 'SOC2', 'GDPR', 'ISO27001']
+
+const RECORDED_PERMISSIONS = [
+  {
+    field: 'roeAllowPhysicalAccess',
+    label: 'Allow Physical Access',
+    description: 'On-site access to premises and hardware.',
+  },
+  {
+    field: 'roeAllowDataExfiltration',
+    label: 'Allow Data Exfiltration',
+    description: 'Taking data out of the target, beyond proving access to it.',
+  },
+  {
+    field: 'roeAllowProductionTesting',
+    label: 'Allow Production Testing',
+    description: 'Live production systems are in scope, not only staging or test.',
+  },
+] as const
 
 /**
  * The engagement RECORD: who the client is, who to call, what the document said.
@@ -140,7 +158,7 @@ export function RoeSection({
 
   return (
     <>
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Shield size={16} />
@@ -166,7 +184,7 @@ export function RoeSection({
               {existing && ' A new document replaces the current one and undoes what it changed.'}
             </p>
             {existing && hasDocument && (
-              <div style={{ marginBottom: 10 }}>
+              <div>
                 <RoeCurrentDocument
                   projectId={projectId!}
                   documentName={data.roeDocumentName || 'roe-document'}
@@ -174,7 +192,7 @@ export function RoeSection({
                   onRemove={startRemove}
                   removing={removing}
                 />
-                {removeError && <span role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8rem' }}>{removeError}</span>}
+                {removeError && <span role="alert" className={styles.inlineError}>{removeError}</span>}
               </div>
             )}
             <RoeUploadButton
@@ -224,17 +242,23 @@ export function RoeSection({
               </div>
             </div>
             {data.engagementKind === 'third_party' && !(data.roeGlobalMaxRps > 0) && (
-              <span className={styles.fieldHint} style={{ color: 'var(--color-danger, #d33)' }}>
-                A third-party engagement needs a request-rate ceiling, or its scans will be
-                refused. Set it in Target &amp; Modules &rarr; Engagement limits.
-              </span>
+              <div className={`${styles.callout} ${styles.calloutDanger}`}>
+                <AlertTriangle size={14} />
+                <span>
+                  <strong>No request-rate ceiling.</strong> A third-party engagement needs one, or its
+                  scans will be refused. Set it in Target &amp; Modules &rarr; Engagement limits.
+                </span>
+              </div>
             )}
-            <span className={styles.fieldHint}>
-              This record is the CONTRACT: who the client is, who to call, what the document said.
-              Nothing here constrains a scan. The limits that do - the rate ceiling, the excluded
-              hosts, the scanning window and the agent&apos;s denylists - are ordinary settings,
-              editable at any time, in Target &amp; Modules and Agent Behaviour.
-            </span>
+            <div className={styles.callout}>
+              <Info size={14} />
+              <span>
+                <strong>This record is the contract:</strong> who the client is, who to call, what the
+                document said. Nothing here constrains a scan. The limits that do - the rate ceiling,
+                the excluded hosts, the scanning window and the agent&apos;s denylists - are ordinary
+                settings, editable at any time, in Target &amp; Modules and Agent Behaviour.
+              </span>
+            </div>
           </div>
 
           {/* Client & Engagement */}
@@ -279,8 +303,6 @@ export function RoeSection({
                 <input className="textInput" value={data.roeEmergencyContact} readOnly={readOnly}
                   onChange={(e) => updateField('roeEmergencyContact', e.target.value)} />
               </div>
-            </div>
-            <div className={styles.fieldRow}>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Start Date</label>
                 <input className="textInput" type="date" value={data.roeEngagementStartDate} readOnly={readOnly}
@@ -306,23 +328,16 @@ export function RoeSection({
               enforced in code - availability testing, social engineering, account lockout,
               forbidden tools and categories, the severity cap - are in Agent Behaviour.
             </p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Allow Physical Access</label>
-                <input type="checkbox" checked={data.roeAllowPhysicalAccess} disabled={readOnly}
-                  onChange={(e) => updateField('roeAllowPhysicalAccess', e.target.checked)} />
+            {RECORDED_PERMISSIONS.map(p => (
+              <div key={p.field} className={styles.toggleRow}>
+                <div>
+                  <span className={styles.toggleLabel}>{p.label}</span>
+                  <p className={styles.toggleDescription}>{p.description}</p>
+                </div>
+                <Toggle checked={Boolean(data[p.field])} disabled={readOnly} aria-label={p.label}
+                  onChange={(checked) => updateField(p.field, checked)} />
               </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Allow Data Exfiltration</label>
-                <input type="checkbox" checked={data.roeAllowDataExfiltration} disabled={readOnly}
-                  onChange={(e) => updateField('roeAllowDataExfiltration', e.target.checked)} />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Allow Production Testing</label>
-                <input type="checkbox" checked={data.roeAllowProductionTesting} disabled={readOnly}
-                  onChange={(e) => updateField('roeAllowProductionTesting', e.target.checked)} />
-              </div>
-            </div>
+            ))}
           </div>
 
           {/* Data Handling */}
@@ -345,19 +360,17 @@ export function RoeSection({
                   onChange={(e) => updateField('roeDataRetentionDays', parseInt(e.target.value) || 90)} />
               </div>
             </div>
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Require data encryption</label>
-                <input type="checkbox" checked={data.roeRequireDataEncryption} disabled={readOnly}
-                  onChange={(e) => updateField('roeRequireDataEncryption', e.target.checked)} />
-              </div>
+            <div className={styles.toggleRow}>
+              <span className={styles.toggleLabel}>Require data encryption</span>
+              <Toggle checked={data.roeRequireDataEncryption} disabled={readOnly} aria-label="Require data encryption"
+                onChange={(checked) => updateField('roeRequireDataEncryption', checked)} />
             </div>
           </div>
 
           {/* Communication */}
           <div className={styles.subSection}>
             <h3 className={styles.subSectionTitle}>Communication</h3>
-            <div className={styles.fieldRow}>
+            <div className={`${styles.fieldRow} ${styles.fieldRowHalf}`}>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Status Update Frequency</label>
                 <select className="select" value={data.roeStatusUpdateFrequency} disabled={readOnly}
@@ -368,77 +381,61 @@ export function RoeSection({
                   <option value="none">None</option>
                 </select>
               </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Notify client on critical findings</label>
-                <input type="checkbox" checked={data.roeCriticalFindingNotify} disabled={readOnly}
-                  onChange={(e) => updateField('roeCriticalFindingNotify', e.target.checked)} />
-              </div>
             </div>
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Incident Procedure</label>
-                <textarea className="textInput" rows={3} value={data.roeIncidentProcedure} readOnly={readOnly}
-                  onChange={(e) => updateField('roeIncidentProcedure', e.target.value)}
-                  placeholder="What to do if testing causes an incident..." />
-              </div>
+            <div className={styles.toggleRow}>
+              <span className={styles.toggleLabel}>Notify client on critical findings</span>
+              <Toggle checked={data.roeCriticalFindingNotify} disabled={readOnly} aria-label="Notify client on critical findings"
+                onChange={(checked) => updateField('roeCriticalFindingNotify', checked)} />
+            </div>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Incident Procedure</label>
+              <textarea className="textarea" rows={3} value={data.roeIncidentProcedure} readOnly={readOnly}
+                onChange={(e) => updateField('roeIncidentProcedure', e.target.value)}
+                placeholder="What to do if testing causes an incident..." />
             </div>
           </div>
 
           {/* Compliance */}
           <div className={styles.subSection}>
             <h3 className={styles.subSectionTitle}>Compliance &amp; Authorization</h3>
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Compliance Frameworks</label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {COMPLIANCE_OPTIONS.map(fw => (
-                    <label key={fw} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: readOnly ? 'default' : 'pointer' }}>
-                      <input type="checkbox" checked={(data.roeComplianceFrameworks || []).includes(fw)}
-                        disabled={readOnly} onChange={() => toggleCompliance(fw)} />
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Compliance Frameworks</label>
+              <div className={styles.chipGroup} role="group" aria-label="Compliance frameworks">
+                {COMPLIANCE_OPTIONS.map(fw => {
+                  const on = (data.roeComplianceFrameworks || []).includes(fw)
+                  return (
+                    <button key={fw} type="button" aria-pressed={on} disabled={readOnly}
+                      className={`${styles.complianceChip} ${on ? styles.chipOn : ''}`}
+                      onClick={() => toggleCompliance(fw)}>
+                      {on ? <Check size={12} /> : <Plus size={12} />}
                       {fw}
-                    </label>
-                  ))}
-                </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
-          </div>
-
-          {/* Third-Party Providers */}
-          <div className={styles.subSection}>
-            <h3 className={styles.subSectionTitle}>Third-Party Providers</h3>
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>Cloud/hosting providers with separate authorization</label>
-                <input className="textInput" type="text" readOnly={readOnly}
-                  value={(data.roeThirdPartyProviders || []).join(', ')}
-                  onChange={(e) => updateField('roeThirdPartyProviders', e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean))}
-                  placeholder="e.g. AWS, Hetzner, Cloudflare" />
-              </div>
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>Cloud/hosting providers with separate authorization</label>
+              <input className="textInput" type="text" readOnly={readOnly}
+                value={(data.roeThirdPartyProviders || []).join(', ')}
+                onChange={(e) => updateField('roeThirdPartyProviders', e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean))}
+                placeholder="e.g. AWS, Hetzner, Cloudflare" />
             </div>
           </div>
 
           {/* Notes */}
           <div className={styles.subSection}>
             <h3 className={styles.subSectionTitle}>Notes</h3>
-            <div className={styles.fieldRow}>
-              <div className={styles.fieldGroup}>
-                <textarea className="textInput" rows={4} value={data.roeNotes} readOnly={readOnly}
-                  onChange={(e) => updateField('roeNotes', e.target.value)}
-                  placeholder="Additional rules not captured by fields above..." />
-              </div>
-            </div>
+            <textarea className="textarea" rows={4} value={data.roeNotes} readOnly={readOnly}
+              onChange={(e) => updateField('roeNotes', e.target.value)}
+              placeholder="Additional rules not captured by fields above..." />
           </div>
 
           {/* Raw RoE Text (always read-only) */}
           {data.roeRawText && (
             <div className={styles.subSection}>
               <h3 className={styles.subSectionTitle}>Extracted Document Text</h3>
-              <div className={styles.fieldRow}>
-                <div className={styles.fieldGroup}>
-                  <textarea className="textInput" rows={8} value={data.roeRawText} readOnly
-                    style={{ fontFamily: 'monospace', fontSize: '0.8rem' }} />
-                </div>
-              </div>
+              <textarea className={`textarea ${styles.rawDocumentText}`} rows={8} value={data.roeRawText} readOnly />
             </div>
           )}
         </div>

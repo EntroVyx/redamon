@@ -173,7 +173,7 @@ export function SupplyChainScanSection({
   return (
     // id: scroll target for the Other Scans card's settings link. Keep it in
     // sync with PROJECT_SECTION_ANCHORS in lib/projectSettingsLinks.ts.
-    <div className={styles.section} id="supply-chain-scanner">
+    <div className={`${styles.section} ${styles.formSkin}`} id="supply-chain-scanner">
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <PackageSearch size={16} />
@@ -269,8 +269,7 @@ export function SupplyChainScanSection({
                         <span>({formatSize(file.size)})</span>
                         <button
                           type="button"
-                          className={styles.inputSourceOption}
-                          style={{ flex: '0 0 auto', padding: '4px 8px' }}
+                          className={styles.removeButton}
                           disabled={busy}
                           onClick={() => void removeFile()}
                           aria-label={`Remove ${file.name}`}
@@ -288,7 +287,7 @@ export function SupplyChainScanSection({
                     go.sum, Gemfile.lock, ...). Max 10 MB. Uploading is immediate and a new upload
                     replaces the current file. No API key is needed for an upload; keys and tokens
                     live in{' '}
-                    <Link href={SETTINGS_KEYS_HREF} style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
+                    <Link href={SETTINGS_KEYS_HREF}>
                       Global Settings
                     </Link>.
                   </p>
@@ -323,7 +322,7 @@ export function SupplyChainScanSection({
                 </div>
                 <p className={styles.fieldHint}>
                   What you type decides which credential is used, both set in{' '}
-                  <Link href={SETTINGS_KEYS_HREF} style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
+                  <Link href={SETTINGS_KEYS_HREF}>
                     Global Settings
                   </Link>:
                 </p>
@@ -349,44 +348,46 @@ export function SupplyChainScanSection({
               </>
             ) : (
               <>
-                <div className={styles.fieldGroup}>
-                  <label className={styles.fieldLabel} htmlFor="sc-repo-url">Repository</label>
-                  <input
-                    id="sc-repo-url"
-                    type="text"
-                    className="textInput"
-                    placeholder="owner/repo or https://github.com/owner/repo"
-                    value={repoUrl}
-                    onChange={(e) => setField(updateField, 'supplyChainRepoUrl', e.target.value)}
-                  />
-                  {repoInvalid && (
-                    <span className={styles.fieldHintWarning}>
-                      Must be a repository as owner/repo, or its https URL on github.com or a GitHub
-                      Enterprise host you configured in Global Settings.
-                    </span>
-                  )}
-                </div>
-                <div className={styles.fieldGroup}>
-                  <label className={styles.fieldLabel} htmlFor="sc-repo-ref">Branch / tag</label>
-                  <input
-                    id="sc-repo-ref"
-                    type="text"
-                    className="textInput"
-                    placeholder="default branch"
-                    value={repoRef}
-                    onChange={(e) => setField(updateField, 'supplyChainRepoRef', e.target.value)}
-                  />
-                  {refInvalid && (
-                    <span className={styles.fieldHintWarning}>
-                      Branch/tag contains characters git does not allow.
-                    </span>
-                  )}
+                <div className={styles.fieldRow}>
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel} htmlFor="sc-repo-url">Repository</label>
+                    <input
+                      id="sc-repo-url"
+                      type="text"
+                      className="textInput"
+                      placeholder="owner/repo or https://github.com/owner/repo"
+                      value={repoUrl}
+                      onChange={(e) => setField(updateField, 'supplyChainRepoUrl', e.target.value)}
+                    />
+                    {repoInvalid && (
+                      <span className={styles.fieldHintWarning}>
+                        Must be a repository as owner/repo, or its https URL on github.com or a GitHub
+                        Enterprise host you configured in Global Settings.
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.fieldGroup}>
+                    <label className={styles.fieldLabel} htmlFor="sc-repo-ref">Branch / tag</label>
+                    <input
+                      id="sc-repo-ref"
+                      type="text"
+                      className="textInput"
+                      placeholder="default branch"
+                      value={repoRef}
+                      onChange={(e) => setField(updateField, 'supplyChainRepoRef', e.target.value)}
+                    />
+                    {refInvalid && (
+                      <span className={styles.fieldHintWarning}>
+                        Branch/tag contains characters git does not allow.
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <p className={styles.fieldHint}>
                   The repository is cloned shallowly inside the scan sandbox and its lockfiles are
                   audited. Public repos clone anonymously; private ones use the GitHub Access Token
                   from{' '}
-                  <Link href={SETTINGS_KEYS_HREF} style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
+                  <Link href={SETTINGS_KEYS_HREF}>
                     Global Settings
                   </Link>.
                 </p>

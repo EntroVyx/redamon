@@ -80,6 +80,17 @@ const TOOL_KEY_INFO: Record<string, { field: string; label: string; hint: string
   },
 }
 
+function ToolPhaseHeader() {
+  return (
+    <div className={styles.toolPhaseHeader}>
+      <span className={styles.toolPhaseHeaderLabel}>Tool</span>
+      <span className={styles.toolPhaseHeaderLabel}>Informational</span>
+      <span className={styles.toolPhaseHeaderLabel}>Exploitation</span>
+      <span className={styles.toolPhaseHeaderLabel}>Post-Exploitation</span>
+    </div>
+  )
+}
+
 interface ToolMatrixSectionProps {
   data: FormData
   updateField: <K extends keyof FormData>(field: K, value: FormData[K]) => void
@@ -187,7 +198,7 @@ export function ToolMatrixSection({ data, updateField }: ToolMatrixSectionProps)
   const modalInfo = keyModal ? TOOL_KEY_INFO[keyModal] : null
 
   return (
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Grid3X3 size={16} />
@@ -206,12 +217,7 @@ export function ToolMatrixSection({ data, updateField }: ToolMatrixSectionProps)
             Controls which tools the agent can use in each phase. Check the phases where each tool should be available.
           </p>
           <div className={styles.toolPhaseGrid}>
-            <div className={styles.toolPhaseHeader}>
-              <span className={styles.toolPhaseHeaderLabel}>Tool</span>
-              <span className={styles.toolPhaseHeaderLabel}>Informational</span>
-              <span className={styles.toolPhaseHeaderLabel}>Exploitation</span>
-              <span className={styles.toolPhaseHeaderLabel}>Post-Exploitation</span>
-            </div>
+            <ToolPhaseHeader />
             {[
               { id: 'query_graph', label: 'query_graph' },
               { id: 'proxy_brain', label: 'proxy_brain ⚠' },
@@ -292,88 +298,75 @@ export function ToolMatrixSection({ data, updateField }: ToolMatrixSectionProps)
             })}
           </div>
 
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <h3 style={{
-              fontSize: 'var(--text-md)',
-              fontWeight: 600,
-              margin: '0 0 var(--space-2) 0',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-2)',
-              color: 'var(--text-primary)',
-              borderTop: '1px solid var(--border-default)',
-              paddingTop: 'var(--space-3)',
-            }}>
+          <div className={styles.subSection}>
+            <h3 className={styles.subSectionTitle}>
               <Server size={14} />
               MCP Tool Plugins
             </h3>
-            <p className={styles.sectionDescription} style={{ marginTop: 0 }}>
+            <p className={styles.sectionDescription}>
               User-installed MCP Tool Plugins - add or edit in{' '}
-              <a href="/settings?tab=mcp" style={{ color: 'var(--accent-primary)' }}>
+              <a href="/settings?tab=mcp">
                 Global Settings → MCP Tool Plugins
               </a>.
             </p>
-          </div>
 
-          {userMcpServers.length === 0 ? (
-            <p className={styles.sectionDescription} style={{
-              fontStyle: 'italic',
-              color: 'var(--text-tertiary)',
-              padding: 'var(--space-2) 0',
-            }}>
-              No MCP Tool Plugins configured for this user yet.
-            </p>
-          ) : (
-            <div>
-              {userMcpServers.map(srv => (
-                <details key={srv.id} open style={{ marginBottom: 'var(--space-3)' }}>
-                  <summary style={{ cursor: 'pointer', fontWeight: 600, padding: '4px 0' }}>
-                    {srv.name || srv.id}
-                    {srv.description && <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 8, fontSize: '12px' }}>- {srv.description}</span>}
-                    {!srv.enabled && <span style={{ color: 'var(--text-tertiary)', marginLeft: 8, fontSize: '12px' }}>(disabled)</span>}
-                  </summary>
-                  <div className={styles.toolPhaseGrid}>
-                    {srv.tools.map(tool => {
-                      const phaseMap = (typeof data.agentToolPhaseMap === 'string'
-                        ? JSON.parse(data.agentToolPhaseMap)
-                        : data.agentToolPhaseMap ?? {}) as Record<string, string[]>
-                      const defaultPhases = (tool.default_phases && tool.default_phases.length > 0)
-                        ? tool.default_phases
-                        : (srv.default_phases && srv.default_phases.length > 0
-                          ? srv.default_phases
-                          : [...ALL_PHASES])
-                      const effectivePhases = phaseMap[tool.name] !== undefined
-                        ? phaseMap[tool.name]
-                        : defaultPhases
-                      const togglePhase = (phase: string) => {
-                        const newMap = { ...phaseMap }
-                        const current = newMap[tool.name] !== undefined ? newMap[tool.name] : effectivePhases
-                        newMap[tool.name] = current.includes(phase)
-                          ? current.filter((p: string) => p !== phase)
-                          : [...current, phase]
-                        updateField('agentToolPhaseMap', newMap as typeof data.agentToolPhaseMap)
-                      }
-                      return (
-                        <div key={tool.name} className={styles.toolPhaseRow}>
-                          <span className={styles.toolPhaseName}>{tool.name}</span>
-                          {ALL_PHASES.map(phase => (
-                            <label key={phase} className={styles.phaseCheck}>
-                              <input
-                                type="checkbox"
-                                checked={effectivePhases.includes(phase)}
-                                disabled={!srv.enabled}
-                                onChange={() => togglePhase(phase)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </details>
-              ))}
-            </div>
-          )}
+            {userMcpServers.length === 0 ? (
+              <p className={styles.itemEmpty}>
+                No MCP Tool Plugins configured for this user yet.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                {userMcpServers.map(srv => (
+                  <details key={srv.id} open>
+                    <summary className={styles.disclosureSummary}>
+                      {srv.name || srv.id}
+                      {srv.description && <span className={styles.disclosureMeta}>- {srv.description}</span>}
+                      {!srv.enabled && <span className={styles.disclosureMeta}>(disabled)</span>}
+                    </summary>
+                    <div className={styles.toolPhaseGrid}>
+                      <ToolPhaseHeader />
+                      {srv.tools.map(tool => {
+                        const phaseMap = (typeof data.agentToolPhaseMap === 'string'
+                          ? JSON.parse(data.agentToolPhaseMap)
+                          : data.agentToolPhaseMap ?? {}) as Record<string, string[]>
+                        const defaultPhases = (tool.default_phases && tool.default_phases.length > 0)
+                          ? tool.default_phases
+                          : (srv.default_phases && srv.default_phases.length > 0
+                            ? srv.default_phases
+                            : [...ALL_PHASES])
+                        const effectivePhases = phaseMap[tool.name] !== undefined
+                          ? phaseMap[tool.name]
+                          : defaultPhases
+                        const togglePhase = (phase: string) => {
+                          const newMap = { ...phaseMap }
+                          const current = newMap[tool.name] !== undefined ? newMap[tool.name] : effectivePhases
+                          newMap[tool.name] = current.includes(phase)
+                            ? current.filter((p: string) => p !== phase)
+                            : [...current, phase]
+                          updateField('agentToolPhaseMap', newMap as typeof data.agentToolPhaseMap)
+                        }
+                        return (
+                          <div key={tool.name} className={styles.toolPhaseRow}>
+                            <span className={styles.toolPhaseName}>{tool.name}</span>
+                            {ALL_PHASES.map(phase => (
+                              <label key={phase} className={styles.phaseCheck}>
+                                <input
+                                  type="checkbox"
+                                  checked={effectivePhases.includes(phase)}
+                                  disabled={!srv.enabled}
+                                  onChange={() => togglePhase(phase)}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -417,10 +410,10 @@ export function ToolMatrixSection({ data, updateField }: ToolMatrixSectionProps)
                 {keyVisible ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
             </div>
-            <span className="formHint">
+            <span className={styles.keyModalHint}>
               {modalInfo.hint}
               {' - '}
-              <a href={modalInfo.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-primary)' }}>
+              <a href={modalInfo.url} target="_blank" rel="noopener noreferrer">
                 Get API key
               </a>
             </span>
