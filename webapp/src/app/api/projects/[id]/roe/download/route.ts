@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireEffectiveUser, requireProjectAccess } from '@/lib/access'
+import { writeAudit } from '@/lib/audit'
+import { actingAdminId } from '@/lib/roe/actor'
+import { attachmentDisposition, downloadContentType } from '@/lib/roe/limits'
 
 // GET /api/projects/[id]/roe/download - Download the original RoE document
 export async function GET(
@@ -8,6 +12,13 @@ export async function GET(
 ) {
   try {
     const { id } = await params
+
+    // The document names the client, their contacts and what may be attacked:
+    // it is the owner's, like every other project read.
+    const eff = await requireEffectiveUser()
+    if (eff instanceof NextResponse) return eff
+    const access = await requireProjectAccess(eff, id)
+    if (access instanceof NextResponse) return access
 
     const project = await prisma.project.findUnique({
       where: { id },
@@ -27,13 +38,25 @@ export async function GET(
     }
 
     const fileName = project.roeDocumentName || 'roe-document'
-    const mimeType = project.roeDocumentMimeType || 'application/octet-stream'
+
+    await writeAudit({
+      actorId: eff.userId,
+      action: 'project.roe.download',
+      targetType: 'project',
+      targetId: id,
+      after: {
+        documentName: fileName,
+        bytes: project.roeDocumentData.length,
+        actingAdminId: await actingAdminId(eff),
+      },
+    })
 
     return new NextResponse(project.roeDocumentData, {
       headers: {
-        'Content-Type': mimeType,
-        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Content-Type': downloadContentType(project.roeDocumentMimeType),
+        'Content-Disposition': attachmentDisposition(fileName),
         'Content-Length': String(project.roeDocumentData.length),
+        'X-Content-Type-Options': 'nosniff',
       },
     })
   } catch (error) {
