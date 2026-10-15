@@ -1641,7 +1641,7 @@ docker info
 
 # Build and run
 cd recon/
-docker-compose build --network=host
+docker-compose build
 docker-compose run --rm recon python /app/recon/main.py
 ```
 

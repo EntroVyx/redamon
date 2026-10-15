@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.1] - 2026-10-15
+
+### Fixed
+
+- **Building no longer fails on newer Docker** (#204). With Docker Buildx 0.37.2 or later, `install`, `update` and `up` stopped at the kali-sandbox or recon image with `additional privileges requested: pass "--allow=network.host"`: those two builds asked for the host network, which they never needed, and Docker Compose 5.6.0 and older cannot grant it. They now build on Docker's default build network like every other image. The first `update` after this rebuilds kali-sandbox from scratch, once.
+
 ## [7.0.0] - 2026-10-12
 
 ### Added

@@ -16,7 +16,6 @@ services:
     build:
       context: ..
       dockerfile: recon/Dockerfile
-      network: host
     container_name: redamon-recon
 
     # Mount Docker socket to allow container to run Docker commands

@@ -299,7 +299,6 @@ services:
     build:
       context: .
       dockerfile: recon/Dockerfile
-      network: host
     image: redamon-recon:latest
     profiles: ["tools"]
 
@@ -711,7 +710,6 @@ services:
     build:
       context: ./mcp
       dockerfile: kali-sandbox/Dockerfile
-      network: host
     container_name: redamon-kali
     mem_limit: ${KALI_MEM:-1g}              # sized from host RAM by redamon.sh
     # D1 owns the Kali sandbox's pids/cpu ceiling (E1 was removed). Very
