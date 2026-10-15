@@ -35,12 +35,21 @@ def _wiki_pages() -> list[Path]:
 
 # --- P18: no wiki page names a deleted tool or disposition -------------------------------
 
-#: Things this programme removed. A page naming one is stale, full stop.
+#: Things this programme removed. A page naming one is stale.
 _GONE = {
     "tighten_engagement_roe": "the tool was deleted; the limits are ordinary settings now",
     "tighten_only": "the disposition was deleted; there are three, not four",
     "tighten-only": "the disposition was deleted; there are three, not four",
 }
+
+#: A deleted name that came back with another meaning. `roe_parse: tighten_only` is a
+#: live registry class (the safety switches a RoE document may only turn on), so only a
+#: line that does not name `roe_parse` can mean the deleted MCP disposition.
+_REUSED_IN = {"tighten_only": "roe_parse"}
+
+
+def _names_deleted(term: str, line: str) -> bool:
+    return term in line and not (term in _REUSED_IN and _REUSED_IN[term] in line)
 
 
 @pytest.mark.parametrize("term", sorted(_GONE))
@@ -48,9 +57,22 @@ def test_p18_no_wiki_page_names_something_that_was_deleted(term):
     offenders = []
     for page in _wiki_pages():
         for i, line in enumerate(page.read_text(encoding="utf-8").split("\n"), 1):
-            if term in line:
+            if _names_deleted(term, line):
                 offenders.append(f"{page.name}:{i}: {line.strip()[:120]}")
     assert offenders == [], f"{term}: {_GONE[term]}"
+
+
+@pytest.mark.parametrize(
+    ("line", "stale"),
+    [
+        ("Set the field's disposition to `tighten_only`.", True),
+        ("The `tighten-only` direction rule (`roe_parse` aside).", True),
+        ("Both lists come from the settings registry (`roe_parse: deny` and `tighten_only`).", False),
+    ],
+)
+def test_p18_the_reused_name_exemption_is_only_for_the_live_class(line, stale):
+    """The exemption must not hide the deleted disposition or its hyphenated spelling."""
+    assert any(_names_deleted(term, line) for term in _GONE) is stale
 
 
 def test_p18_no_wiki_page_calls_the_engagement_record_mcp_settable():
