@@ -114,7 +114,7 @@ describe('a third-party engagement cannot start without its ceiling and its auth
     // so a project cannot show a 3 rps ceiling and run unlimited.
     h.findProject.mockResolvedValue(thirdParty({ roeGlobalMaxRps: 3 }))
     h.countAuthorizations.mockResolvedValue(1)
-    const res = await startFullScan({ projectId: 'p1', mode: 'new', triggeredBy: 'ui' })
+    const res = await startFullScan({ projectId: 'p1', mode: 'new', trigger: 'manual' })
     expect(res.ok).toBe(true)
   })
 

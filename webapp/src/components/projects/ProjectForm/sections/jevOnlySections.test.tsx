@@ -31,7 +31,7 @@ const CASES = [
 
 function mount(Section: (typeof CASES)[number]['Section'], data: Data) {
   const updateField = vi.fn()
-  render(<Section data={data as never} updateField={updateField as never} />)
+  render(<Section data={data as never} updateField={updateField as never} mode="create" />)
   const group = screen.getByRole('group', { name: 'Jev hook' })
   return { updateField, off: within(group).getByRole('button', { name: 'Off' }),
            jev: within(group).getByRole('button', { name: 'Jev' }) }

@@ -91,7 +91,7 @@ describe('listOwnerRepos', () => {
   test('the token never appears in an error message', async () => {
     const token = 'ghp_SECRET1234567890'
     const fetchImpl = vi.fn().mockResolvedValue(ghResponse(`boom ${token}`, { status: 500 }))
-    const err = await listOwnerRepos('acme', { fetchImpl, token }).catch(e => e as Error)
+    const err = (await listOwnerRepos('acme', { fetchImpl, token }).catch(e => e)) as Error
     expect(err.message).not.toContain(token)
     expect(err.message).toContain('***')
   })
@@ -126,7 +126,7 @@ describe('listOwnerRepos', () => {
 
   test('regression F3: a stalled GitHub (abort/timeout) fails fast with a clear 504, not a hang', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' }))
-    const err = await listOwnerRepos('acme', { fetchImpl, timeoutMs: 5 }).catch(e => e as GithubEnumError)
+    const err = (await listOwnerRepos('acme', { fetchImpl, timeoutMs: 5 }).catch(e => e)) as GithubEnumError
     expect(err).toBeInstanceOf(GithubEnumError)
     expect((err as GithubEnumError).status).toBe(504)
     expect(err.message).toMatch(/timed out/i)

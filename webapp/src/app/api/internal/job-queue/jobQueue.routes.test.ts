@@ -225,7 +225,7 @@ describe('dispatch route happy + failure paths', () => {
     const res = await dispatch(post('http://x/api/internal/job-queue/j1/dispatch'), sp('j1'))
     const body = await res.json()
     expect(body.temporary).toBe(true)
-    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')
+    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')!
     expect(call[0].where).toMatchObject({ id: 'j1', status: 'dispatching' })
     expect(call[0].data).toMatchObject({ status: 'queued', blockedCode: 'ram' })
     // A capacity wait must NOT consume the attempt budget (that would delay the
@@ -241,7 +241,7 @@ describe('dispatch route happy + failure paths', () => {
     })
     const res = await dispatch(post('http://x/api/internal/job-queue/j1/dispatch'), sp('j1'))
     expect((await res.json()).blocked).toBe('hard')
-    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')
+    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')!
     expect(call[0].data).toMatchObject({ status: 'queued', blockedCode: 'hard' })
     expect(call[0].data.attempts).toBeUndefined()
   })
@@ -255,7 +255,7 @@ describe('dispatch route happy + failure paths', () => {
     const body = await res.json()
     expect(body.failed).toBeUndefined()
     expect(body.temporary).toBe(true)
-    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')
+    const call = h.jqUpdateMany.mock.calls.find(c => c[0]?.data?.status === 'queued')!
     expect(call[0].data.status).toBe('queued')
   })
 

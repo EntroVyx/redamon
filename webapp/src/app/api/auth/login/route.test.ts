@@ -61,7 +61,7 @@ describe('POST /api/auth/login', () => {
     mockUserFindUnique.mockResolvedValue(null)
     const res = await POST(req({ email: 'nobody@example.com', password: 'guess' }))
     expect(res.status).toBe(401)
-    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.failure')
+    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.failure')!
     expect(call).toBeDefined()
     expect(call[0].after.email).toBe('nobody@example.com')
     expect(call[0].after.ip).toBe('203.0.113.9')
@@ -71,7 +71,7 @@ describe('POST /api/auth/login', () => {
     mockUserFindUnique.mockResolvedValue({ id: 'u1', password: '$2b$10$HASHHASHHASH', role: 'user' })
     mockVerifyPassword.mockResolvedValue(false)
     await POST(req({ email: 'u@example.com', password: 'sup3rsecret' }))
-    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.failure')
+    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.failure')!
     const serialized = JSON.stringify(call[0])
     expect(serialized).not.toContain('sup3rsecret')
     expect(serialized).not.toContain('$2b$10$HASHHASHHASH')
@@ -84,7 +84,7 @@ describe('POST /api/auth/login', () => {
     mockVerifyPassword.mockResolvedValue(true)
     const res = await POST(req({ email: 'u@example.com', password: 'right' }))
     expect(res.status).toBe(200)
-    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.success')
+    const call = mockWriteAudit.mock.calls.find(c => c[0].action === 'auth.login.success')!
     expect(call).toBeDefined()
     expect(call[0].actorId).toBe('u1')
   })

@@ -6,7 +6,7 @@
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({ run: vi.fn(), close: vi.fn(), conversations: vi.fn(() => []) }))
+const h = vi.hoisted(() => ({ run: vi.fn(), close: vi.fn(), conversations: vi.fn((..._args: unknown[]) => [] as unknown[]) }))
 
 vi.mock('./neo4j', () => ({
   getGraphSession: () => ({ run: h.run, close: h.close }),

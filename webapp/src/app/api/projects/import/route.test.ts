@@ -46,7 +46,7 @@ describe('POST /api/projects/import (D10 caps)', () => {
     const zip = new JSZip()
     for (let i = 0; i < 10; i++) zip.file(`f${i}.txt`, 'x')
     const buf = await zip.generateAsync({ type: 'uint8array' })
-    const f = new File([buf], 'many.zip', { type: 'application/zip' })
+    const f = new File([buf as BlobPart], 'many.zip', { type: 'application/zip' })
     const res = await POST(formReq(f))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/too many entries/)
@@ -56,7 +56,7 @@ describe('POST /api/projects/import (D10 caps)', () => {
     const zip = new JSZip()
     zip.file('big.txt', 'A'.repeat(8192)) // > 4096 cap
     const buf = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
-    const f = new File([buf], 'bomb.zip', { type: 'application/zip' })
+    const f = new File([buf as BlobPart], 'bomb.zip', { type: 'application/zip' })
     const res = await POST(formReq(f))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/decompresses too large/)
@@ -66,7 +66,7 @@ describe('POST /api/projects/import (D10 caps)', () => {
     const zip = new JSZip()
     zip.file('a.txt', 'hi') // no manifest.json -> route returns 400 "missing manifest"
     const buf = await zip.generateAsync({ type: 'uint8array' })
-    const f = new File([buf], 'small.zip', { type: 'application/zip' })
+    const f = new File([buf as BlobPart], 'small.zip', { type: 'application/zip' })
     const res = await POST(formReq(f))
     // NOT a cap rejection: the caps passed, so the error is the manifest check.
     expect(res.status).toBe(400)

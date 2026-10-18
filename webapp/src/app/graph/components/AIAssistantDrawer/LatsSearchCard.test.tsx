@@ -20,7 +20,7 @@ function node(over: Partial<LatsNodeView>): LatsNodeView {
   return {
     id: 'n', parent_id: null, depth: 0, label: 'n', tool_name: null,
     status: 'evaluated', value: 0, local_value: 0, visits: 0, verdict: '',
-    error_class: '', finding_confidence: 0, exploit_succeeded: false,
+    error_class: '', response_class: '', finding_confidence: 0, exploit_succeeded: false,
     duration_ms: 0, observation: '', reflection: '', is_dangerous: false,
     step_id: null, ...over,
   }

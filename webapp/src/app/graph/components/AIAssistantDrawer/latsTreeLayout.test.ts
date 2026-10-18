@@ -12,7 +12,7 @@ import type { LatsNodeView } from '@/lib/websocket-types'
 function node(id: string, parent_id: string | null, depth: number): LatsNodeView {
   return {
     id, parent_id, depth, label: id, tool_name: null, status: 'evaluated',
-    value: 0, local_value: 0, visits: 0, verdict: '', error_class: '',
+    value: 0, local_value: 0, visits: 0, verdict: '', error_class: '', response_class: '',
     finding_confidence: 0, exploit_succeeded: false, duration_ms: 0,
     observation: '', reflection: '', is_dangerous: false, step_id: null,
   }
