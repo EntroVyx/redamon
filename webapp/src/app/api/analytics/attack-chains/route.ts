@@ -197,7 +197,9 @@ export async function GET(request: NextRequest) {
       name: (r.get('name') as string) || 'Untitled',
       targetIp: r.get('targetIp') as string | null,
       targetPort: toNum(r.get('targetPort')) || null,
-      cvssScore: typeof r.get('cvssScore') === 'number' ? r.get('cvssScore') as number : null,
+      // An INTEGER-stored score is a driver Integer, not a number: a typeof check
+      // would hide it.
+      cvssScore: r.get('cvssScore') != null ? toNum(r.get('cvssScore')) : null,
       evidence: r.get('evidence') as string | null,
       cisaKev: r.get('cisaKev') as boolean | null,
       family: r.get('family') as string | null,

@@ -24,7 +24,9 @@ export interface LLMNarratives {
 
 function esc(s: string | null | undefined): string {
   if (!s) return ''
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  // Graph values reach here only cast `as string`; a number stored in one must
+  // not throw on .replace.
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
 }
 

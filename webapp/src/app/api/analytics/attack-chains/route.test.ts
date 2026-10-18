@@ -5,17 +5,20 @@
  * @vitest-environment node
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest'
+import neo4j from 'neo4j-driver'
 vi.mock('@/lib/access', () => ({ guardProject: vi.fn().mockResolvedValue(null) }))
 
 const runCalls: string[] = []
 let topRows: Array<Record<string, unknown>> = []
+let gvmRows: Array<Record<string, unknown>> = []
 
-/** Only the top-findings query (the one following FOUND_ON) returns rows. */
+/** Only the top-findings query (the one following FOUND_ON) and the ExploitGvm list return rows. */
 vi.mock('@/app/api/graph/neo4j', () => ({
   getGraphSession: () => ({
     run: async (cypher: string) => {
       runCalls.push(cypher)
-      const rows = cypher.includes('[:FOUND_ON]') ? topRows : []
+      const rows = cypher.includes('[:FOUND_ON]') ? topRows
+        : cypher.includes('ex.cvss_score AS cvssScore') ? gvmRows : []
       return { records: rows.map(row => ({ get: (k: string) => row[k] })) }
     },
     close: async () => {},
@@ -31,6 +34,19 @@ const request = (projectId: string): any => ({
 beforeEach(() => {
   runCalls.length = 0
   topRows = []
+  gvmRows = []
+})
+
+describe('GVM exploit CVSS', () => {
+  test('a score stored as INTEGER comes back as a number, not hidden as null', async () => {
+    gvmRows = [
+      { name: 'int score', cvssScore: neo4j.int(9), cveIds: [] },
+      { name: 'float score', cvssScore: 7.5, cveIds: [] },
+      { name: 'no score', cvssScore: null, cveIds: [] },
+    ]
+    const body = await (await route.GET(request('p1'))).json()
+    expect(body.gvmExploits.map((e: { cvssScore: unknown }) => e.cvssScore)).toEqual([9, 7.5, null])
+  })
 })
 
 describe('Chain Findings Node ID', () => {

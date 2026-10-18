@@ -86,7 +86,9 @@ export async function GET(request: NextRequest) {
       severity: (r.get('severity') as string) || 'unknown',
       source: (r.get('source') as string) || 'unknown',
       category: r.get('category') as string | null,
-      cvssScore: r.get('cvssScore') as number | null,
+      // A score stored as INTEGER arrives as a driver Integer, not a number; the
+      // Insights cards call .toFixed() on it.
+      cvssScore: r.get('cvssScore') != null ? toNum(r.get('cvssScore')) : null,
       matchedAt: r.get('matchedAt') as string | null,
       host: r.get('host') as string | null,
       targetIp: r.get('targetIp') as string | null,
@@ -137,7 +139,7 @@ export async function GET(request: NextRequest) {
       tech: (r.get('tech') as string) || 'Unknown',
       techVersion: r.get('techVersion') as string | null,
       cveId: (r.get('cveId') as string) || '',
-      cvss: r.get('cvss') as number | null,
+      cvss: r.get('cvss') != null ? toNum(r.get('cvss')) : null,
       cveSeverity: r.get('cveSeverity') as string | null,
       cweId: r.get('cweId') as string | null,
       cweName: r.get('cweName') as string | null,
@@ -163,7 +165,7 @@ export async function GET(request: NextRequest) {
       severity: (r.get('severity') as string) || 'critical',
       targetIp: r.get('targetIp') as string | null,
       targetPort: r.get('targetPort') != null ? toNum(r.get('targetPort')) : null,
-      cvssScore: r.get('cvssScore') as number | null,
+      cvssScore: r.get('cvssScore') != null ? toNum(r.get('cvssScore')) : null,
       cisaKev: r.get('cisaKev') as boolean | null,
       evidence: r.get('evidence') as string | null,
       cveIds: r.get('cveIds') as string[],

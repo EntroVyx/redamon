@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generating a report no longer fails with "Cannot mix BigInt and other types"** (#207). A project with a CVSS score stored as a whole number (`10` rather than `10.0`, depending on the source that wrote it) could not be reported on: the score reached the webapp as a Neo4j integer instead of a number, and the report's average CVSS refused to add it. The report, the Insights vulnerability and exploit cards and the Red Zone parameter matrix now read such scores as numbers; Insights had shown a whole-number exploit score as missing. Rebuild the `webapp` image.
+
 ### Security
 
 - **Tradecraft verify is no longer an unauthenticated SSRF** (CVE-2026-111323, GHSA-g3vp-47q6-cfx3). Anyone who could reach the agent port could ask `POST /tradecraft/verify` to fetch a URL, and a public page that redirected (or a name that re-resolved) to an internal address, such as cloud metadata, had that page read and summarized back to them. The endpoint now requires the internal API key, and the webapp sends it. Every tradecraft fetch now checks the address when it connects, on every redirect hop, and dials the address it checked. A refused fetch is never retried in the browser, the browser fallback refuses to return a page reached through an internal address, and the GitHub token goes only to `github.com`, `api.github.com` and `raw.githubusercontent.com` over https. Rebuild the `agent` and `webapp` images together: a new agent behind an old webapp refuses every verify with 401.

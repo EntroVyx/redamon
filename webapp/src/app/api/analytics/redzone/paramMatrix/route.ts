@@ -90,7 +90,9 @@ export async function GET(request: NextRequest) {
       fuzzingMethod: r.get('fuzzingMethod') as string | null,
       fuzzingPosition: r.get('fuzzingPosition') as string | null,
       matchedAt: r.get('matchedAt') as string | null,
-      cvssScore: r.get('cvssScore') as number | null,
+      // A score stored as INTEGER arrives as a driver Integer, not a number, and
+      // CvssCell calls .toFixed() on it.
+      cvssScore: r.get('cvssScore') != null ? toNum(r.get('cvssScore')) : null,
       updatedAt: r.get('updatedAt') ?? null,
     }))
 

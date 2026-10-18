@@ -9,6 +9,7 @@
  * @vitest-environment node
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest'
+import neo4j from 'neo4j-driver'
 vi.mock('@/lib/access', () => ({ guardProject: vi.fn().mockResolvedValue(null) }))
 
 const runCalls: Array<{ cypher: string; params: Record<string, unknown> }> = []
@@ -190,6 +191,15 @@ describe('/api/analytics/redzone/paramMatrix', () => {
     expect(body.rows[0].vulnSeverity).toBe('high')
     expect(body.rows[0].cvssScore).toBe(7.5)
     expect(body.rows[1].vulnId).toBeNull()
+  })
+
+  test('a cvssScore stored as INTEGER comes back as a number', async () => {
+    runReturn = [
+      { paramName: 'q', vulnId: 'v1', cvssScore: neo4j.int(10) },
+      { paramName: 'id', vulnId: null },
+    ]
+    const body = await (await paramMatrixRoute.GET(makeRequest('p1'))).json()
+    expect(body.rows.map((r: { cvssScore: unknown }) => r.cvssScore)).toEqual([10, null])
   })
 
   test('nodeId points at the linked Vulnerability, else the Parameter', async () => {
