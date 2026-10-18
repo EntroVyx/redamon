@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Tradecraft verify is no longer an unauthenticated SSRF** (CVE-2026-111323, GHSA-g3vp-47q6-cfx3). Anyone who could reach the agent port could ask `POST /tradecraft/verify` to fetch a URL, and a public page that redirected (or a name that re-resolved) to an internal address, such as cloud metadata, had that page read and summarized back to them. The endpoint now requires the internal API key, and the webapp sends it. Every tradecraft fetch now checks the address when it connects, on every redirect hop, and dials the address it checked. A refused fetch is never retried in the browser, the browser fallback refuses to return a page reached through an internal address, and the GitHub token goes only to `github.com`, `api.github.com` and `raw.githubusercontent.com` over https. Rebuild the `agent` and `webapp` images together: a new agent behind an old webapp refuses every verify with 401.
+
 ## [7.0.1] - 2026-10-15
 
 ### Fixed

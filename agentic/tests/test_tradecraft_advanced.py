@@ -16,6 +16,7 @@ Covers paths the earlier suite did not reach:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
 import shutil
@@ -58,6 +59,15 @@ from orchestrator_helpers.tradecraft_lookup import (
 
 def run_async(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def _requested_url(args) -> str:
+    """The URL an execute_playwright call navigates to: the page.goto() literal
+    of the guarded script tradecraft sends (fetch_guard.guarded_browser_script)."""
+    for node in ast.walk(ast.parse(args["script"])):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "goto":
+            return node.args[0].value
+    raise AssertionError("script has no page.goto() call")
 
 
 class _StubLLM:
@@ -449,7 +459,7 @@ class TestAgenticCrawlBounds(unittest.TestCase):
             name = "execute_playwright"
             def __init__(self, m): self.m = m
             async def ainvoke(self, args):
-                return [{"text": self.m.get(args["url"], "")}]
+                return [{"text": self.m.get(_requested_url(args), "")}]
         class StubMcp:
             def __init__(self, m): self.t = StubPw(m)
             async def get_tools(self): return [self.t]
@@ -492,7 +502,7 @@ class TestAgenticCrawlBounds(unittest.TestCase):
             async def ainvoke(self, args):
                 # Each call takes 1s of wall clock
                 await asyncio.sleep(1.0)
-                return [{"text": self.m.get(args["url"], "")}]
+                return [{"text": self.m.get(_requested_url(args), "")}]
         class StubMcp:
             def __init__(self, m): self.t = SlowPw(m)
             async def get_tools(self): return [self.t]

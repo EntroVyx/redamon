@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
-import ipaddress
 import json
 import os
 import re
@@ -84,6 +83,14 @@ except Exception:
     PdfReader = None  # populated after requirements bump
 
 from logging_config import get_logger
+from orchestrator_helpers.fetch_guard import (
+    _BLOCKED_HOSTNAMES,
+    _is_disallowed_ip,
+    UnsafeFetchURLError,
+    guarded_browser_script,
+    parse_guarded_browser_output,
+    pinned_async_transport,
+)
 from orchestrator_helpers.json_utils import normalize_content
 from prompt_safety import wrap_untrusted, UNTRUSTED_OUTPUT_GUIDANCE
 
@@ -96,6 +103,10 @@ logger = get_logger(__name__)
 
 CACHE_ROOT_DEFAULT = "/app/tradecraft_cache"
 USER_AGENT = "RedAmon-Tradecraft/1.0"
+# The user's GitHub token goes to these exact hosts only. Never match on a
+# substring: github-docs.attacker.example contains "github" too.
+_GITHUB_TOKEN_HOSTS = frozenset({"github.com", "api.github.com", "raw.githubusercontent.com"})
+_MAX_REDIRECTS = 5
 
 DEFAULT_TTLS_BY_TYPE: Dict[str, int] = {
     "mkdocs-wiki": 7 * 86400,
@@ -194,28 +205,17 @@ def is_private_host(host: str) -> bool:
     h = host.lower()
     if h in ("localhost", "::1") or h.endswith(".local") or h.endswith(".internal"):
         return True
+    if h.rstrip(".") in _BLOCKED_HOSTNAMES:
+        return True
     try:
         infos = socket.getaddrinfo(h, None)
     except OSError:
         # DNS lookup failed (NXDOMAIN, network down, etc.). The caller surfaces
         # this as a separate error so users see the real reason.
         return False
-    for info in infos:
-        addr = info[4][0]
-        try:
-            ip = ipaddress.ip_address(addr)
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            ):
-                return True
-        except ValueError:
-            continue
-    return False
+    # Same address policy as the connect-time guard, so this early check never
+    # admits a host (CGNAT, IPv4-mapped IPv6) that the request itself refuses.
+    return any(_is_disallowed_ip(info[4][0].split("%")[0]) for info in infos)
 
 
 def _dns_resolves(host: str) -> bool:
@@ -494,6 +494,9 @@ class FetchResult:
     status: int
     tier: int  # 1 or 2
     raw_bytes: bytes = b""
+    # Set when the egress guard refused a hop. Callers must not retry the URL
+    # another way: the browser fallback would follow the same redirect.
+    blocked: str = ""
 
     @property
     def ok_textual(self) -> bool:
@@ -514,6 +517,18 @@ def _rewrite_github_url(url: str) -> str:
     return url
 
 
+def _url_host(url: str) -> str:
+    try:
+        return (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_github_token_url(url: str) -> bool:
+    """True only for https URLs on a GitHub host, the one place the token belongs."""
+    return url.lower().startswith("https://") and _url_host(url) in _GITHUB_TOKEN_HOSTS
+
+
 async def fetch_tier1(
     url: str,
     *,
@@ -529,15 +544,19 @@ async def fetch_tier1(
     """
     url = _rewrite_github_url(url)
     headers = {"User-Agent": USER_AGENT}
-    if "github" in url and github_token:
+    if github_token and _is_github_token_url(url):
         headers["Authorization"] = f"token {github_token}"
-    if "api.github.com" in url:
+    if _url_host(url) == "api.github.com":
         headers["Accept"] = "application/vnd.github.raw"
     try:
+        # Every hop, redirects included, connects through the egress guard.
+        # httpx drops Authorization when a redirect leaves the origin.
         async with httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=True,
+            max_redirects=_MAX_REDIRECTS,
             headers=headers,
+            transport=pinned_async_transport(),
         ) as client:
             resp = await client.get(url)
             ct = (resp.headers.get("content-type") or "").lower()
@@ -580,13 +599,16 @@ async def fetch_tier1(
                 tier=1,
                 raw_bytes=raw_for_detection,
             )
+    except UnsafeFetchURLError as e:
+        logger.warning(f"[tradecraft] tier1 blocked url={url}: {e}")
+        return FetchResult(text="", content_type="", status=0, tier=1, blocked=str(e))
     except httpx.HTTPError as e:
         logger.warning(f"[tradecraft] tier1 http error url={url} err={type(e).__name__}: {e}")
         return FetchResult(text="", content_type="", status=0, tier=1)
 
 
 async def fetch_tier2(url: str, mcp_manager) -> FetchResult:
-    """Render with the existing execute_playwright MCP tool."""
+    """Render with the execute_playwright MCP tool, behind the browser egress guard."""
     if mcp_manager is None:
         return FetchResult(text="", content_type="", status=0, tier=2)
     try:
@@ -603,7 +625,7 @@ async def fetch_tier2(url: str, mcp_manager) -> FetchResult:
         if playwright is None:
             logger.warning("[tradecraft] tier2 execute_playwright not available")
             return FetchResult(text="", content_type="", status=0, tier=2)
-        out = await playwright.ainvoke({"url": url, "format": "html"})
+        out = await playwright.ainvoke({"script": guarded_browser_script(url)})
         # MCP responses can be list-of-content-blocks or string
         html = ""
         if isinstance(out, str):
@@ -614,6 +636,10 @@ async def fetch_tier2(url: str, mcp_manager) -> FetchResult:
                     html += it["text"]
         elif isinstance(out, dict) and "text" in out:
             html = out["text"]
+        html, blocked = parse_guarded_browser_output(html)
+        if blocked:
+            logger.warning(f"[tradecraft] tier2 blocked url={url}: {blocked}")
+            return FetchResult(text="", content_type="", status=0, tier=2, blocked=blocked)
         text = _html_to_markdown(html)
         return FetchResult(text=text, content_type="text/html", status=200, tier=2, raw_bytes=html.encode("utf-8", "ignore"))
     except Exception as e:
@@ -631,6 +657,8 @@ async def smart_fetch(
 ) -> FetchResult:
     """Tier 1, escalate to Tier 2 if thin or non-textual."""
     r = await fetch_tier1(url, timeout=timeout, github_token=github_token)
+    if r.blocked:
+        return r
     if r.content_type and "application/pdf" in r.content_type:
         return r  # pdf path handled by caller
     if r.ok_textual and len(r.text) >= tier2_threshold_bytes:
@@ -1277,6 +1305,17 @@ async def verify_resource(
     async with _verify_lock_for(url):
         # 1. Fetch homepage / README
         fetched = await smart_fetch(url, mcp_manager=mcp_manager, github_token=github_token)
+        if fetched.blocked:
+            # Stop here: the sitemap builders and the crawl would fetch this URL
+            # again, and the crawl's browser fallback follows redirects itself.
+            return {
+                "summary": "",
+                "resource_type": "agentic-crawl",
+                "sitemap": {},
+                "crawl_stopped_because": "",
+                "crawl_stats": {},
+                "last_error": f"blocked: {fetched.blocked}",
+            }
         body = fetched.text
         # PDF override (full implementation in step 8)
         is_pdf = "application/pdf" in (fetched.content_type or "")
@@ -1972,6 +2011,8 @@ class TradecraftLookupManager:
                     'TRADECRAFT_TIER2_THRESHOLD_BYTES', self.tier2_threshold_bytes),
             )
             tier = fetched.tier
+            if fetched.blocked:
+                return f"Error: refusing to fetch {target_url}: {fetched.blocked}"
             if not fetched.text:
                 return (
                     f"Error: failed to fetch {target_url} "

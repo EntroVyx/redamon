@@ -6,6 +6,8 @@ link-local (incl. IPv4-mapped) and non-http(s), allows public + unresolvable.
 
 Part B: _http_fetch follows redirects MANUALLY and re-validates each hop, so a
 public page that 302s to 169.254.169.254 is refused before the second request.
+The refusal is raised, not returned as '', so _crawl_fetch can tell it from a
+thin page and never retries the URL in the browser (which follows redirects).
 
 Run inside the agent container:
     python -m unittest tests.test_crawl_ssrf
@@ -86,17 +88,50 @@ class HttpFetchRedirectGuard(unittest.TestCase):
         routes = {
             PUBLIC: (302, {"location": "http://169.254.169.254/latest/meta-data/"}, ""),
         }
-        html, calls = self._run(routes)
-        self.assertEqual(html, "")
+        fake = _FakeClient(routes)
+        with patch("httpx.AsyncClient", return_value=fake):
+            with self.assertRaises(UnsafeFetchURLError):
+                asyncio.run(tradecraft_crawl._http_fetch(PUBLIC))
         # The metadata hop was NEVER requested — blocked before the second GET.
-        self.assertEqual(calls, [PUBLIC])
-        self.assertNotIn("http://169.254.169.254/latest/meta-data/", calls)
+        self.assertEqual(fake.calls, [PUBLIC])
 
     def test_public_html_is_returned(self):
         routes = {PUBLIC: (200, {"content-type": "text/html"}, "<html>ok</html>")}
         html, calls = self._run(routes)
         self.assertEqual(html, "<html>ok</html>")
         self.assertEqual(calls, [PUBLIC])
+
+
+class CrawlFetchNoBrowserFallbackOnBlock(unittest.TestCase):
+    """A blocked fetch must not fall through to Playwright with the same URL."""
+
+    def _crawl_fetch_with(self, http_fetch):
+        browser_calls = []
+
+        async def fake_playwright(url, _mcp):
+            browser_calls.append(url)
+            return "<html>internal page rendered by the browser</html>"
+
+        with patch.object(tradecraft_crawl, "_http_fetch", http_fetch), \
+             patch.object(tradecraft_crawl, "_playwright_fetch", fake_playwright):
+            result = asyncio.run(tradecraft_crawl._crawl_fetch(PUBLIC, object()))
+        return result, browser_calls
+
+    def test_blocked_redirect_skips_browser(self):
+        async def blocked(_url):
+            raise UnsafeFetchURLError("redirect to 169.254.169.254")
+
+        result, browser_calls = self._crawl_fetch_with(blocked)
+        self.assertEqual(result, ("", 0))
+        self.assertEqual(browser_calls, [])
+
+    def test_thin_page_still_escalates(self):
+        async def thin(_url):
+            return "<html></html>"
+
+        result, browser_calls = self._crawl_fetch_with(thin)
+        self.assertEqual(browser_calls, [PUBLIC])
+        self.assertEqual(result[1], 2)
 
 
 if __name__ == "__main__":

@@ -1685,7 +1685,9 @@ def _build_llm_for_user(user_id: Optional[str]):
     )
 
 
-@app.post("/tradecraft/verify", tags=["Tradecraft"])
+# Authenticated because it fetches a caller-chosen URL from inside the agent's
+# network and spends the named user's LLM keys (CVE-2026-111323).
+@app.post("/tradecraft/verify", tags=["Tradecraft"], dependencies=[Depends(require_internal_auth)])
 async def tradecraft_verify(body: TradecraftVerifyRequest):
     """
     Fetch a tradecraft resource URL, detect its type, build a sitemap, and

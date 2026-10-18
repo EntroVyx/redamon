@@ -150,6 +150,24 @@ describe('verify route forwards model field to agent', () => {
     const body = JSON.parse(String(capturedFetch!.init.body))
     expect(body.force).toBe(true)
   })
+
+  test('agent call carries the internal key the agent route now requires', async () => {
+    vi.stubEnv('INTERNAL_API_KEY', 'test-internal-key')
+    try {
+      mockFindFirst.mockResolvedValueOnce(EXISTING_WITH_MODEL)
+      installFetchStub({
+        summary: 's', resource_type: 'mkdocs-wiki', sitemap: {},
+        crawl_stopped_because: '', crawl_stats: {}, last_error: '',
+      })
+      const r = await route.POST(makePost() as never, PARAMS() as never)
+      expect(r.status).toBe(200)
+      const headers = capturedFetch!.init.headers as Record<string, string>
+      expect(headers['x-internal-key']).toBe('test-internal-key')
+      expect(headers['Content-Type']).toBe('application/json')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
 
 // -------------------------------------------------------------------------

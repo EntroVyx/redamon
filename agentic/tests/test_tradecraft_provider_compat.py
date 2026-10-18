@@ -19,6 +19,7 @@ Run inside the agent container:
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import sys
 import unittest
@@ -83,6 +84,15 @@ class _BedrockMixedBlocksLLM:
         return r
 
 
+def _requested_url(args) -> str:
+    """The URL an execute_playwright call navigates to: the page.goto() literal
+    of the guarded script tradecraft sends (fetch_guard.guarded_browser_script)."""
+    for node in ast.walk(ast.parse(args["script"])):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "goto":
+            return node.args[0].value
+    raise AssertionError("script has no page.goto() call")
+
+
 class _StubPlaywrightTool:
     name = "execute_playwright"
 
@@ -90,7 +100,7 @@ class _StubPlaywrightTool:
         self.html_map = html_map
 
     async def ainvoke(self, args):
-        url = args.get("url", "")
+        url = _requested_url(args)
         return [{"text": self.html_map.get(url, "<html></html>")}]
 
 

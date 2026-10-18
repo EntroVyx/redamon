@@ -223,6 +223,29 @@ describe('POST background verify forwards model', () => {
     expect(fetchedBody.user_id).toBe('user-1')
   })
 
+  test('agent verify call carries the internal key the agent route now requires', async () => {
+    vi.stubEnv('INTERNAL_API_KEY', 'test-internal-key')
+    try {
+      mockTradecraftCreate.mockResolvedValue({
+        id: 'res-9', name: 'HT', slug: 'ht',
+        url: 'https://book.hacktricks.wiki',
+        llmModel: 'gpt-4o', githubTokenOverride: '',
+        enabled: true, resourceType: 'agentic-crawl',
+      })
+      installFetchStub({})
+      const req = makeRequest({
+        name: 'HT', url: 'https://book.hacktricks.wiki', llmModel: 'gpt-4o',
+      })
+      const r = await route.POST(req as never, PARAMS as never)
+      expect(r.status).toBe(201)
+      await flushMicrotasks()
+      const headers = capturedFetch!.init.headers as Record<string, string>
+      expect(headers['x-internal-key']).toBe('test-internal-key')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   test('agent verify call is skipped when skipVerify=true', async () => {
     mockTradecraftCreate.mockResolvedValue({
       id: 'res-8', name: 'X', slug: 'x', url: 'https://x.com',

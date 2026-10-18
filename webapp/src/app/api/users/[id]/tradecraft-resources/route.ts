@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { isInternalRequest, requireUserAccess } from '@/lib/session'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -178,7 +179,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
           const agentResp = await fetch(`${AGENT_API_URL}/tradecraft/verify`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: internalKeyHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
               url: created.url,
               user_id: id,

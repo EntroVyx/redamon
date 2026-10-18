@@ -119,11 +119,16 @@ async def _http_fetch(url: str, timeout: int = 15, max_redirects: int = 5) -> st
     STRIDE I18: redirects are followed MANUALLY so every hop's URL is checked by
     the SSRF guard. httpx's built-in follow_redirects hides the redirect target,
     letting a public page 302 the fetch into 169.254.169.254 / an RFC-1918 host;
-    following hops by hand lets us re-validate each one.
+    following hops by hand lets us re-validate each one. The pinned transport
+    re-checks at connect time, which also closes DNS rebinding.
+
+    Raises ``UnsafeFetchURLError`` when the guard refuses a hop, instead of
+    returning '': the caller must not retry that URL in the browser.
     """
+    from .fetch_guard import assert_safe_fetch_url, pinned_async_transport, UnsafeFetchURLError
+
     try:
         import httpx as _httpx  # local import keeps top-of-module deps clean
-        from .fetch_guard import assert_safe_fetch_url, UnsafeFetchURLError
 
         current = url
         async with _httpx.AsyncClient(
@@ -133,13 +138,10 @@ async def _http_fetch(url: str, timeout: int = 15, max_redirects: int = 5) -> st
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml",
             },
+            transport=pinned_async_transport(),
         ) as client:
             for _hop in range(max_redirects + 1):
-                try:
-                    assert_safe_fetch_url(current)
-                except UnsafeFetchURLError as e:
-                    logger.warning(f"[tradecraft] crawl blocked SSRF url={current}: {e}")
-                    return ""
+                assert_safe_fetch_url(current)
                 resp = await client.get(current)
                 if resp.is_redirect:
                     loc = resp.headers.get("location")
@@ -153,6 +155,9 @@ async def _http_fetch(url: str, timeout: int = 15, max_redirects: int = 5) -> st
                 return resp.text
             logger.warning(f"[tradecraft] crawl too many redirects for url={url}")
             return ""
+    except UnsafeFetchURLError as e:
+        logger.warning(f"[tradecraft] crawl blocked SSRF url={url}: {e}")
+        raise
     except Exception as e:
         logger.debug(f"[tradecraft] crawl http fetch error url={url} err={e}")
         return ""
@@ -170,12 +175,17 @@ async def _crawl_fetch(url: str, mcp_manager, *, tier1_threshold_bytes: int = 40
     # STRIDE I18: refuse an unsafe seed/frontier URL before EITHER fetcher runs,
     # so a blocked HTTP fetch can't fall through to the Playwright (sandbox) path
     # and reach the same internal address.
-    from .fetch_guard import is_safe_fetch_url
+    from .fetch_guard import is_safe_fetch_url, UnsafeFetchURLError
     if not is_safe_fetch_url(url):
         logger.warning(f"[tradecraft] crawl skipping unsafe url={url}")
         return "", 0
 
-    html = await _http_fetch(url)
+    try:
+        html = await _http_fetch(url)
+    except UnsafeFetchURLError:
+        # A public URL that redirected or re-resolved into an internal address.
+        # The browser would follow that same redirect, so do not fall back.
+        return "", 0
     if html and len(html) >= tier1_threshold_bytes:
         return html, 1
     # Fallback to Playwright (handles SPAs, login walls, anti-bot challenges).
@@ -195,22 +205,25 @@ async def _playwright_fetch(url: str, mcp_manager) -> str:
     playwright = next((t for t in tools if getattr(t, "name", "") == "execute_playwright"), None)
     if playwright is None:
         return ""
+    from .fetch_guard import guarded_browser_script, parse_guarded_browser_output
     try:
-        out = await playwright.ainvoke({"url": url, "format": "html"})
+        out = await playwright.ainvoke({"script": guarded_browser_script(url)})
     except Exception as e:
         logger.warning(f"[tradecraft] crawl playwright error url={url} err={type(e).__name__}: {e}")
         return ""
+    text = ""
     if isinstance(out, str):
-        return out
-    if isinstance(out, list):
-        text = ""
+        text = out
+    elif isinstance(out, list):
         for it in out:
             if isinstance(it, dict) and "text" in it:
                 text += it["text"]
-        return text
-    if isinstance(out, dict) and "text" in out:
-        return out["text"]
-    return ""
+    elif isinstance(out, dict) and "text" in out:
+        text = out["text"]
+    html, blocked = parse_guarded_browser_output(text)
+    if blocked:
+        logger.warning(f"[tradecraft] crawl playwright blocked url={url}: {blocked}")
+    return html
 
 
 def _extract_links_and_meta(html: str, base_url: str) -> Dict[str, Any]:

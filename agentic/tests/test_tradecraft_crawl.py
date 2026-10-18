@@ -6,6 +6,7 @@ LLM (returns scripted JSON decisions). No network or real LLM hit.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import unittest
 from unittest import mock
@@ -29,6 +30,15 @@ def run_async(coro):
 # Stubs
 # ---------------------------------------------------------------------------
 
+def _requested_url(args) -> str:
+    """The URL an execute_playwright call navigates to: the page.goto() literal
+    of the guarded script tradecraft sends (fetch_guard.guarded_browser_script)."""
+    for node in ast.walk(ast.parse(args["script"])):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "goto":
+            return node.args[0].value
+    raise AssertionError("script has no page.goto() call")
+
+
 class _StubPlaywrightTool:
     name = "execute_playwright"
 
@@ -37,7 +47,7 @@ class _StubPlaywrightTool:
         self.calls: List[str] = []
 
     async def ainvoke(self, args):
-        url = args.get("url", "")
+        url = _requested_url(args)
         self.calls.append(url)
         return [{"text": self.html_map.get(url, "<html></html>")}]
 
