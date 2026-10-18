@@ -21,6 +21,7 @@ Keywords: path traversal, directory traversal, LFI, local file inclusion, arbitr
 - vs. `ssrf_exploitation` (community): `file://` reached through a URL-fetching parameter is SSRF scheme-smuggling; a filesystem path parameter opened directly by the app is path traversal. If the parameter is a URL, classify to `ssrf_exploitation`; if it is a path or filename, stay HERE.
 - vs. `ssti` (community): SSTI evaluates a template engine; path traversal opens a file. A template-name parameter that selects a file is traversal/LFI; one whose contents are evaluated as template syntax is SSTI.
 - vs. `xxe` (community): XXE reads files via XML external entities; this skill reads them via a path parameter. If the input is XML, classify to `xxe`.
+- vs. `path_traversal` (built-in): same attack class (the built-in shares this skill's name). This skill is the richer workflow and replaces the built-in when imported; disable the built-in `path_traversal` in Project Settings > Agent Skills so requests route here predictably instead of competing in the classifier.
 - vs. `cve_exploit` (built-in): a named traversal/LFI CVE in a specific product belongs to `cve_exploit` when the user gives the CVE ID.
 
 ## Tools

@@ -95,6 +95,10 @@ class TestKaliGitToolsPinned(unittest.TestCase):
         pinned_tools = [
             "jwt_tool", "graphql-cop", "graphqlmap", "gMSADumper",
             "sstimap", "tplmap", "phpggc",
+            # @Shafranpackeer community-skill accelerators (#206 follow-up).
+            # Anchor smuggler on its repo path: 'smuggler.git' is a substring of
+            # 'h2csmuggler.git', so a bare 'smuggler' would match the wrong clone.
+            "defparam/smuggler", "h2csmuggler",
         ]
         checkouts = re.findall(r"checkout\s+([0-9a-f]{40})", self.txt)
         self.assertGreaterEqual(

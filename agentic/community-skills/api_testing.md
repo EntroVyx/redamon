@@ -30,8 +30,8 @@ Keywords: API security, JWT, JSON Web Token, alg none, RS256 to HS256, jku, x5u,
 - `execute_ffuf` for endpoint, parameter, and API-version fuzzing.
 - `execute_arjun` for hidden-parameter discovery on API routes.
 - `execute_curl` for crafted single-shot requests: JWT replay, GraphQL queries, 403-bypass header/path variants.
-- `execute_code` for custom exploit scripts: BOLA enumeration loops, JWT forging where `jwt_tool` lacks a mode, GraphQL batching generators.
-- `kali_shell` for `jwt_tool`, `graphql-cop`, `graphqlmap`, `clairvoyance`, `websocat`, and `jq`.
+- `execute_code` for custom exploit scripts: BOLA enumeration loops, JWT forging where `jwt_tool` lacks a mode, GraphQL batching generators, and GraphQL-over-WebSocket introspection using the `websockets` library.
+- `kali_shell` for `jwt_tool`, `graphql-cop`, `graphqlmap`, `clairvoyance`, and `jq`.
 
 ### Captured-traffic workflow (proxy_brain tools)
 
@@ -48,7 +48,7 @@ Three phases. Phase 1 is non-destructive: map the API surface, pull docs/schema,
 2. **Find docs and schema surfaces** with `execute_httpx` and `execute_ffuf`:
    ```
    execute_httpx> -l /tmp/urls.txt -path "/swagger.json,/openapi.json,/api-docs,/graphql,/v1/api-docs,/.well-known/openid-configuration" -mc 200 -silent
-   execute_ffuf> -u https://target.tld/FUZZ -w /usr/share/seclists/Discovery/Web-Content/api/api-endpoints.txt -mc 200,201,301,302,401,403
+   execute_ffuf> -u https://target.tld/FUZZ -w /usr/share/seclists/Discovery/Web-Content/big.txt -mc 200,201,301,302,401,403
    ```
 
 3. **Classify the auth model** from a sample request: bearer JWT, opaque token, session cookie, or API key. For JWT, decode the token and note `alg`, `kid`, `jku`, `x5u`, and the claim set:
@@ -60,7 +60,7 @@ Three phases. Phase 1 is non-destructive: map the API surface, pull docs/schema,
    ```
    execute_curl> -X POST https://target.tld/graphql -H "Content-Type: application/json" -d '{"query":"{ __schema { queryType { name } mutationType { name } types { name kind fields { name } } } }"}'
    kali_shell> graphql-cop -t https://target.tld/graphql
-   kali_shell> clairvoyance https://target.tld/graphql -o /tmp/schema.json -w /usr/share/seclists/Discovery/Web-Content/graphql-fields.txt
+   kali_shell> clairvoyance -o /tmp/schema.json https://target.tld/graphql
    ```
 
 5. **Discover hidden parameters** on write endpoints with `execute_arjun` to seed the mass-assignment check in Phase 2.

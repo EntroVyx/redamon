@@ -22,6 +22,7 @@ Keywords: broken access control, access control, authorization, privilege escala
 - vs. `mass_assignment` (community, @samugit83): when the access-control gap is "I can set a privileged field on an object I do own", route it there.
 - vs. `auth_session_attacks` (community): that covers authentication and sessions (who you are proven to be). This skill assumes the user is already authenticated and asks what they can reach. A logout that does not invalidate a session is `auth_session_attacks`; an authenticated user reaching an admin page is this skill.
 - vs. `api_testing` (community): `api_testing` runs a quick BOLA/403 check as part of an API sweep; this skill runs the thorough access-control audit and hands specific findings to the dedicated skills.
+- vs. `access_control` (built-in): same attack class. This skill is the richer workflow and replaces the built-in when imported; disable the built-in `access_control` in Project Settings > Agent Skills so requests route here predictably instead of competing in the classifier.
 - vs. `cve_exploit` (built-in): a named authorization-bypass CVE in a specific product belongs to `cve_exploit` when the user gives the CVE ID.
 
 ## Tools

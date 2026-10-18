@@ -136,6 +136,9 @@ These scripts and binaries are downloaded into `/opt/tools/{linux,windows}/` and
 | **jwt_tool** | JWT token testing and exploitation | GPL-3.0 | https://github.com/ticarpi/jwt_tool | Installed via `pip` (git) in `mcp/kali-sandbox/Dockerfile` |
 | **graphql-cop** | GraphQL security auditing | BSD-3-Clause | https://github.com/dolevf/graphql-cop | Installed via `pip` (git) in `mcp/kali-sandbox/Dockerfile` |
 | **GraphQLmap** | GraphQL endpoint exploitation | MIT | https://github.com/swisskyrepo/GraphQLmap | Installed via `pip` (git) in `mcp/kali-sandbox/Dockerfile` |
+| **clairvoyance** | GraphQL schema recovery when introspection is disabled (field-suggestion walking) | MIT | https://github.com/nikitastupin/clairvoyance | Installed via `pip` in `mcp/kali-sandbox/Dockerfile` (separate-process invocation via `kali_shell`) |
+| **smuggler** | HTTP request smuggling detection (CL.TE / TE.CL / TE.TE) | MIT | https://github.com/defparam/smuggler | Cloned from upstream in `mcp/kali-sandbox/Dockerfile` (separate-process invocation, mere aggregation) |
+| **h2csmuggler** | HTTP/2 cleartext (h2c) upgrade smuggling | MIT | https://github.com/BishopFox/h2csmuggler | Cloned from upstream in `mcp/kali-sandbox/Dockerfile` (separate-process invocation, mere aggregation) |
 | **SSTImap** | Server-Side Template Injection detection & exploitation | GPL-3.0 | https://github.com/vladko312/SSTImap | Cloned from upstream in `mcp/kali-sandbox/Dockerfile` (separate-process invocation, mere aggregation) |
 | **tplmap** | SSTI scanner (Smarty / Velocity coverage) | GPL-3.0 | https://github.com/epinna/tplmap | Cloned from upstream in `mcp/kali-sandbox/Dockerfile` (isolated venv) |
 | **semgrep** | Source-aware static analysis (SAST) | LGPL-2.1 | https://github.com/semgrep/semgrep | Installed via `pip` in `mcp/kali-sandbox/Dockerfile`. Used by the source-aware-sast Chat Skill on operator-provided repos. |

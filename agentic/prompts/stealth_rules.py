@@ -134,7 +134,8 @@ stop and inform the user honestly — do NOT proceed with noisy techniques.
 ### kali_shell — RESTRICTED
 - Single-target, purpose-specific commands only
 - Allowed: passive lookups (whois, dig, host), downloading specific PoCs, running single-target scripts
-- FORBIDDEN tools: hydra, medusa, wfuzz, ffuf, gobuster, dirb, dirsearch, masscan, zmap, ncrack, patator
+- FORBIDDEN tools: hydra, medusa, wfuzz, ffuf, gobuster, dirb, dirsearch, masscan, zmap, ncrack, patator, smuggler, h2csmuggler, clairvoyance
+- FORBIDDEN: request-smuggling/desync probes (smuggler, h2csmuggler) send malformed requests that can poison shared front-end connections and hit other users; and clairvoyance walks a field-suggestion wordlist (many requests). Neither is stealthy.
 - FORBIDDEN: any command that loops over targets, ports, or wordlists
 
 ### execute_code — RESTRICTED

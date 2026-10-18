@@ -21,6 +21,7 @@ Keywords: HTTP request smuggling, request smuggling, desync, connection desync, 
 - vs. `host_header_injection` / `open_redirect` (other): those abuse a single server's handling of a header or redirect; smuggling specifically exploits the disagreement between two servers about where one request ends and the next begins.
 - vs. `api_testing` (community): a 403 bypass via routing headers (`X-Original-URL`) on one server is an `api_testing` check. Bypassing a front-end control by smuggling a request past it to the back-end is this skill.
 - vs. `ssrf_exploitation` / SSRF (other): request tunneling through a smuggling primitive can reach internal endpoints, but the entry primitive is a desync. Pure SSRF via a URL-fetching parameter stays with the SSRF handling.
+- vs. `http_request_smuggling` (built-in): same attack class. This skill is the richer workflow and replaces the built-in when imported; disable the built-in `http_request_smuggling` in Project Settings > Agent Skills so requests route here predictably instead of competing in the classifier.
 - vs. `cve_exploit` (built-in): a named smuggling CVE in a specific proxy or server version belongs to `cve_exploit` when the user gives the CVE ID.
 
 ## Tools
@@ -80,7 +81,7 @@ Three phases. Phase 1 is non-destructive: fingerprint the proxy chain, pick a sa
 
 6. **Automated triage** with `smuggler.py` to classify the mutation that works, then reproduce it manually for a clean proof:
    ```
-   kali_shell> python3 smuggler.py -u https://target.tld/search
+   kali_shell> smuggler.py -u https://target.tld/search
    ```
 
 Once a parsing discrepancy is confirmed with a timing hit and the responsible desync shape (CL.TE, TE.CL, TE.TE, H2.CL, or H2.TE) is identified, **request transition to exploitation phase**.

@@ -14,8 +14,8 @@ Community Agent Skills are the simplest of the three systems because everything 
 agentic/community-skills/<skill_name>.md
          │
          ▼
-  GET /community-skills  (agentic/api.py:561-585)   catalog
-  GET /community-skills/<skill_id>  (api.py:588-598) full content
+  GET /community-skills  (agentic/api.py:2170)   catalog
+  GET /community-skills/<skill_id>  (api.py:2197) full content
          │
          ▼
   POST /api/users/:id/attack-skills/import-community
@@ -26,15 +26,15 @@ agentic/community-skills/<skill_name>.md
          │
          ▼
   Agent loads USER_ATTACK_SKILLS on every classification pass
-  (project_settings.py:531-536  get_enabled_user_skills())
+  (project_settings.py:1024  get_enabled_user_skills())
          │
          ▼
   Classifier adds "user_skill:<id>" as a candidate
-  (classification.py:177-183 builds the section from description or first 500 chars)
+  (classification.py:333-336 builds the section from description or first 500 chars)
          │
          ▼
-  When selected, _resolve_user_skill() injects the full .md content
-  (prompts/__init__.py:204-210)
+  When selected, resolve_user_skill() injects the full .md content
+  (prompts/__init__.py:162)
 ```
 
 | Layer | File | Touch? |
@@ -44,18 +44,18 @@ agentic/community-skills/<skill_name>.md
 | 3. Wiki community table | [redamon.wiki/Agent-Skills.md](../../../redamon.wiki/Agent-Skills.md) "Community Skills" | YES if shipping publicly |
 | 4. Everything else | N/A | NO CODE CHANGES |
 
-The agentic `GET /community-skills` endpoint auto-discovers files by globbing the directory. There is nothing to register, and **no container rebuild is needed**: `./agentic/community-skills` is volume-mounted read-only into the agent container at `/app/community-skills` (see [docker-compose.yml:419](../../../docker-compose.yml#L419)). Drop the file and it is picked up on the next `GET /community-skills` call.
+The agentic `GET /community-skills` endpoint auto-discovers files by globbing the directory. There is nothing to register, and **no container rebuild is needed for the `.md` file itself**: `./agentic/community-skills` is volume-mounted read-only into the agent container at `/app/community-skills` (see [docker-compose.yml:903](../../../docker-compose.yml#L903)). Drop the file and it is picked up on the next `GET /community-skills` call. (A skill that references a NEW `kali_shell` CLI is the exception: the CLI lives in the baked kali-sandbox and agent images, so those must be rebuilt. See Phase 1 content rule 7.)
 
 ---
 
 ## Critical rules (READ BEFORE EDITING)
 
-- **No container rebuild needed.** `./agentic/community-skills` is volume-mounted read-only into the agent container at [docker-compose.yml:419](../../../docker-compose.yml#L419). Dropping a `.md` file there is instantly visible to the `/community-skills` endpoint. (This is an exception to the general rule that `agentic/` changes require rebuilding `agent`: that rule applies to Python code baked into the image, not to these two mounted directories.)
+- **No container rebuild needed for the `.md` file.** `./agentic/community-skills` is volume-mounted read-only into the agent container at [docker-compose.yml:903](../../../docker-compose.yml#L903). Dropping a `.md` file there is instantly visible to the `/community-skills` endpoint. (This is an exception to the general rule that `agentic/` changes require rebuilding `agent`: that rule applies to Python code baked into the image, not to these two mounted directories.) **A skill that calls a new `kali_shell` CLI is NOT rebuild-free**: the binary and the `kali_shell` tool catalogue are baked in, so you must rebuild kali-sandbox and agent (content rule 7).
 - **No Prisma migration needed.** Community skills are not a Prisma model on their own, they become `UserAttackSkill` rows on import. The schema already supports this.
-- **Skills are per-user, not global.** Each user who wants this skill must click "Import from Community" in their Global Settings. Already-imported users will NOT auto-pick up new community skills, they need to re-import (duplicates are skipped by name).
+- **Skills are per-user, not global, and import is by-name only.** Each user who wants this skill must click "Import from Community" in their Global Settings. Already-imported users will NOT auto-pick up new community skills, they need to re-import. Import skips any name the user already has (`import-community/route.ts`), so **editing an existing skill's `.md` does not reach users who already imported it**: re-import leaves their old copy in place. To adopt a rewrite they must delete the old skill first, then re-import. Call this out in the CHANGELOG whenever you change a shipped skill's content.
 - **Skill content is capped at 50 KB.** The validation is at [webapp/src/app/api/users/[id]/attack-skills/route.ts](../../../webapp/src/app/api/users/[id]/attack-skills/route.ts) POST handler (~line 67). Keep your file well under 50,000 characters.
 - **Max 20 user skills per user.** If you ship many community skills, be mindful: every imported one counts.
-- **The first non-heading paragraph becomes the description.** [agentic/api.py:572-578](../../../agentic/api.py) extracts the first 200-char stripped non-`#` line as the description shown in the import dialog. Write that line well.
+- **The first non-heading paragraph becomes the description.** [agentic/api.py:2182](../../../agentic/api.py) extracts the first 200-char stripped non-`#` line as the description shown in the import dialog. Write that line well.
 - **No em dashes anywhere.** Use hyphens or rephrase. Enforced project-wide.
 
 ---
@@ -63,7 +63,7 @@ The agentic `GET /community-skills` endpoint auto-discovers files by globbing th
 ## Phase 0: Pre-flight
 
 1. Check [agentic/community-skills/](../../../agentic/community-skills/) for an existing file with the same or similar name. If found, STOP and decide whether to extend it instead.
-2. Search for related built-in skills in [agentic/prompts/](../../../agentic/prompts/): if the topic is `sql_injection`, `xss`, `cve_exploit`, `brute_force_credential_guess`, `phishing_social_engineering`, or `denial_of_service`, users already have a built-in. Justify why the community version adds value (e.g. the SQLi community skill covers advanced bypasses beyond the sqlmap-focused built-in).
+2. Search for a related built-in skill. The authoritative list is `KNOWN_ATTACK_PATHS` in [agentic/state.py](../../../agentic/state.py) (today: `cve_exploit`, `brute_force_credential_guess`, `phishing_social_engineering`, `denial_of_service`, `sql_injection`, `xss`, `ssrf`, `rce`, `path_traversal`, `access_control`, `http_request_smuggling`, `xxe`, `crypto_attack`, `deserialization`), each with a section in [classification.py](../../../agentic/prompts/classification.py) `_BUILTIN_SKILL_MAP`. If your topic matches one, justify why the community version adds value (e.g. the SQLi community skill covers advanced bypasses beyond the sqlmap-focused built-in), AND add a `- vs. \`<builtin_id>\` (built-in): ...` line to the skill's "Disjoint from neighbouring skills" section telling the user to disable the built-in on import so the Intent Router routes to your skill predictably. Built-in and `user_skill:<id>` entries compete as "best match wins"; a silent same-class overlap means the classifier may pick either.
 3. Decide: is this really an Agent Skill (phase-structured attack workflow) or a Chat Skill (reference doc for on-demand injection)? If it is flags, tables, syntax cheat sheets: use [PROMPT.ADD_COMMUNITY_CHAT_SKILL.md](PROMPT.ADD_COMMUNITY_CHAT_SKILL.md) instead. If it is "first run X, then pivot to Y, then report Z": this is the right prompt.
 
 ---
@@ -72,7 +72,7 @@ The agentic `GET /community-skills` endpoint auto-discovers files by globbing th
 
 Create [agentic/community-skills/<skill_name>.md](../../../agentic/community-skills/). `<skill_name>` becomes the skill ID visible to the import endpoint (file stem, lowercase_snake, no extension).
 
-The file stem also becomes the default `name` when rendered in the import UI (`md_file.stem.replace("_", " ").title()` at [agentic/api.py:572](../../../agentic/api.py)). Pick a name that reads well in Title Case: `ssrf_exploitation` -> "Ssrf Exploitation".
+The file stem also becomes the default `name` when rendered in the import UI (`md_file.stem.replace("_", " ").title()` at [agentic/api.py:2180](../../../agentic/api.py)). Pick a name that reads well in Title Case: `ssrf_exploitation` -> "Ssrf Exploitation".
 
 ### Required structure
 
@@ -90,7 +90,7 @@ Canonical template (follow this shape, the wiki at [redamon.wiki/Agent-Skills.md
 
 <Short paragraph: one-line summary. THIS BECOMES THE AUTO-DESCRIPTION
 if the user does not provide one in the import dialog. The API extracts
-the first non-heading stripped line at agentic/api.py:572-578.>
+the first non-heading stripped line at agentic/api.py:2182.>
 
 ## When to Classify Here
 
@@ -146,12 +146,14 @@ Once <criterion> is met, **request transition to exploitation phase**.
 
 ### Content rules
 
-1. **Every step names the tool it uses.** `query_graph`, `kali_shell`, `execute_curl`, `execute_code`, `execute_playwright`, `execute_nuclei`, `execute_hydra`, `metasploit_console`. These are the tools the agent has. Do NOT invent tool names.
+1. **Every step names the tool it uses.** The agent tools are the keys of `TOOL_REGISTRY` in [agentic/prompts/tool_registry.py](../../../agentic/prompts/tool_registry.py) (`query_graph`, `kali_shell`, `execute_curl`, `execute_code`, `execute_playwright`, `execute_nuclei`, `execute_hydra`, `execute_httpx`, `execute_arjun`, `execute_ffuf`, `metasploit_console`, ...). Do NOT invent tool names.
 2. **Commands must be copy-pasteable.** Use fenced code blocks. No pseudo-code.
 3. **Include the phase transition cue** at the end of Phase 1. The agent reads this literally and decides when to call `action="request_phase_transition"`.
-4. **Keep the "When to Classify Here" section tight.** The classifier uses either the user-provided description from the import dialog or the first 500 characters of the file (see [classification.py:177-183](../../../agentic/prompts/classification.py)). Making the opening paragraph a clean one-liner that describes the skill is the single highest-ROI edit you can make for classification accuracy.
+4. **Keep the "When to Classify Here" section tight.** The classifier uses either the user-provided description from the import dialog or the first 500 characters of the file (see [classification.py:333-336](../../../agentic/prompts/classification.py)). Making the opening paragraph a clean one-liner that describes the skill is the single highest-ROI edit you can make for classification accuracy.
 5. **No em dashes.**
 6. **Target 200-800 lines.** Much shorter feels underbaked; much longer eats tokens every request.
+7. **A `kali_shell` CLI must be installed AND documented, or it does not exist.** Every binary a step runs via `kali_shell` (sqlmap, dalfox, jwt_tool, ...) must already be in [mcp/kali-sandbox/Dockerfile](../../../mcp/kali-sandbox/Dockerfile). If it is NOT, you are adding a tool: follow [PROMPT.ADD_AGENTIC_TOOL.md](PROMPT.ADD_AGENTIC_TOOL.md) **Type A** - pin the install (a release version or a 40-hex commit, guarded by `tests/test_t17_build_pins.py`), add it to the `kali_shell` `description` in `tool_registry.py` (the `kali_toolbox` MCP tool serves that text verbatim, so an undocumented binary is invisible to external clients), add a stealth constraint in [agentic/prompts/stealth_rules.py](../../../agentic/prompts/stealth_rules.py) if it sends traffic, add a Dockerfile smoke test, then **rebuild kali-sandbox AND agent**. Prefer a tool already installed over adding one (e.g. sqlmap over ghauri, the `websockets` lib via `execute_code` over websocat).
+8. **Every file path a command references must exist in the image.** Wordlists in the kali image are only `common.txt`, `raft-medium-directories.txt`, `big.txt` under `/usr/share/seclists/Discovery/Web-Content/`, the `Passwords/*` lists, and `/usr/share/wordlists/rockyou.txt` (see the SecLists block in the Dockerfile). Do not reference a SecLists path that is not downloaded; `ffuf`/tools fail on a missing `-w` file.
 
 ---
 
@@ -163,7 +165,7 @@ If [agentic/community-skills/README.md](../../../agentic/community-skills/README
 
 ## Phase 3: Update the wiki
 
-Edit the "Community Skills" table in [redamon.wiki/Agent-Skills.md](../../../redamon.wiki/Agent-Skills.md) (the table around lines 164-169 in the current version).
+Edit the "Community Skills" table in [redamon.wiki/Agent-Skills.md](../../../redamon.wiki/Agent-Skills.md) (the "### Community Skills" table; check the file for its current line range).
 
 Add a row matching the existing format:
 
@@ -183,13 +185,13 @@ No rebuild. The file is live as soon as you save it (directory is volume-mounted
 
 1. Hit the catalog endpoint directly to confirm the file is picked up:
    ```bash
-   docker compose exec agent curl -s http://localhost:8000/community-skills | jq .
+   docker compose exec agent curl -s http://localhost:8080/community-skills | jq .
    ```
    Confirm your skill appears in `skills[]` with the expected `id` (file stem) and a reasonable auto-description.
 
 2. Hit the content endpoint:
    ```bash
-   docker compose exec agent curl -s http://localhost:8000/community-skills/<skill_name> | jq .
+   docker compose exec agent curl -s http://localhost:8080/community-skills/<skill_name> | jq .
    ```
 
 3. In the webapp: Global Settings (gear icon, top right) > Agent Skills > **Import from Community**. The dialog shows how many will be imported. Confirm. If you had already imported previously, your new one will show in the "imported" count and duplicates in the "skipped" count.
@@ -208,7 +210,7 @@ No rebuild. The file is live as soon as you save it (directory is volume-mounted
 
 | Symptom | Likely cause |
 |---|---|
-| Skill not in `/community-skills` catalog | File not in `./agentic/community-skills/` (that exact path), or filename is `README.md` (excluded at [api.py:569](../../../agentic/api.py)), or missing `.md` extension. The directory is volume-mounted so there is no rebuild to miss |
+| Skill not in `/community-skills` catalog | File not in `./agentic/community-skills/` (that exact path), or filename is `README.md` (excluded at [api.py:2178](../../../agentic/api.py)), or missing `.md` extension. The directory is volume-mounted so there is no rebuild to miss |
 | "Import from Community" shows `total: 0` | webapp cannot reach `AGENT_API_URL`. Check `docker compose logs webapp` and the `AGENT_API_URL` env var in the webapp service |
 | Import works but classifier never picks the skill | Description is generic or overlaps with a built-in. Edit the description via Global Settings > Agent Skills > pencil icon. Or rewrite the opening paragraph of the .md |
 | Badge shows `SKILL` but workflow not in system prompt | Unlikely; `_resolve_user_skill()` is non-conditional. Check agent logs for errors parsing the `attack_path_type` |

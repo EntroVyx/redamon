@@ -368,7 +368,7 @@ Two **append-only** tables record security-relevant events. `AuditLog` (`audit_l
 
 ## 17. Supply-chain integrity
 
-**Pinned build sources.** The recon image and the git-cloned tools in the Kali image build from **pinned commits or release tags** (for example jsluice, ffuf `v2.1.0`, masscan, subjack, SecLists, jwt_tool, graphql-cop, sstimap, tplmap, phpggc, chisel, the PEASS-ng suite), so a moved upstream reference fails the build loudly. The Docker CLI and Docker Engine are installed from Docker's official GPG-verified APT repository. (A subset of the Kali image's Go-installed tools still tracks `@latest`/`@master`; pinning them is a tracked supply-chain follow-up, see [Section 20](#20-documented-residual-risks).)
+**Pinned build sources.** The recon image and the git-cloned tools in the Kali image build from **pinned commits or release tags** (for example jsluice, ffuf `v2.1.0`, masscan, subjack, SecLists, jwt_tool, graphql-cop, sstimap, tplmap, phpggc, smuggler, h2csmuggler, clairvoyance, chisel, the PEASS-ng suite), so a moved upstream reference fails the build loudly. The Docker CLI and Docker Engine are installed from Docker's official GPG-verified APT repository. (A subset of the Kali image's Go-installed tools still tracks `@latest`/`@master`; pinning them is a tracked supply-chain follow-up, see [Section 20](#20-documented-residual-risks).)
 
 **Knowledge Base feed pinning.** KB feeds are pinned to immutable upstream commits with per-feed sha256 (fail-closed), NVD responses are schema-validated, and the embedder/reranker revisions are pinned.
 

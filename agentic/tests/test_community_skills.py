@@ -466,6 +466,22 @@ class TestToolRegistryRegression(unittest.TestCase):
         self.assertNotIn("\u2014", ssti_section,
                          "Newly added tplmap section must not contain em dashes")
 
+    def test_kali_shell_documents_web_exploitation_accelerators(self):
+        """The @Shafranpackeer skills call clairvoyance/smuggler/h2csmuggler via
+        kali_shell. kali_toolbox serves this description to external MCP clients
+        verbatim (agentic/api.py GET /kali/toolbox), so a tool left out of it
+        does not exist as far as those clients are concerned. ghauri and websocat
+        were dropped (sqlmap and the websockets lib cover them) and must not
+        reappear here."""
+        from prompts.tool_registry import TOOL_REGISTRY
+        kali_desc = TOOL_REGISTRY["kali_shell"]["description"]
+        for tool in ("clairvoyance", "smuggler", "h2csmuggler"):
+            self.assertIn(tool, kali_desc,
+                          f"kali_shell description must document {tool}")
+        for gone in ("ghauri", "websocat"):
+            self.assertNotIn(gone, kali_desc,
+                             f"{gone} was removed and must not be documented")
+
 
 # ============================================================================
 # REGRESSION: classification prompt builder still works with ssti as user_skill
@@ -562,6 +578,41 @@ class TestDockerfileSmoke(unittest.TestCase):
     def test_sstimap_still_installed(self):
         """We must not have accidentally removed sstimap while adding tplmap."""
         self.assertIn("github.com/vladko312/SSTImap", self.content)
+
+    def test_web_exploitation_accelerators_pinned(self):
+        """clairvoyance/smuggler/h2csmuggler are the @Shafranpackeer PR tools we
+        kept. Each is pinned (tests/test_t17_build_pins.py also guards the two
+        clones) and wired to a /usr/local/bin entry the skills invoke."""
+        c = self.content
+        self.assertRegex(
+            c, r"pip install --no-cache-dir clairvoyance==\d+\.\d+",
+            "clairvoyance must be pinned to a released version",
+        )
+        for repo, wrapper in (
+            ("github.com/defparam/smuggler", "/usr/local/bin/smuggler"),
+            ("github.com/BishopFox/h2csmuggler", "/usr/local/bin/h2csmuggler"),
+        ):
+            self.assertIn(repo, c, f"Dockerfile missing {repo} clone")
+            self.assertIn(wrapper, c, f"Dockerfile missing {wrapper} wrapper")
+        # Anchor on the full repo path: 'smuggler.git' is a substring of
+        # 'h2csmuggler.git', so a bare 'smuggler' anchor would match the wrong clone.
+        for repo in ("defparam/smuggler", "BishopFox/h2csmuggler"):
+            self.assertRegex(
+                c, r"(?s)" + re.escape(repo) + r"\.git.*?checkout\s+[0-9a-f]{40}",
+                f"{repo} clone must pin a 40-hex commit",
+            )
+
+    def test_removed_accelerators_absent(self):
+        """ghauri and websocat were dropped (sqlmap and the websockets lib cover
+        them). h2csmuggler must reuse the h2 that httpx[http2] already installs,
+        not pip-install its own copy into the shared venv."""
+        c = self.content
+        self.assertNotIn("ghauri", c, "ghauri should have been removed")
+        self.assertNotIn("websocat", c, "websocat should have been removed")
+        self.assertNotRegex(
+            c, r"pip install --no-cache-dir h2(\s|$)",
+            "h2csmuggler must use the httpx[http2] h2, not a standalone install",
+        )
 
 
 if __name__ == "__main__":

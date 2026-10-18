@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Five new @Shafranpackeer community agent skills** (#206): `auth_session_attacks` (OAuth/OIDC flow abuse, session fixation and invalidation, MFA bypass), `request_smuggling` (CL.TE/TE.CL/TE.TE and HTTP/2 downgrade desync), `broken_access_control` (privilege-boundary audit that routes findings to the object/function/mass-assignment skills), `ssrf_exploitation` (OOB confirmation, cloud metadata, internal reach, protocol smuggling) and `path_traversal` (encoding bypass, sensitive-file read, LFI-to-RCE). Import them from Global Settings > Agent Skills. Four cover the same attack class as a built-in skill (`http_request_smuggling`, `access_control`, `ssrf`, `path_traversal`); when you import one, disable the matching built-in in Project Settings > Agent Skills so requests route to the imported skill predictably.
+
+### Changed
+
+- **The three original @Shafranpackeer community skills were rewritten** (#206) into the canonical Agent Skill template so the Intent Router classifies them like the modern corpus: `api_testing`, `sqli_exploitation` and `xss_exploitation`. Users who already imported any of these keep their old copy; delete it and re-import from Community to pick up the new text (import skips names you already have).
+- **The kali-sandbox image gained three pinned exploitation tools** used by those skills: `clairvoyance` (GraphQL schema recovery when introspection is off), `smuggler` and `h2csmuggler` (request smuggling). Stealth mode forbids all three. They are accelerators: each skill also documents a manual `execute_code`/`execute_curl` path. **Rebuild the `kali-sandbox` and `agent` images** (the `kali_shell` tool catalogue is baked into the agent). `ghauri` and `websocat` from the original #206 branch were dropped before merge, because `sqlmap` and the `websockets` Python library already cover them.
+
 ## [7.0.2] - 2026-10-18
 
 ### Fixed
