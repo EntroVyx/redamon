@@ -696,6 +696,7 @@ fields:
     roe_capped: false
     mcp: settable
     stealth: { set: [] }
+    roe_parse: deny
     validator: free_text
     meaning: >-
       Paths probed for OpenAPI documents during auto-discovery. Empty disables common-path probes.

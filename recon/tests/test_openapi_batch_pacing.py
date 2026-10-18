@@ -73,6 +73,7 @@ def test_full_batch_paces_groups_and_resets_for_next_scan(tmp_path, clock_and_re
         'OUTPUT_DIR': tmp_path, 'PROJECT_ID': 'fixture-project',
         'clear_batch_outputs': Mock(return_value=0), 'initialize_batch_canonical': Mock(),
         'merge_batch_outputs': Mock(), 'save_recon_file': Mock(),
+        '_prune_recon_findings': Mock(),
     }
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), namespace)
 

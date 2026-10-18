@@ -8940,6 +8940,7 @@
    "phase": "resource_enum",
    "prisma_type": "String[]",
    "roe_capped": false,
+   "roe_parse": "deny",
    "runtime_key": "OPENAPI_DISCOVERY_PATHS",
    "stealth": {
     "set": []
