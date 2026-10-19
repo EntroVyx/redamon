@@ -76,6 +76,29 @@ def test_ip_literal_requires_ip_network_scope():
     assert not scope.allows('https://192.0.2.1/spec')
 
 
+@pytest.mark.parametrize('entry', [
+    'https://API.example.test:8443/', 'api.example.test:8443', 'API.example.test.',
+])
+def test_host_exclusion_with_scheme_or_port_keeps_the_scope(entry):
+    # The roeExcludedHosts meaning says scheme and port are ignored, and MCP
+    # writes it as free text: one such entry must not turn the import off.
+    scope = Scope.from_payload(payload(excluded_hosts=[entry]))
+    assert scope.is_valid
+    assert not scope.allows('https://api.example.test/spec')
+    assert not scope.allows('https://v1.api.example.test/spec')
+    assert scope.allows('https://docs.example.test/spec')
+
+
+@pytest.mark.parametrize('entry', ['192.0.2.7:443', '[2001:db8::7]'])
+def test_ip_exclusion_with_port_or_brackets_keeps_the_scope(entry):
+    scope = Scope.from_payload(payload(root='', include_subdomains=False,
+                                       ip_networks=['192.0.2.0/24', '2001:db8::/32'], excluded_hosts=[entry]))
+    assert scope.is_valid
+    excluded = 'https://[2001:db8::7]/spec' if entry.startswith('[') else 'https://192.0.2.7/spec'
+    assert not scope.allows(excluded)
+    assert scope.allows('https://192.0.2.8/spec')
+
+
 @pytest.mark.parametrize('entry', ['*example.test', '*.*.example.test', '*.https://example.test', '*.192.0.2.1'])
 def test_invalid_exclusion_payload_still_fails_closed(entry):
     scope = Scope.from_payload(payload(excluded_hosts=[entry]))

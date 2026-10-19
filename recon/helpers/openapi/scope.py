@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from recon.helpers.auth_profile import default_scope_hosts, host_in_scope
-from recon.helpers.roe_scope import _is_roe_excluded
+from recon.helpers.roe_scope import _is_roe_excluded, _normalize_host as _roe_entry_host
 
 
 def _normalize_host(value: Any) -> str:
@@ -171,7 +171,10 @@ class Scope:
             except ValueError:
                 pass
             wildcard = value.strip().startswith('*.')
-            host = _normalize_scope_host(value.strip()[2:] if wildcard else value)
+            # A host entry reads as the shared RoE matcher reads it, without its
+            # scheme, port or brackets, as the roeExcludedHosts meaning promises:
+            # refusing it would turn the whole import off for one exclusion.
+            host = _normalize_scope_host(value.strip()[2:] if wildcard else _roe_entry_host(value))
             if not host:
                 return cls(_valid=False)
             if wildcard:
