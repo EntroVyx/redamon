@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from recon.partial_recon_modules.graph_builders import graph_url_scope, url_host
+from recon.partial_recon_modules.graph_builders import declared_only, graph_url_scope, url_host
 from recon.partial_recon_modules.helpers import partial_settings, scope_roots
 
 
@@ -71,7 +71,8 @@ def run_ai_surface_recon(config: dict) -> None:
             RETURN b.url AS base_url, e.path AS path,
                    coalesce(e.method,'GET') AS method,
                    e.ai_interface_type AS iface,
-                   coalesce(e.is_ai_framework_detected,false) AS ai_fw
+                   coalesce(e.is_ai_framework_detected,false) AS ai_fw,
+                   """ + declared_only("e") + """ AS declared_only
             """,
             u=user_id, p=project_id,
         )
@@ -86,6 +87,9 @@ def run_ai_surface_recon(config: dict) -> None:
             ep = bd["endpoints"].setdefault(path, {"methods": [], "parameters": {}})
             if row["method"] not in ep["methods"]:
                 ep["methods"].append(row["method"])
+            # A path is declared-only while every node read for it is: the
+            # chat-shape POST probe skips it (D15).
+            ep["declared_only"] = ep.get("declared_only", True) and bool(row["declared_only"])
             if row["iface"]:
                 ep["ai_interface_type"] = row["iface"]
             # populate http_probe AI flag so the host gate + static fallback fire

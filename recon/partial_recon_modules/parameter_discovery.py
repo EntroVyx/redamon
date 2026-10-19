@@ -18,6 +18,8 @@ from recon.partial_recon_modules.helpers import (
 )
 from recon.partial_recon_modules.graph_builders import (
     _build_http_probe_data_from_graph,
+    declared_only,
+    declared_only_unsafe,
     graph_target_hosts,
     graph_url_scope,
     url_host,
@@ -583,10 +585,17 @@ def run_arjun(config: dict) -> None:
                 with driver.session() as session:
                     keep = graph_url_scope(session, user_id, project_id, roots,
                                            config.get("domain_groups"), apex_filter=False)
-                    # Get all endpoint full URLs (baseurl + path) from the graph
+                    # Get all endpoint full URLs (baseurl + path) from the graph.
+                    # Arjun sends its own methods, not the Endpoint's: with any
+                    # method but GET configured, no path known only from an API
+                    # specification is a target (D15).
+                    arjun_methods = {str(m).upper() for m in settings.get('ARJUN_METHODS', ['GET', 'POST']) or []}
+                    skip_declared = (declared_only("e") if arjun_methods - {'GET'}
+                                     else declared_only_unsafe("e"))
                     result = session.run(
                         """
                         MATCH (e:Endpoint {user_id: $uid, project_id: $pid})
+                        WHERE NOT """ + skip_declared + """
                         RETURN DISTINCT e.baseurl + e.path AS url
                         """,
                         uid=user_id, pid=project_id,

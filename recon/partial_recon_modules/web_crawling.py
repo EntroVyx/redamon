@@ -19,6 +19,7 @@ from recon.partial_recon_modules.helpers import (
 )
 from recon.partial_recon_modules.graph_builders import (
     _build_http_probe_data_from_graph,
+    declared_only_unsafe,
     graph_target_hosts,
     graph_url_scope,
     url_host,
@@ -765,6 +766,7 @@ def run_zap_ajax_spider_partial(config: dict) -> None:
                         result = session.run(
                             """
                             MATCH (e:Endpoint {user_id: $uid, project_id: $pid})
+                            WHERE NOT """ + declared_only_unsafe("e") + """
                             RETURN DISTINCT e.baseurl + e.path AS url
                             """,
                             uid=user_id,
@@ -1075,6 +1077,7 @@ def run_ffuf(config: dict) -> None:
                         result = session.run(
                             """
                             MATCH (e:Endpoint {user_id: $uid, project_id: $pid})
+                            WHERE NOT """ + declared_only_unsafe("e") + """
                             RETURN collect(DISTINCT e.path) AS paths
                             """,
                             uid=user_id, pid=project_id,
@@ -1569,6 +1572,7 @@ def run_jsluice(config: dict) -> None:
                     result = session.run(
                         """
                         MATCH (e:Endpoint {user_id: $uid, project_id: $pid})
+                        WHERE NOT """ + declared_only_unsafe("e") + """
                         RETURN DISTINCT e.baseurl + e.path AS url
                         """,
                         uid=user_id, pid=project_id,

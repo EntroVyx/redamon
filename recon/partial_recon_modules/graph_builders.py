@@ -8,6 +8,23 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from recon.partial_recon_modules.helpers import _classify_ip, allowed_hosts_for, include_root_for, root_for_host
 
+#: A path known only from an API specification is requested with GET or HEAD
+#: only (D15). A node with openapi_declared but no openapi_declared_only was
+#: written by an earlier release and counts as declared-only: fail closed.
+DECLARED_ONLY = "coalesce({a}.openapi_declared_only, {a}.openapi_declared, false)"
+DECLARED_ONLY_UNSAFE = "(" + DECLARED_ONLY + " AND NOT {a}.method IN ['GET','HEAD'])"
+
+
+def declared_only(alias: str = "e") -> str:
+    """Cypher, true for an Endpoint known only from an API specification."""
+    return DECLARED_ONLY.format(a=alias)
+
+
+def declared_only_unsafe(alias: str = "e") -> str:
+    """Cypher, true for an Endpoint a GET consumer must not request."""
+    return DECLARED_ONLY_UNSAFE.format(a=alias)
+
+
 #: A BaseURL is a thin service-identity node: httpx writes the response data
 #: (status, content type, CDN flags) onto the Endpoint it probed, never onto the
 #: BaseURL. Reading `b.status_code` therefore always saw null, so every partial
@@ -962,6 +979,7 @@ def _build_vuln_scan_data_from_graph(domains, user_id: str, project_id: str,
                       -[:HAS_ENDPOINT]->(e:Endpoint)
                       -[:HAS_PARAMETER]->(p:Parameter)
                 WHERE p.position = 'query' AND p.name IS NOT NULL AND e.path IS NOT NULL
+                  AND NOT """ + declared_only_unsafe("e") + """
                 WITH b, e, p ORDER BY p.name
                 RETURN b.url AS baseurl, e.path AS path,
                        collect(DISTINCT [p.name, coalesce(head(p.sample_values), '1')]) AS params
@@ -1070,7 +1088,7 @@ def _build_graphql_data_from_graph(domains, user_id: str, project_id: str,
                 """
                 MATCH (b:BaseURL {user_id: $uid, project_id: $pid})
                       -[:HAS_ENDPOINT]->(e:Endpoint)
-                WHERE e.path IS NOT NULL
+                WHERE e.path IS NOT NULL AND NOT """ + declared_only_unsafe("e") + """
                 RETURN b.url AS base_url,
                        collect(DISTINCT {path: e.path, method: coalesce(e.method, 'GET')}) AS endpoints
                 """,
@@ -1237,7 +1255,7 @@ def _build_serialized_data_from_graph(domains, user_id: str, project_id: str,
             result = session.run(
                 """
                 MATCH (b:BaseURL {user_id: $uid, project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)
-                WHERE e.path IS NOT NULL
+                WHERE e.path IS NOT NULL AND NOT """ + declared_only_unsafe("e") + """
                 OPTIONAL MATCH (e)-[:HAS_PARAMETER]->(p:Parameter)
                 WHERE p.name IS NOT NULL
                 RETURN b.url AS base, b.host AS host, e.path AS path,

@@ -173,6 +173,7 @@ class HttpMixin:
                         MERGE (e:Endpoint {path: $path, method: 'GET', baseurl: $base_url, user_id: $user_id, project_id: $project_id})
                         SET e += $props,
                             e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         """,
                         path=path, base_url=base_url, user_id=user_id, project_id=project_id, props=endpoint_props
                     )

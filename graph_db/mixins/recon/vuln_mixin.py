@@ -397,6 +397,7 @@ class VulnMixin:
                                 e.full_url = $full_url,
                                 e.source = 'katana_crawl',
                                 e.updated_at = datetime()
+                            SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                             """,
                             path=path, method=method, baseurl=base_url,
                             user_id=user_id, project_id=project_id,
@@ -608,6 +609,7 @@ class VulnMixin:
                                     e.has_parameters = true,
                                     e.source = 'vuln_scan',
                                     e.updated_at = datetime()
+                                SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                                 """,
                                 path=vuln_path, method=fuzzing_method, baseurl=vuln_base_url,
                                 user_id=user_id, project_id=project_id

@@ -200,6 +200,7 @@ class GraphQLMixin:
                                         e.created_at = datetime()
                         SET e += $props
                         SET e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         MERGE (bu)-[:HAS_ENDPOINT]->(e)
                         RETURN e.path as path, e.is_graphql as was_graphql
                         """,
@@ -367,6 +368,7 @@ class GraphQLMixin:
                                         e.is_graphql = true,
                                         e.created_at = datetime()
                         SET e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         MERGE (bu)-[:HAS_ENDPOINT]->(e)
                         MERGE (e)-[:HAS_VULNERABILITY]->(v)
                         """,
@@ -445,6 +447,7 @@ class GraphQLMixin:
                                                     e.is_graphql = true,
                                                     e.created_at = datetime()
                                     SET e.updated_at = datetime()
+                                    SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                                     MERGE (bu)-[:HAS_ENDPOINT]->(e)
                                     MERGE (e)-[:HAS_VULNERABILITY]->(v)
                                     """,

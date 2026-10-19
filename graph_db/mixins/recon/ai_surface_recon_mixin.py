@@ -112,6 +112,7 @@ class AiSurfaceReconMixin:
                     e.ai_tool_schema_ref    = COALESCE($schema_ref, e.ai_tool_schema_ref),
                     e.ai_latency_p50_ms     = COALESCE($latency, e.ai_latency_p50_ms),
                     e.updated_at = datetime()
+                SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                 MERGE (b)-[:HAS_ENDPOINT]->(e)
                 """,
                 path=primary_path, baseurl=base_url, uid=user_id, pid=project_id,
@@ -152,6 +153,7 @@ class AiSurfaceReconMixin:
                     e.ai_mcp_tools_hash        = COALESCE($thash, e.ai_mcp_tools_hash),
                     e.ai_mcp_instructions_hash = COALESCE($ihash, e.ai_mcp_instructions_hash),
                     e.updated_at = datetime()
+                SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                 MERGE (b)-[:HAS_ENDPOINT]->(e)
                 """,
                 path=mcp_path, baseurl=base_url, uid=user_id, pid=project_id,
@@ -213,6 +215,7 @@ class AiSurfaceReconMixin:
                 MERGE (e:Endpoint {path: $path, method: 'GET', baseurl: $baseurl,
                                    user_id: $uid, project_id: $pid})
                 ON CREATE SET e.source = 'ai_surface_recon', e.updated_at = datetime()
+                SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                 MERGE (b)-[:HAS_ENDPOINT]->(e)
                 MERGE (e)-[r:USES_TECHNOLOGY]->(t)
                 SET r.detected_by = 'ai-surface-recon-julius',

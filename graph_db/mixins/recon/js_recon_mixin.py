@@ -811,6 +811,7 @@ class JsReconMixin:
                             e.resolved_url = CASE WHEN $resolved_url <> '' THEN $resolved_url ELSE e.resolved_url END,
                             e.validation_status = COALESCE($validation_status, e.validation_status),
                             e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         WITH e, COALESCE(e._js_recon_created, false) AS created
                         REMOVE e._js_recon_created
                         RETURN created AS created

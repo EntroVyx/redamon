@@ -763,6 +763,7 @@ class OsintMixin:
                                            user_id: $uid, project_id: $pid})
                         ON CREATE SET e.source = 'urlscan', e.full_url = $full_url,
                                       e.has_parameters = $has_params, e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         MERGE (bu)-[:HAS_ENDPOINT]->(e)
                         RETURN e.path AS path
                         """,
@@ -2500,6 +2501,7 @@ class OsintMixin:
                                                user_id: $user_id, project_id: $project_id})
                             ON CREATE SET e.discovered_at = datetime(), e.source = 'uncover'
                             SET e.url = $url, e.updated_at = datetime()
+                            SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                             MERGE (u)-[:HAS_ENDPOINT]->(e)
                             """,
                             url=url, base_url=base_url, path=path,

@@ -175,6 +175,7 @@ class CacheMixin:
                           ON CREATE SET e.source = 'cache_poisoning',
                                         e.created_at = datetime()
                         SET e.updated_at = datetime()
+                        SET e.openapi_declared_only = CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false) THEN false ELSE e.openapi_declared_only END
                         MERGE (bu)-[:HAS_ENDPOINT]->(e)
                         MERGE (e)-[:HAS_VULNERABILITY]->(v)
                         MERGE (bu)-[:HAS_VULNERABILITY]->(v)

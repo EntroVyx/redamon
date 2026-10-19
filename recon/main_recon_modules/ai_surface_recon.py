@@ -105,7 +105,7 @@ def _host_has_ai_signal(base_url: str, combined_result: dict) -> bool:
 
 
 def _gather_candidates(combined_result: dict, settings: dict) -> dict:
-    """Return {base_url: {host_is_ai, endpoints:[{path,method,iface}]}}."""
+    """Return {base_url: {host_is_ai, endpoints:[{path,method,iface,declared_only}]}}."""
     out: dict = {}
     re_data = combined_result.get("resource_enum", {}).get("by_base_url", {}) or {}
     for base_url, base_data in re_data.items():
@@ -119,7 +119,8 @@ def _gather_candidates(combined_result: dict, settings: dict) -> dict:
             iface = ep.get("ai_interface_type")
             methods = ep.get("methods") or ["GET"]
             if iface in _CHAT_IFACES or iface == "mcp" or host_ai:
-                endpoints.append({"path": path, "method": methods[0], "iface": iface})
+                endpoints.append({"path": path, "method": methods[0], "iface": iface,
+                                  "declared_only": ep.get("declared_only") is True})
         if endpoints or host_ai:
             out[base_url] = {"host_is_ai": host_ai, "endpoints": endpoints}
     # Hosts with AI signal but no crawled endpoints: still probe with static paths
@@ -141,9 +142,13 @@ def _gather_candidates(combined_result: dict, settings: dict) -> dict:
 # --------------------------------------------------------------------------- #
 def _probe_chat(base_url: str, cand: dict, session: requests.Session,
                 timeout: float, latency_on: bool) -> dict:
-    paths = [e["path"] for e in cand["endpoints"] if e.get("iface") in _CHAT_IFACES]
+    # The chat-shape probe POSTs. A path known only from an API specification
+    # gets GET requests only (D15), whichever list it would come from.
+    declared_only = {e["path"] for e in cand["endpoints"] if e.get("declared_only")}
+    paths = [e["path"] for e in cand["endpoints"]
+             if e.get("iface") in _CHAT_IFACES and e["path"] not in declared_only]
     if not paths and cand["host_is_ai"]:
-        paths = list(cat.AI_CHAT_PROBE_PATHS)
+        paths = [p for p in cat.AI_CHAT_PROBE_PATHS if p not in declared_only]
     body = json.dumps({"model": "probe",
                        "messages": [{"role": "user", "content": "ping"}],
                        "max_tokens": 1})

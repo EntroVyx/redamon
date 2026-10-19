@@ -120,9 +120,34 @@ def build_target_urls_from_httpx(httpx_data: Optional[dict]) -> List[str]:
 # URL Building from Resource Enumeration Data
 # =============================================================================
 
+#: Endpoints known only from an API specification sent to nuclei per run. Both
+#: nuclei passes (main detection and DAST) read this function, so the cap bounds
+#: both; a specification can declare thousands of operations.
+MAX_DECLARED_NUCLEI_URLS = 500
+
+
+def _endpoint_url(base_url: str, path: str, endpoint_info: dict) -> str:
+    """The URL with sample query values for GET-style scanning, else the bare path."""
+    params = (endpoint_info.get("parameters") or {}).get("query") or []
+    parts = []
+    for param in params:
+        name = param.get("name")
+        if not name:
+            continue
+        sample_values = param.get("sample_values") or []
+        parts.append(f"{name}={sample_values[0] if sample_values else '1'}")
+    return f"{base_url}{path}?{'&'.join(parts)}" if parts else f"{base_url}{path}"
+
+
 def build_target_urls_from_resource_enum(resource_enum_data: Optional[dict]) -> Tuple[List[str], List[str]]:
     """
     Build list of target URLs from resource_enum data.
+
+    A path that still holds a template (``/users/{id}``) is never a target. An
+    endpoint known only from an API specification (``declared_only``) is a
+    target only when it declares GET or HEAD, and at most
+    MAX_DECLARED_NUCLEI_URLS of them are, in (base URL, path) order; how many
+    were left out is recorded on the run's OpenAPI inventory.
 
     Args:
         resource_enum_data: Resource enumeration data with endpoints
@@ -137,31 +162,33 @@ def build_target_urls_from_resource_enum(resource_enum_data: Optional[dict]) -> 
         return base_urls, endpoint_urls
 
     by_base_url = resource_enum_data.get("by_base_url", {})
+    declared = []
 
     for base_url, base_data in by_base_url.items():
         base_urls.append(base_url)
 
         endpoints = base_data.get("endpoints", {})
         for path, endpoint_info in endpoints.items():
-            # Build URLs with sample parameter values for GET endpoints
-            parameters = endpoint_info.get("parameters", {})
-            query_params = parameters.get("query", [])
+            if "{" in path:
+                continue
+            url = _endpoint_url(base_url, path, endpoint_info)
+            if endpoint_info.get("declared_only") is True:
+                methods = {str(m).upper() for m in endpoint_info.get("methods") or []}
+                if methods & {"GET", "HEAD"}:
+                    declared.append((base_url, path, url))
+                continue
+            endpoint_urls.append(url)
 
-            if query_params:
-                # Build URL with parameters
-                param_parts = []
-                for param in query_params:
-                    name = param.get("name")
-                    sample_values = param.get("sample_values", [])
-                    value = sample_values[0] if sample_values else "1"
-                    param_parts.append(f"{name}={value}")
-
-                if param_parts:
-                    full_url = f"{base_url}{path}?{'&'.join(param_parts)}"
-                    endpoint_urls.append(full_url)
-            else:
-                # Add path without params
-                endpoint_urls.append(f"{base_url}{path}")
+    declared.sort(key=lambda item: (item[0], item[1]))
+    endpoint_urls.extend(url for _, _, url in declared[:MAX_DECLARED_NUCLEI_URLS])
+    overflow = max(0, len(declared) - MAX_DECLARED_NUCLEI_URLS)
+    if overflow:
+        print(f"[-][OpenAPI] {overflow} declared endpoints not sent to nuclei (cap {MAX_DECLARED_NUCLEI_URLS})")
+        openapi = resource_enum_data.get("openapi")
+        groups = openapi.get("groups") if isinstance(openapi, dict) else None
+        if groups:
+            # This run's own group: a batch group's file holds only its own.
+            groups[-1]["declared_not_sent_to_nuclei"] = overflow
 
     return base_urls, endpoint_urls
 
