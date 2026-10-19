@@ -346,12 +346,19 @@ def _discover(recon_data, settings, seed_urls, explicit_urls, result):
     queue = deque()
     seen = set()
 
-    def enqueue(url, override=None, explicit=False, allowed_origin=None, context=None):
+    def refuse_out_of_scope(url, listed):
+        diagnostics.append({'url': public_url(url), 'code': 'out_of_scope',
+                            'message': 'Document source is outside engagement scope'})
+        # A document the operator listed is named in the log; a link found
+        # while discovering is only counted, or a hostile page could flood it.
+        if listed:
+            print(f'[-][OpenAPI] Outside the project scope, not fetched: {public_url(url)}')
+
+    def enqueue(url, override=None, explicit=False, allowed_origin=None, context=None, listed=False):
         try:
             url = http_url(url)
             if not scope.allows(url):
-                diagnostics.append({'url': public_url(url), 'code': 'out_of_scope',
-                                    'message': 'Document source is outside engagement scope'})
+                refuse_out_of_scope(url, listed)
                 return 'out_of_scope'
             allowed_origin = allowed_origin or origin(url)
             if origin(url) != allowed_origin:
@@ -372,23 +379,23 @@ def _discover(recon_data, settings, seed_urls, explicit_urls, result):
         if owner is None:
             # Allowed by no group: reported once, by the first group.
             if own_index == 0:
-                diagnostics.append({'url': public_url(source['url']), 'code': 'out_of_scope',
-                                    'message': 'Document source is outside engagement scope'})
+                refuse_out_of_scope(source['url'], True)
                 set_status(source, 'out_of_scope')
             continue
         if owner != own_index:
             continue
         refused = enqueue(source['url'], source.get('serverOverride') or None, True,
-                          context={'id': f"configured:{source.get('id') or source['url']}", 'source': source})
+                          context={'id': f"configured:{source.get('id') or source['url']}", 'source': source},
+                          listed=True)
         if refused:
             set_status(source, refused)
 
     for url in explicit_urls:
         owner = owner_of(url)
         if owner is None and own_index == 0:
-            enqueue(url)  # records the out_of_scope diagnostic
+            enqueue(url, listed=True)  # records the out_of_scope diagnostic
         elif owner == own_index:
-            enqueue(url, None, True, context={'id': f'custom:{url}', 'custom': True})
+            enqueue(url, None, True, context={'id': f'custom:{url}', 'custom': True}, listed=True)
 
     if settings.get('OPENAPI_AUTO_DISCOVER', False):
         paths = valid_discovery_paths(settings.get('OPENAPI_DISCOVERY_PATHS'), diagnostics)

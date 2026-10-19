@@ -93,10 +93,23 @@ def test_each_failure_has_its_fixed_code(monkeypatch, route, code):
     assert _status(payload) == {'s1': (_hash(DOC), code)}
 
 
-def test_a_source_outside_the_scope_is_reported_and_never_fetched(monkeypatch):
-    payload, sent = _run(monkeypatch, {}, [{'id': 's1', 'url': 'https://elsewhere.example.org/spec.json'}])
+def test_a_source_outside_the_scope_is_reported_and_never_fetched(monkeypatch, capsys):
+    payload, sent = _run(monkeypatch, {}, [{'id': 's1', 'url': 'https://elsewhere.example.org/spec.json?token=fixture-secret'}])
     assert sent == []
     assert _status(payload)['s1'][1] == 'out_of_scope'
+    log = capsys.readouterr().out
+    assert '[-][OpenAPI] Outside the project scope, not fetched: https://elsewhere.example.org/spec.json' in log
+    assert 'fixture-secret' not in log
+
+
+def test_an_out_of_scope_link_found_while_discovering_is_counted_not_logged(monkeypatch, capsys):
+    page = 'https://docs.example.com/swagger/'
+    payload, sent = _run(monkeypatch, {
+        page: _Response(200, '<script>SwaggerUIBundle({url: "https://elsewhere.example.org/v1.json"})</script>'),
+    }, [{'id': 's1', 'url': page}])
+    assert [url for url, _ in sent] == [page]
+    assert 'elsewhere.example.org' not in capsys.readouterr().out
+    assert any(d['code'] == 'out_of_scope' for d in payload['diagnostics'])
 
 
 def test_a_host_found_down_is_skipped(monkeypatch):
