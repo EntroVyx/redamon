@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Upgrade note.** Hosts that these spellings now exclude stop being scanned. At the next successful full recon, their unmuted findings are pruned, while muted and human-triaged ones are kept and stamped `stale_since` (Resolved); Recon Delta shows them as removed. Review your excluded hosts before that run. This read-only query lists the projects with an exclusion in one of the affected spellings (it is over-inclusive: `'%:%'` also lists IPv6 entries):
     ```bash
     docker compose exec postgres psql -U "${POSTGRES_USER:-redamon}" -d "${POSTGRES_DB:-redamon}" -c "
-    SELECT id, name FROM projects WHERE roe_enabled AND EXISTS (
+    SELECT id, name FROM projects WHERE EXISTS (
       SELECT 1 FROM unnest(roe_excluded_hosts) h
       WHERE h LIKE '*.%' OR h <> lower(h) OR h LIKE '%:%' OR h LIKE '%://%' OR h LIKE '%.');"
     ```
