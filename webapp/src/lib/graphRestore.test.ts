@@ -94,6 +94,36 @@ describe('clearProjectGraph', () => {
   })
 })
 
+describe('restoreGraph — retired properties', () => {
+  test('a snapshot or export from before their retirement does not bring them back', async () => {
+    const { session, calls } = fakeSession([{ label: 'Endpoint', properties: ['path', 'method', 'baseurl', 'user_id', 'project_id'] }])
+    await restoreGraph(
+      session,
+      [
+        node('Endpoint', {
+          path: '/users/{id}', method: 'GET', baseurl: 'https://api.example.com',
+          openapi_declared: true, openapi_declarations: '[{"operation":{}}]', _openapi_write_lock: 'tx',
+        }, 'n1'),
+        node('Domain', { name: 'example.com', openapi_summary: '{}', openapi_last_import_at: 'then' }, 'n2'),
+      ],
+      [],
+      { projectId: 'p1' }
+    )
+    const written = calls
+      .filter(c => c.cypher.includes('apoc.merge.node') || c.cypher.includes('apoc.create.node'))
+      .flatMap(c => c.params.nodes as Array<{ properties: Record<string, unknown> }>)
+      .map(n => n.properties)
+    expect(written).toHaveLength(2)
+    for (const props of written) {
+      for (const retired of ['openapi_declarations', 'openapi_summary', 'openapi_last_import_at', '_openapi_write_lock']) {
+        expect(props).not.toHaveProperty(retired)
+      }
+    }
+    // What is still a live property is kept.
+    expect(written[0]).toMatchObject({ openapi_declared: true, path: '/users/{id}' })
+  })
+})
+
 describe('restoreGraph — tenancy', () => {
   test('stamps the CALLER project id onto every node, overriding the payload', async () => {
     const { session, calls } = fakeSession()

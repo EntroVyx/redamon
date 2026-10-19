@@ -139,6 +139,19 @@ async function loadUniqueKeys(session: Session): Promise<Map<string, string[]>> 
 }
 
 /**
+ * Properties an earlier release wrote and nothing writes any more: OpenAPI
+ * declarations stored as JSON (up to 1 MiB per Endpoint), the Domain import
+ * summary and stamp, and a transaction-local lock. A scan version saved before
+ * they were retired, or a project exported then, would bring them back.
+ */
+export const RETIRED_NODE_PROPERTIES = [
+  'openapi_declarations',
+  'openapi_summary',
+  'openapi_last_import_at',
+  '_openapi_write_lock',
+] as const
+
+/**
  * Recreate `nodes` + `relationships` for `projectId`. The caller owns clearing
  * (so it can choose what to preserve) and owns the session lifecycle.
  */
@@ -161,6 +174,7 @@ export async function restoreGraph(
       project_id: opts.projectId,
       _exportId: node._exportId,
     }
+    for (const retired of RETIRED_NODE_PROPERTIES) delete properties[retired]
     // Pre-re-key snapshots have no cert_key; the uniqueness constraint now
     // requires it. Derive it before MERGE so old certificates do not collapse.
     if (node.labels.includes('Certificate') && !properties.cert_key) {
