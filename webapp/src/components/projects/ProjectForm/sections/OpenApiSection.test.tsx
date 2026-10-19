@@ -118,6 +118,19 @@ describe('OpenApiSection scope hint', () => {
     expect(updateField).not.toHaveBeenCalled()
   })
 
+  test('Domain batch: a subdomain of a group root that the list does not name is flagged', () => {
+    renderSection({
+      targetDomain: '',
+      domainBatchMode: true,
+      domainBatchHosts: ['www.example.com', 'api.example.com'],
+      openapiSources: [
+        { id: 'a', url: 'https://api.example.com/openapi.json' },
+        { id: 'b', url: 'https://docs.example.com/openapi.json' },
+      ],
+    })
+    expect(screen.getAllByText(HINT)).toHaveLength(1)
+  })
+
   test('IP mode: a name is outside, an address inside a target CIDR is not', () => {
     renderSection({
       ipMode: true,

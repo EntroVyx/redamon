@@ -7,7 +7,8 @@
  * the row's current URL hashes to the stored one; an edited URL reads
  * "Not fetched yet" until the next run.
  */
-import { resolveProjectRoots, underAnyRoot, type ProjectTargetFields } from './partialReconScope'
+import { groupHostsByRootDomain } from './domainBatch'
+import type { ProjectTargetFields } from './partialReconScope'
 
 export interface OpenApiSourceStatus {
   hash: string
@@ -105,36 +106,122 @@ function inIpv4Target(host: string, target: string): boolean | null {
   return Math.floor(ip / size) === Math.floor(net / size)
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** recon's _normalize_host: lower case, without scheme, port, IPv6 brackets or trailing dot. */
+function normalizeHost(value: string): string {
+  let host = value.trim()
+  if (host.includes('://')) {
+    try {
+      host = new URL(host).hostname
+    } catch {
+      return ''
+    }
+  }
+  if (host.startsWith('[')) host = host.slice(1).split(']')[0]
+  else if (host.split(':').length === 2) host = host.split(':')[0]
+  return host.trim().replace(/\.+$/, '').toLowerCase()
+}
+
+/** recon's _normalize_scope_entry: `*.domain` and CIDRs keep their shape. */
+function normalizeScopeEntry(value: string): string {
+  const entry = value.trim()
+  if (entry.startsWith('*.')) return `*.${normalizeHost(entry.slice(2))}`
+  if (entry.includes('/') && !entry.includes('://')) return entry.toLowerCase()
+  return normalizeHost(entry)
+}
+
 /**
- * Whether a document URL sits inside the project scope, as far as the form
- * can tell: under a root in domain mode, inside a target IP or CIDR in IP mode.
- * null when it cannot tell (an IPv6 target, an unparseable URL). Advisory only:
- * recon decides, and the save is never blocked on it.
+ * The hosts one target root admits, as recon's OpenAPI scope builds them
+ * (scope_payload in recon/helpers/openapi/discovery.py): each listed prefix as
+ * an exact host, the apex only through the "." prefix, and every subdomain
+ * (`*.root`) through "*" or, outside a Domain batch, an empty prefix list.
  */
-export function documentInProjectScope(
-  url: string,
-  project: ProjectTargetFields & { targetIps?: unknown },
-): boolean | null {
+function rootScopeEntries(rootValue: unknown, prefixValues: unknown, batch: boolean): string[] {
+  const root = typeof rootValue === 'string' ? normalizeHost(rootValue) : ''
+  if (!root) return []
+  const prefixes = strings(prefixValues).map(p => p.trim())
+  const listed = prefixes
+    .filter(p => p !== '*' && p.replace(/\.+$/, ''))
+    .map(p => `${p.replace(/\.+$/, '').toLowerCase()}.${root}`)
+  const entries = [...listed]
+  if (prefixes.some(p => !p.replace(/\.+$/, ''))) entries.push(root)
+  if (prefixes.includes('*') || (!listed.length && !batch)) entries.push(`*.${root}`)
+  return entries
+}
+
+/** recon's host_in_scope: an exact host, `*.suffix` (subdomains, not the apex), or a CIDR. */
+function hostInScope(host: string, entries: readonly string[]): boolean {
+  return entries.some(entry => {
+    if (entry.startsWith('*.')) return host.endsWith(entry.slice(1))
+    if (entry.includes('/')) return inIpv4Target(host, entry) === true
+    return host === entry
+  })
+}
+
+/**
+ * recon's _is_roe_excluded: an exact host or IP; a domain, with its subdomains;
+ * `*.domain`, its subdomains only; or a CIDR.
+ */
+function roeExcluded(host: string, excluded: unknown): boolean {
+  const isIp = ipv4ToInt(host) !== null
+  return strings(excluded).some(value => {
+    const entry = normalizeScopeEntry(value)
+    if (!entry) return false
+    if (entry.startsWith('*.')) return host.endsWith(entry.slice(1))
+    if (entry.includes('/') || isIp) return isIp && inIpv4Target(host, entry) === true
+    return host === entry || host.endsWith(`.${entry}`)
+  })
+}
+
+/**
+ * The Domain batch groups the next scan runs: grouped from the hostnames being
+ * edited, as the project routes group them on save, else the stored groups.
+ */
+function batchGroups(project: DocumentScopeFields): unknown[] {
+  const hosts = strings(project.domainBatchHosts).filter(h => h.trim())
+  if (hosts.length) return groupHostsByRootDomain(hosts).groups
+  return Array.isArray(project.domainBatchGroups) ? project.domainBatchGroups : []
+}
+
+export type DocumentScopeFields = ProjectTargetFields & {
+  targetIps?: unknown
+  subdomainList?: unknown
+  domainBatchHosts?: unknown
+  roeExcludedHosts?: unknown
+}
+
+/**
+ * Whether recon will fetch a document URL, as far as the form can tell. It
+ * mirrors recon's OpenAPI scope: the target IPs and CIDRs in IP mode; the
+ * target's subdomains, or only the listed ones, in domain mode; the hosts a
+ * group lists, or its whole domain with "*", in a Domain batch; minus the Rules
+ * of Engagement exclusions. null when it cannot tell: an unparseable URL, no
+ * target yet, an IPv6 address. Advisory only: recon decides, and the save is
+ * never blocked on it.
+ */
+export function documentInProjectScope(url: string, project: DocumentScopeFields): boolean | null {
   let host: string
   try {
-    host = new URL(url.trim()).hostname.toLowerCase().replace(/\.$/, '')
+    host = normalizeHost(new URL(url.trim()).hostname)
   } catch {
     return null
   }
-  if (!host) return null
+  if (!host || host.includes(':')) return null
   if (project.ipMode) {
-    // IP mode scans target IPs only: a name is outside it, an IPv6 literal is not judged here.
-    if (host.startsWith('[')) return null
     if (ipv4ToInt(host) === null) return false
-    const targets = Array.isArray(project.targetIps) ? project.targetIps.filter(t => typeof t === 'string') : []
-    let unknown = false
-    for (const target of targets as string[]) {
-      const inside = inIpv4Target(host, target)
-      if (inside) return true
-      if (inside === null) unknown = true
-    }
-    return unknown ? null : false
+    const verdicts = strings(project.targetIps).map(target => inIpv4Target(host, target))
+    if (!verdicts.includes(true)) return verdicts.includes(null) ? null : false
+  } else {
+    const entries = project.domainBatchMode
+      ? batchGroups(project).flatMap(group => (group && typeof group === 'object'
+        ? rootScopeEntries((group as Record<string, unknown>).rootDomain, (group as Record<string, unknown>).prefixes, true)
+        : []))
+      : rootScopeEntries(project.targetDomain, strings(project.subdomainList).filter(s => s.trim()), false)
+    if (!entries.length) return null
+    if (!hostInScope(host, entries)) return false
   }
-  const roots = resolveProjectRoots(project, '').roots
-  return roots.length ? underAnyRoot(host, roots) : null
+  return !roeExcluded(host, project.roeExcludedHosts)
 }

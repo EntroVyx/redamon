@@ -67,17 +67,67 @@ describe('a row shows its status only while its URL is the one fetched', () => {
   })
 })
 
+// The hint must agree with recon's OpenAPI scope (recon/helpers/openapi/scope.py):
+// a hint looser than recon promised documents that recon then refused. The
+// prefix cases below are the ones recon/tests/test_openapi_scope.py pins.
 describe('the advisory scope hint', () => {
-  test('domain mode: under a root', () => {
+  test('domain mode: every subdomain; the apex only through "."', () => {
     const project = { targetDomain: 'example.com' }
     expect(documentInProjectScope('https://docs.example.com/openapi.json', project)).toBe(true)
+    expect(documentInProjectScope('https://example.com/openapi.json', project)).toBe(false)
     expect(documentInProjectScope('https://example.org/openapi.json', project)).toBe(false)
+    expect(documentInProjectScope('https://example.com/openapi.json', { ...project, subdomainList: ['.'] })).toBe(true)
   })
 
-  test('batch mode: under any group root', () => {
-    const project = { domainBatchMode: true, domainBatchGroups: [{ rootDomain: 'one.test', prefixes: ['*'] }] }
+  test('domain mode with a subdomain list: only the listed hosts', () => {
+    const project = { targetDomain: 'example.com', subdomainList: ['api.', ''] }
+    expect(documentInProjectScope('https://API.example.com./spec', project)).toBe(true)
+    expect(documentInProjectScope('https://docs.example.com/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://child.api.example.com/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://example.com/spec', project)).toBe(false)
+  })
+
+  test.each([
+    [['*'], false, true],
+    [['*', '.'], true, true],
+    [['*', 'api.'], false, true],
+    [['.'], true, false],
+    [['api.'], false, false],
+  ])('batch group with prefixes %j: apex %s, other subdomain %s', (prefixes, apex, other) => {
+    const project = { domainBatchMode: true, domainBatchGroups: [{ rootDomain: 'example.test', prefixes }] }
+    expect(documentInProjectScope('https://example.test/spec', project)).toBe(apex)
+    expect(documentInProjectScope('https://other.example.test/spec', project)).toBe(other)
+    expect(documentInProjectScope('https://api.example.test/spec', project)).toBe(other || prefixes.includes('api.'))
+    expect(documentInProjectScope('https://outside.test/spec', project)).toBe(false)
+  })
+
+  test('batch: any group admits it, grouped from the hostnames being edited', () => {
+    const project = {
+      domainBatchMode: true,
+      domainBatchHosts: ['www.one.test', 'api.one.test', '*.two.test'],
+      // Stale: saved before the list above was edited. The list wins.
+      domainBatchGroups: [{ rootDomain: 'one.test', prefixes: ['*'] }],
+    }
     expect(documentInProjectScope('https://api.one.test/spec', project)).toBe(true)
-    expect(documentInProjectScope('https://two.test/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://docs.one.test/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://one.test/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://docs.two.test/spec', project)).toBe(true)
+    expect(documentInProjectScope('https://three.test/spec', project)).toBe(false)
+  })
+
+  test('a Rules of Engagement exclusion is outside, matched as recon matches it', () => {
+    const project = {
+      targetDomain: 'example.com',
+      roeExcludedHosts: ['Billing.Example.com.', '*.corp.example.com'],
+    }
+    expect(documentInProjectScope('https://billing.example.com/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://eu.billing.example.com/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://corp.example.com/spec', project)).toBe(true)
+    expect(documentInProjectScope('https://api.corp.example.com/spec', project)).toBe(false)
+    expect(documentInProjectScope('https://notbilling.example.com/spec', project)).toBe(true)
+    const ips = { ipMode: true, targetIps: ['10.203.0.0/24'], roeExcludedHosts: ['10.203.0.128/25'] }
+    expect(documentInProjectScope('http://10.203.0.10/spec', ips)).toBe(true)
+    expect(documentInProjectScope('http://10.203.0.200/spec', ips)).toBe(false)
   })
 
   test('IP mode: inside a target IP or CIDR; a name is outside', () => {
@@ -91,5 +141,6 @@ describe('the advisory scope hint', () => {
   test('cannot tell: no verdict', () => {
     expect(documentInProjectScope('not a url', { targetDomain: 'example.com' })).toBeNull()
     expect(documentInProjectScope('https://x.example.com/', {})).toBeNull()
+    expect(documentInProjectScope('https://[2001:db8::1]/spec', { ipMode: true, targetIps: ['2001:db8::/32'] })).toBeNull()
   })
 })
