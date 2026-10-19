@@ -637,3 +637,36 @@ describe('useWorkflowGraph edges', () => {
     }
   })
 })
+
+
+// ---------------------------------------------------------------------------
+// useWorkflowGraph: an enabled tool with nothing to work on
+// ---------------------------------------------------------------------------
+
+describe('useWorkflowGraph idle tools', () => {
+  // OpenAPI is the only true source of Endpoint and Parameter in this form.
+  const base = { openapiEnabled: true, openapiAutoDiscover: false }
+  const node = (nodes: { id: string; data: Record<string, unknown> }[], id: string) =>
+    nodes.find(n => n.id === id)!.data
+
+  test('an idle OpenAPI is shown as Idle and feeds nothing', () => {
+    const { result } = renderHook(() => useWorkflowGraph({ ...base, openapiSources: [] }))
+    expect(node(result.current.nodes, 'tool-OpenAPI')).toMatchObject({ enabled: true, idle: true })
+    expect(node(result.current.nodes, 'data-Endpoint').status).toBe('starved')
+    expect(node(result.current.nodes, 'data-Parameter').status).toBe('starved')
+  })
+
+  test('configuring a document wakes it, without a toggle changing', () => {
+    let formData: Record<string, unknown> = { ...base, openapiSources: [] }
+    const { result, rerender } = renderHook(() => useWorkflowGraph(formData))
+    formData = { ...base, openapiSources: [{ url: 'https://docs.example.com/openapi.json' }] }
+    rerender()
+    expect(node(result.current.nodes, 'tool-OpenAPI').idle).toBe(false)
+    expect(node(result.current.nodes, 'data-Endpoint').status).toBe('active')
+  })
+
+  test('a disabled tool is never idle', () => {
+    const { result } = renderHook(() => useWorkflowGraph({ openapiEnabled: false, openapiSources: [] }))
+    expect(node(result.current.nodes, 'tool-OpenAPI')).toMatchObject({ enabled: false, idle: false })
+  })
+})

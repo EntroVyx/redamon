@@ -39,7 +39,7 @@ def test_dotted_wildcard_prefix_cannot_enable_discovery():
     ('evil-example.test', '*.example.test', False),
     ('a.private.example.test', 'private.example.test', True),
     ('192.0.2.7', '192.0.2.0/24', True),
-    ('192.0.3.7', '192.0.2.0/24', False),
+    ('198.51.100.7', '192.0.2.0/24', False),
     ('2001:db8::1', '2001:DB8:0:0:0:0:0:1', True),
     ('2001:db8::1', '2001:db8::/32', True),
 ])
