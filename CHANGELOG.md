@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [7.0.4] - 2026-10-19
 
 ### Fixed
 
 - **Refreshing a Tradecraft resource no longer fails with 503.** The refresh button did not tell the agent which model the resource uses, so the agent fell back to its default model (`claude-opus-4-6`) and failed for anyone without an Anthropic key. It now sends the resource's model, as the first verify already did.
 - **A Tradecraft page blocked by the browser guard now says so.** When the Playwright fallback refused a page reached through an internal address, verify showed `homepage rendered to thin body` and the agent's lookup `failed to fetch`, which hid the reason. Both now report `blocked: ...` with the guard's reason, and verify stops there instead of crawling the same URL.
+
+### Security
+
+- **The agent's workspace, Metasploit-session and session-stop routes now require the internal API key.** The agent port is published on every interface (`8090` by default), and these routes checked nothing: anyone who could reach it could list, read, upload, rename and delete any project's workspace files, send commands into the operator's Metasploit sessions, kill sessions and jobs, and stop a running agent session. They now accept only the master `INTERNAL_API_KEY` (the scanner key the kali-sandbox holds does not open them), and answer 503 while the key is missing or still the compose default; every `redamon.sh` install generates one. The webapp, which checks that the signed-in user owns the project before it calls the agent, now sends the key. Rebuild the `agent` and `webapp` images together: a new agent behind an old webapp answers 401 in the file drawer and the sessions panel, and deleting a conversation no longer stops its agent.
+- **A Metasploit session command can no longer run on the kali-sandbox itself.** msfconsole runs any line it does not recognise as a local shell command, so a newline in a command sent to a shell session ended the `sessions -c` line and ran the rest as root in the kali-sandbox instead of on the target. A command holding a newline or another control character (Tab excepted) is now refused, and a trailing backslash can no longer break out of the quoted command.
+- **`execute_code` and `proxy_brain` write the code file directly instead of through a shell heredoc.** Code with the heredoc's end marker on a line of its own ended the heredoc early and ran the rest as a shell command in the kali-sandbox. Restart `kali-sandbox` to load the fixed tool servers (they are mounted, not baked into the image).
 
 ## [7.0.3] - 2026-10-18
 
