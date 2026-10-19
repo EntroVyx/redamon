@@ -181,12 +181,25 @@ class TestResourceEnumOpenApiGraph(unittest.TestCase):
                          '-[:USES_TECHNOLOGY]->(t:Technology) RETURN t.name AS name', u=A[0], p=A[1])
         self.assertEqual([r['name'] for r in used], ['nginx'])
 
+    def _reads_declared_only(self, path, method):
+        """What every consumer sees: the D15 predicate, not the stored flag alone."""
+        rows = self._run('MATCH (e:Endpoint {path: $path, method: $m, baseurl: $base, user_id: $u, project_id: $p}) '
+                         'RETURN coalesce(e.openapi_declared_only, e.openapi_declared, false) AS d',
+                         path=path, m=method, base=BASE, u=A[0], p=A[1])
+        return rows[0]['d']
+
     def test_a_method_declared_on_an_observed_path_is_not_declared_only(self):
+        # Found in the 6.3 lab: created in the same write as its declaration,
+        # the node kept the flag unset and the predicate fell back to
+        # openapi_declared, so an observed path read as declared-only.
         self._import({BASE: {'endpoints': _declaration()}})
         post_orders = self._endpoint('/orders', 'POST')
         self.assertTrue(post_orders['openapi_declared'])
-        self.assertIsNone(post_orders.get('openapi_declared_only'))
+        self.assertIs(post_orders['openapi_declared_only'], False)
+        self.assertFalse(self._reads_declared_only('/orders', 'POST'))
         self.assertEqual(post_orders['openapi_operation_id'], 'createOrder')
+        self.assertTrue(self._reads_declared_only('/users/7', 'GET'))
+        self.assertFalse(self._reads_declared_only('/openapi.json', 'GET'))
 
     # -- an endpoint known only from the specification ---------------------
 
@@ -329,8 +342,11 @@ class TestResourceEnumOpenApiGraph(unittest.TestCase):
         self.assertTrue(user['openapi_declared_only'])
 
     def test_an_endpoint_this_run_wrote_is_never_deleted(self):
-        from graph_db.mixins.base_mixin import run_timestamp
-        started = run_timestamp()
+        from datetime import datetime, timedelta, timezone
+        # A run starts well before it writes. Neo4j stamps updated_at to the
+        # millisecond, so a start taken in the same millisecond as the write
+        # would compare later than it and flake.
+        started = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         self._import({BASE: {'endpoints': self._only_user()}})
         stats = self._withdraw([DOC], {}, started_at=started)
         self.assertEqual(stats, {'deleted': 0, 'withdrawn': 1})

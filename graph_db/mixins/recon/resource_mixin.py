@@ -142,11 +142,14 @@ class ResourceMixin:
                             # declaration reaching it does not make it
                             # declared-only; an observing source clears it. A
                             # node an earlier release declared (openapi_declared
-                            # without the flag) counts as declared-only.
+                            # without the flag) counts as declared-only, so a
+                            # declared node this run creates on an observed path
+                            # stores false rather than leaving the flag unset.
                             session.run(
                                 """
                                 MERGE (e:Endpoint {path: $path, method: $method, baseurl: $baseurl, user_id: $user_id, project_id: $project_id})
-                                ON CREATE SET e.openapi_declared_only = CASE WHEN $oa_declared_only THEN true ELSE null END
+                                ON CREATE SET e.openapi_declared_only = CASE WHEN $oa_declared_only THEN true
+                                                                              WHEN $oa_declared THEN false ELSE null END
                                 ON MATCH SET e.openapi_declared_only = CASE
                                     WHEN $oa_declared_only IS NULL THEN e.openapi_declared_only
                                     WHEN NOT $oa_declared_only THEN

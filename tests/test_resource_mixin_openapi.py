@@ -122,8 +122,11 @@ def test_the_spec_document_endpoint_records_its_version():
 
 def test_the_statement_unions_spec_urls_and_never_marks_an_existing_node_declared_only():
     _, calls = _write({BASE: {'endpoints': {'/users/7': _declared_entry()}}})
-    query = next(q for q, _ in calls if q.startswith('MERGE (e:Endpoint'))
-    assert 'ON CREATE SET e.openapi_declared_only = CASE WHEN $oa_declared_only THEN true ELSE null END' in query
+    query = ' '.join(next(q for q, _ in calls if q.startswith('MERGE (e:Endpoint')).split())
+    # A declared node created on an observed path stores false: left unset, the
+    # declared-only predicate would fall back to openapi_declared and read true.
+    assert ('ON CREATE SET e.openapi_declared_only = CASE WHEN $oa_declared_only THEN true '
+            'WHEN $oa_declared THEN false ELSE null END') in query
     assert 'WHEN coalesce(e.openapi_declared, false) THEN true ELSE false END' in query
     assert '[u IN $oa_spec_urls WHERE NOT u IN coalesce(e.openapi_spec_urls, [])]' in query
 
