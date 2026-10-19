@@ -702,8 +702,9 @@ group, so the canonical file adds them up.
 **Consumers.** The partial crawlers, JS analysis, supply chain, cache poisoning,
 the GraphQL scanner and the serialized scan read declared-only endpoints only
 when they are GET or HEAD; partial Arjun, which sends its own methods, reads
-none when any method but GET is configured; AI Surface's chat-shape probe skips
-them; nuclei gets a declared-only path only when it declares GET or HEAD, and at
+none when any method but GET is configured; AI Surface never probes a host
+because of a declared-only endpoint, and on a host it probes for its own AI
+signal its chat-shape probe skips them; nuclei gets a declared-only path only when it declares GET or HEAD, and at
 most 500 of them per run (the overflow is logged and recorded as
 `declared_not_sent_to_nuclei`). A node written by an earlier release with
 `openapi_declared` and no `openapi_declared_only` counts as declared-only.

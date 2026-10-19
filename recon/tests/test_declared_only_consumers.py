@@ -183,6 +183,39 @@ def test_candidates_carry_the_declared_only_flag():
     assert flags == {'/v1/chat': True, '/v2/chat': False}
 
 
+def _declared_chat_only(**extra):
+    return {'resource_enum': {'by_base_url': {'https://api.example.com': {'endpoints': {
+        '/v1/chat/completions': {'methods': ['POST'], 'ai_interface_type': 'llm-chat',
+                                 'declared_only': True}}}}}, **extra}
+
+
+def test_a_declared_only_ai_endpoint_alone_makes_no_candidate():
+    # Found live: the declaration made the host a candidate, and the MCP
+    # handshake and the model fingerprint then POSTed /v1/chat/completions.
+    from recon.main_recon_modules import ai_surface_recon as ais
+    assert ais._gather_candidates(_declared_chat_only(), {}) == {}
+
+
+def test_a_host_with_its_own_ai_signal_is_probed_without_the_declared_path():
+    from recon.main_recon_modules import ai_surface_recon as ais
+    data = _declared_chat_only(port_scan={'by_host': {'api.example.com': {'ports': [11434]}}})
+    cand = ais._gather_candidates(data, {})['https://api.example.com']
+    assert cand['host_is_ai'] is True
+    assert '/v1/chat/completions' not in _posted_paths(cand)
+
+
+def test_no_request_reaches_a_host_known_to_serve_ai_only_from_a_specification():
+    from recon.main_recon_modules import ai_surface_recon as ais
+    with mock.patch('requests.Session.post') as post, mock.patch('requests.Session.get') as get, \
+         mock.patch.object(ais, '_probe_julius') as julius:
+        out = ais.run_ai_surface_recon(_declared_chat_only(metadata={}),
+                                       settings={'AI_SURFACE_RECON_ENABLED': True})
+    post.assert_not_called()
+    get.assert_not_called()
+    julius.assert_not_called()
+    assert out['ai_surface_recon']['by_url'] == {}
+
+
 # -- nuclei targets -------------------------------------------------------------
 
 def _endpoint(methods, declared_only=None, query=()):

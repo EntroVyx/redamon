@@ -121,7 +121,10 @@ def _gather_candidates(combined_result: dict, settings: dict) -> dict:
             if iface in _CHAT_IFACES or iface == "mcp" or host_ai:
                 endpoints.append({"path": path, "method": methods[0], "iface": iface,
                                   "declared_only": ep.get("declared_only") is True})
-        if endpoints or host_ai:
+        # A path known only from an API specification never makes a host a
+        # candidate: the MCP handshake and the model fingerprint POST their own
+        # paths, and the declared one can be among them (D15).
+        if any(not e["declared_only"] for e in endpoints) or host_ai:
             out[base_url] = {"host_is_ai": host_ai, "endpoints": endpoints}
     # Hosts with AI signal but no crawled endpoints: still probe with static paths
     http = combined_result.get("http_probe", {}).get("by_url", {}) or {}
