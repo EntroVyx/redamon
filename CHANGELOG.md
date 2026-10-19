@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Rules of Engagement exclusions now match however a host or an exclusion is written.** An excluded host written as `*.example.com`, in a different case, as `host:port`, as a URL or with a trailing dot was not applied, so the host was scanned anyway; an IPv6 address written in brackets or in long form missed too. AI Surface passes base URLs to the same filter, which never matched an exclusion, so it probed excluded hosts. Each of those spellings now matches: an exact host or IP, a domain (which also excludes its subdomains), `*.domain` (subdomains only) or a CIDR, with case, port, scheme, path and trailing dot ignored. A bare string suffix no longer counts as an IP rule (`0.5` used to exclude `10.0.0.5`).
+  - **Upgrade note.** Hosts that these spellings now exclude stop being scanned. At the next successful full recon, their unmuted findings are pruned, while muted and human-triaged ones are kept and stamped `stale_since` (Resolved); Recon Delta shows them as removed. Review your excluded hosts before that run. This read-only query lists the projects with an exclusion in one of the affected spellings (it is over-inclusive: `'%:%'` also lists IPv6 entries):
+    ```bash
+    docker compose exec postgres psql -U "${POSTGRES_USER:-redamon}" -d "${POSTGRES_DB:-redamon}" -c "
+    SELECT id, name FROM projects WHERE roe_enabled AND EXISTS (
+      SELECT 1 FROM unnest(roe_excluded_hosts) h
+      WHERE h LIKE '*.%' OR h <> lower(h) OR h LIKE '%:%' OR h LIKE '%://%' OR h LIKE '%.');"
+    ```
+
 ## [7.0.4] - 2026-10-19
 
 ### Fixed

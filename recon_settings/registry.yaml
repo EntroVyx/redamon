@@ -7499,9 +7499,12 @@ fields:
     group: engagement_limits
     meaning: >-
       Hosts that must never be touched even though they fall inside the target
-      scope. Enforced in three places in recon/main.py: expanded IPs, discovered
-      subdomains and the target domain itself. A non-empty list is one of the three
-      things that make the engagement limits live at all.
+      scope. Each entry is an exact host or IP; a domain, which also excludes its
+      subdomains; *.domain, which excludes its subdomains only; or a CIDR. Case,
+      port, scheme, path and a trailing dot are ignored. Enforced in three places
+      in recon/main.py: expanded IPs, discovered subdomains and the target domain
+      itself. A non-empty list is one of the three things that make the
+      engagement limits live at all.
     form_section: "TargetSection"
   roeForbiddenCategories:
     tool: roe
