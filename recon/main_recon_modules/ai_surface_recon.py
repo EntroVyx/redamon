@@ -667,14 +667,23 @@ def run_ai_surface_recon(combined_result: dict, output_file: Path = None,
     latency_on = settings.get("AI_SURFACE_RECON_LATENCY_BASELINE_ENABLED", True)
 
     candidates = _gather_candidates(combined_result, settings)
-    # RoE host exclusion
+    # RoE host exclusion. A filter that cannot run cannot tell an excluded host
+    # from an allowed one, so nothing is probed; the source is reported
+    # degraded so the end-of-run prune keeps its previous findings.
+    roe_filter_failed = False
     try:
         from recon.helpers.roe_scope import _filter_roe_excluded
         hosts = list(candidates.keys())
         kept = set(_filter_roe_excluded(hosts, settings, label="ai-surface url"))
         candidates = {k: v for k, v in candidates.items() if k in kept}
-    except Exception:
-        pass
+    except Exception as exc:
+        roe_filter_failed = True
+        candidates = {}
+        # The class only: the message could carry a host or a URL.
+        _log(f"RoE filter failed; skipping AI surface probes: {type(exc).__name__}", "!")
+        from recon.helpers import circuit_breaker as _cb_roe
+        _cb_roe.note_degraded("ai_surface_recon", sources=("ai_surface_recon",),
+                              reason="RoE filter failed")
 
     _log(f"analyzing {len(candidates)} AI-surface host(s)")
     project_id = combined_result.get("metadata", {}).get("project_id", "unknown")
@@ -743,7 +752,7 @@ def run_ai_surface_recon(combined_result: dict, output_file: Path = None,
                 findings.extend(lf)
 
     vector_db = []
-    if vectordb_on:
+    if vectordb_on and not roe_filter_failed:
         vsession = requests.Session()
         vsession.headers.update({"User-Agent": ua})
         vector_db = _confirm_vector_dbs(combined_result, vsession, timeout)

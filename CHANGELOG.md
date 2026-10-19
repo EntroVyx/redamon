@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       SELECT 1 FROM unnest(roe_excluded_hosts) h
       WHERE h LIKE '*.%' OR h <> lower(h) OR h LIKE '%:%' OR h LIKE '%://%' OR h LIKE '%.');"
     ```
+- **AI Surface no longer probes RoE-excluded hosts when its exclusion filter fails.** An error inside the filter left every candidate in place, so excluded hosts received chat, MCP and specification requests. An error now drops every candidate and the vector-database reads, logs `[!][AISurfaceRecon] RoE filter failed; skipping AI surface probes`, and marks the source degraded so the end-of-run prune keeps its previous findings.
 
 ## [7.0.4] - 2026-10-19
 
