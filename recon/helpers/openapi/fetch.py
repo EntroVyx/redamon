@@ -38,7 +38,11 @@ OpenApiLoader.add_implicit_resolver('tag:yaml.org,2002:bool',
 
 
 class DocumentError(ValueError):
-    pass
+    """``code`` is the fixed status a failure reports; the message is detail."""
+
+    def __init__(self, message='', code='invalid_document'):
+        super().__init__(message)
+        self.code = code
 
 
 def http_url(value):
@@ -140,22 +144,24 @@ class RequestPacer:
         if self.request_interval:
             delay = max(0.0, self.next_request_at - time.monotonic())
             if delay >= deadline - time.monotonic():
-                raise DocumentError('Document fetch deadline exceeded')
+                raise DocumentError('Document fetch deadline exceeded', code='transport_error')
             if delay:
                 time.sleep(delay)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise DocumentError('Document fetch deadline exceeded')
+            raise DocumentError('Document fetch deadline exceeded', code='transport_error')
         if self.request_interval:
             self.next_request_at = time.monotonic() + self.request_interval
         return remaining
 
 
 class Fetcher:
-    def __init__(self, timeout=10, max_requests=500, max_rps=0, *, pacer=None):
+    def __init__(self, timeout=10, max_requests=500, max_rps=0, *, pacer=None, address_guard=None):
         self.timeout = min(max(float(timeout), 1), 60)
         self.max_requests = min(max(int(max_requests), 1), 1000)
         self.pacer = pacer if pacer is not None else RequestPacer(max_rps)
+        # host -> bool, asked before every hop; None trusts every host (tests).
+        self.address_guard = address_guard
         self.count = 0
         self.total_bytes = 0
         self.max_total_bytes = 32 * 1024 * 1024
@@ -170,18 +176,23 @@ class Fetcher:
     def fetch(self, url, headers, allowed_origin):
         url = http_url(urldefrag(url)[0])
         if origin(url) != allowed_origin:
-            raise DocumentError('Cross-origin document navigation blocked')
+            raise DocumentError('Cross-origin document navigation blocked', code='out_of_scope')
         key = (url, tuple(sorted(headers.items())))
         if key in self.cache:
             return self.cache[key]
         deadline = time.monotonic() + self.timeout
         for _ in range(6):
             if origin(url) != allowed_origin:
-                raise DocumentError('Cross-origin document navigation blocked')
+                raise DocumentError('Cross-origin document navigation blocked', code='out_of_scope')
             if self.count >= self.max_requests:
-                raise DocumentError('Document request limit reached')
+                raise DocumentError('Document request limit reached', code='limit_reached')
             if self.total_bytes >= self.max_total_bytes:
-                raise DocumentError('Total document byte limit reached')
+                raise DocumentError('Total document byte limit reached', code='limit_reached')
+            # Every hop: a name can resolve elsewhere by the time a redirect is
+            # followed. A refusal sends nothing and is not counted.
+            if self.address_guard is not None and not self.address_guard(urlsplit(url).hostname or ''):
+                raise DocumentError('Document host resolves to an address recon never scans',
+                                    code='blocked_address')
             proxy_url, token = proxy_routing.get_capture_routing('openapi')
             routed = bool(proxy_url and token)
             request_headers = {key: value for key, value in headers.items()
@@ -209,7 +220,8 @@ class Fetcher:
                         url = http_url(urljoin(url, location))
                         continue
                     if response.status_code != 200:
-                        raise DocumentError(f'Document HTTP status {response.status_code}')
+                        raise DocumentError(f'Document HTTP status {response.status_code}',
+                                            code=f'http_{int(response.status_code)}')
                     chunks, size = [], 0
                     raw = getattr(response, 'raw', None)
                     if raw is not None and hasattr(raw, 'read1'):
@@ -226,19 +238,19 @@ class Fetcher:
                         stream = response.iter_content(chunk_size=1)
                     for chunk in stream:
                         if time.monotonic() >= deadline:
-                            raise DocumentError('Document fetch deadline exceeded')
+                            raise DocumentError('Document fetch deadline exceeded', code='transport_error')
                         size += len(chunk)
                         self.total_bytes += len(chunk)
                         if self.total_bytes > self.max_total_bytes:
-                            raise DocumentError('Total document byte limit reached')
+                            raise DocumentError('Total document byte limit reached', code='limit_reached')
                         if size > 5 * 1024 * 1024:
-                            raise DocumentError('Document exceeds 5 MiB limit')
+                            raise DocumentError('Document exceeds 5 MiB limit', code='limit_reached')
                         chunks.append(chunk)
                     text = b''.join(chunks).decode('utf-8-sig')
                 finally:
                     response.close()
             except (requests.RequestException, HTTPError, OSError, UnicodeError):
-                raise DocumentError('Document transport or encoding error') from None
+                raise DocumentError('Document transport or encoding error', code='transport_error') from None
             self.cache[key] = (url, text)
             return url, text
-        raise DocumentError('Document redirect limit reached')
+        raise DocumentError('Document redirect limit reached', code='limit_reached')

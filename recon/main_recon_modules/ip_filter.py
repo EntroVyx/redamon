@@ -115,6 +115,49 @@ def is_url_safe_to_probe(url: str) -> bool:
     return all(not is_non_routable_ip(ip) for ip in resolved)
 
 
+def is_address_safe_to_scan(host: str, operator_hosts=(), operator_networks=()) -> bool:
+    """Address guard for a request to a host recon reached on its own.
+
+    The pipeline's rule for discovered names, applied per request. A host the
+    operator typed (``operator_hosts``, or an IP inside ``operator_networks``)
+    is scanned whatever it resolves to, as recon/main.py does for
+    operator-supplied hosts and IP mode does for its targets. Any other host is
+    resolved, and refused if it is a cloud-metadata name or ANY of its
+    addresses is never scannable (:func:`is_never_scannable_ip`). An
+    unresolvable host is refused: there is nothing to scan. Private and CGNAT
+    addresses stay allowed, as for the pipeline.
+
+    The check and the connection resolve separately; that DNS-rebinding window
+    is the recon-wide limitation in README.SECURITY_POSTURE.md.
+    """
+    name = (host or "").strip().strip("[]").rstrip(".").lower()
+    if not name:
+        return False
+    if name in operator_hosts:
+        return True
+    try:
+        addr = ipaddress.ip_address(name)
+    except ValueError:
+        addr = None
+    if addr is not None:
+        candidates = [addr]
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            candidates.append(addr.ipv4_mapped)
+        if any(a in net for a in candidates for net in operator_networks if a.version == net.version):
+            return True
+        return not is_never_scannable_ip(name)
+    if name in _METADATA_HOSTNAMES:
+        return False
+    try:
+        infos = socket.getaddrinfo(name, None)
+    except (OSError, UnicodeError):
+        return False
+    resolved = {info[4][0].split("%")[0] for info in infos}
+    if not resolved:
+        return False
+    return not any(is_never_scannable_ip(ip) for ip in resolved)
+
+
 _published_networks: list | None = None
 
 

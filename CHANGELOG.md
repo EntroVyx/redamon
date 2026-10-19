@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       WHERE h LIKE '*.%' OR h <> lower(h) OR h LIKE '%:%' OR h LIKE '%://%' OR h LIKE '%.');"
     ```
 - **AI Surface no longer probes RoE-excluded hosts when its exclusion filter fails.** An error inside the filter left every candidate in place, so excluded hosts received chat, MCP and specification requests. An error now drops every candidate and the vector-database reads, logs `[!][AISurfaceRecon] RoE filter failed; skipping AI surface probes`, and marks the source degraded so the end-of-run prune keeps its previous findings.
+- **OpenAPI document fetches refuse never-scannable addresses.** Recon runs on the host network, and the agent API there serves `/openapi.json`, a default discovery path. A discovered host that resolves to loopback or link-local (cloud metadata), or that does not resolve, is now refused before any request, on every redirect hop, and reported `blocked_address`. Hosts you typed (the target domain, subdomain prefixes, batch hosts, configured document URLs, target IPs) are fetched whatever they resolve to, as everywhere else in recon. Private and CGNAT addresses stay allowed.
 
 ## [7.0.4] - 2026-10-19
 

@@ -1,9 +1,18 @@
 """OpenAPI downloads use the scoped project session, never legacy Project headers."""
 import json
+import socket
 
 import pytest
 
 from recon.main_recon_modules.openapi_recon import run_openapi_recon
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    # The address guard resolves discovered names and the gate has no DNS:
+    # every name resolves to a documentation address.
+    monkeypatch.setattr(socket, 'getaddrinfo',
+                        lambda host, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('198.51.100.10', 0))])
 
 
 class Response:

@@ -5,6 +5,7 @@ import json
 import re
 from collections import deque
 from html import unescape
+from ipaddress import ip_network
 from urllib.parse import urljoin, urlsplit
 
 from graph_db.mixins.recon.openapi_scope import Scope
@@ -43,6 +44,49 @@ def scope_payload(settings):
             'include_root': any(not p.rstrip('.') for p in prefixes),
             'ip_networks': list(settings.get('TARGET_IPS') or []) if settings.get('IP_MODE') else [],
             'excluded_hosts': list(settings.get('ROE_EXCLUDED_HOSTS') or []) if settings.get('ROE_ENABLED') else []}
+
+
+def _norm_host(value):
+    return str(value or '').strip().strip('[]').rstrip('.').lower()
+
+
+def operator_targets(settings, extra_urls=()):
+    """Hosts and networks the operator typed, exempt from the address guard.
+
+    Mirrors the pipeline's rule for discovered names: what the operator named
+    is scanned whatever it resolves to (recon/main.py, "Operator-supplied hosts
+    are NOT filtered"), and IP mode applies no never-scannable filter.
+    """
+    hosts, networks = set(), []
+    root = _norm_host(settings.get('TARGET_DOMAIN'))
+    if root:
+        hosts.add(root)
+        for prefix in settings.get('SUBDOMAIN_LIST') or []:
+            clean = str(prefix).strip().rstrip('.')
+            if clean and clean != '*':
+                hosts.add(f'{clean}.{root}')
+    for group in settings.get('DOMAIN_BATCH_GROUPS') or []:
+        if not isinstance(group, dict):
+            continue
+        g = _norm_host(group.get('rootDomain'))
+        prefixes = [p for p in group.get('prefixes') or [] if isinstance(p, str)]
+        if not g or '*' in prefixes:
+            continue
+        for p in prefixes:
+            clean = p.strip().rstrip('.')
+            hosts.add(g if not clean else f'{clean}.{g}')
+    for value in settings.get('TARGET_IPS') or []:
+        try:
+            networks.append(ip_network(str(value).strip(), strict=False))
+        except ValueError:
+            continue
+    for url in extra_urls:
+        try:
+            hosts.add(_norm_host(urlsplit(http_url(url)).hostname))
+        except DocumentError:
+            continue
+    hosts.discard('')
+    return hosts, networks
 
 
 def linked_documents(text, document):
@@ -95,8 +139,12 @@ def run_openapi_recon(recon_data: dict, settings: dict, *, pacer=None) -> dict:
         return recon_data
     max_documents = min(max(int(settings.get('OPENAPI_MAX_DOCUMENTS', 50)), 1), 200)
     proxy_routing.configure(settings)
+    from recon.main_recon_modules.ip_filter import is_address_safe_to_scan
+    operator_hosts, operator_networks = operator_targets(
+        settings, [s.get('url') for s in settings.get('OPENAPI_SOURCES') or [] if isinstance(s, dict)])
     fetcher = Fetcher(settings.get('OPENAPI_TIMEOUT', 10), max_requests=max_documents * 10,
-                      max_rps=settings.get('ROE_GLOBAL_MAX_RPS', 0), pacer=pacer)
+                      max_rps=settings.get('ROE_GLOBAL_MAX_RPS', 0), pacer=pacer,
+                      address_guard=lambda host: is_address_safe_to_scan(host, operator_hosts, operator_networks))
     queue = deque()
     seen = set()
     source_count = 0
@@ -170,10 +218,11 @@ def run_openapi_recon(recon_data: dict, settings: dict, *, pacer=None) -> dict:
             try:
                 final_url, text = fetcher.fetch(url, headers, allowed_origin)
             except DocumentError as error:
-                # Ordinary missing common paths are expected; configured sources
-                # and authentication failures must always be visible.
-                if explicit or '404' not in str(error):
-                    diagnostics.append({'url': public_url(url), 'code': 'fetch_failed', 'message': str(error)})
+                # Ordinary missing common paths are expected; configured sources,
+                # address-guard refusals and authentication failures stay visible.
+                if explicit or error.code != 'http_404':
+                    code = 'blocked_address' if error.code == 'blocked_address' else 'fetch_failed'
+                    diagnostics.append({'url': public_url(url), 'code': code, 'message': str(error)})
                 continue
             decode_error = None
             try:
