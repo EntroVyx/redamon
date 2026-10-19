@@ -10,6 +10,32 @@ from urllib.parse import urlparse, parse_qs
 from graph_db.cpe_resolver import _is_ip_address
 from graph_db.mixins.recon.scope import build_host_scope, host_in_scope
 
+def _openapi_params(endpoint_info: dict, method: str) -> dict:
+    """Cypher parameters for an endpoint's OpenAPI fields; None keeps what is stored.
+
+    Every source other than OpenAPI passes oa_declared_only = False: an
+    endpoint a tool found is observed. Only short sanitized identifiers reach
+    the graph; the merge dropped every free-text field of the specification.
+    """
+    declared_only = endpoint_info.get("declared_only")
+    meta = (endpoint_info.get("openapi") or {}).get(method) or {}
+    spec = endpoint_info.get("openapi_spec") if method == "GET" else None
+    spec = spec if isinstance(spec, dict) else {}
+    return {
+        "oa_declared_only": declared_only if isinstance(declared_only, bool) else False,
+        "oa_declared": True if meta else None,
+        "oa_templates": (endpoint_info.get("openapi_path_templates") or None) if meta else None,
+        "oa_operation_id": meta.get("operation_id"),
+        "oa_deprecated": meta.get("deprecated") if meta else None,
+        "oa_security": meta.get("security") if meta else None,
+        "oa_tags": meta.get("tags") or None,
+        "oa_spec_urls": meta.get("spec_urls") or None,
+        "oa_spec": True if spec else None,
+        "oa_spec_version": spec.get("version"),
+        "oa_op_count": spec.get("operation_count"),
+    }
+
+
 class ResourceMixin:
     def update_graph_from_resource_enum(self, recon_data: dict, user_id: str, project_id: str) -> dict:
         """
@@ -110,9 +136,26 @@ class ResourceMixin:
                                 s for s in (endpoint_info.get("sources") or [])
                                 if s and isinstance(s, str)
                             ))
+                            oa = _openapi_params(endpoint_info, method)
+                            # openapi_declared_only: an endpoint that already
+                            # existed was observed by some tool, so a
+                            # declaration reaching it does not make it
+                            # declared-only; an observing source clears it. A
+                            # node an earlier release declared (openapi_declared
+                            # without the flag) counts as declared-only.
                             session.run(
                                 """
                                 MERGE (e:Endpoint {path: $path, method: $method, baseurl: $baseurl, user_id: $user_id, project_id: $project_id})
+                                ON CREATE SET e.openapi_declared_only = CASE WHEN $oa_declared_only THEN true ELSE null END
+                                ON MATCH SET e.openapi_declared_only = CASE
+                                    WHEN $oa_declared_only IS NULL THEN e.openapi_declared_only
+                                    WHEN NOT $oa_declared_only THEN
+                                        CASE WHEN coalesce(e.openapi_declared_only, e.openapi_declared, false)
+                                             THEN false ELSE e.openapi_declared_only END
+                                    WHEN e.openapi_declared_only IS NOT NULL THEN e.openapi_declared_only
+                                    WHEN coalesce(e.openapi_declared, false) THEN true
+                                    ELSE false
+                                END
                                 SET e.user_id = $user_id,
                                     e.project_id = $project_id,
                                     e.category = $category,
@@ -128,6 +171,18 @@ class ResourceMixin:
                                     END,
                                     e.ai_interface_type = COALESCE($ai_interface_type, e.ai_interface_type),
                                     e.is_ai_rag_ingest = COALESCE($is_ai_rag_ingest, e.is_ai_rag_ingest),
+                                    e.openapi_declared = coalesce($oa_declared, e.openapi_declared),
+                                    e.openapi_path_templates = coalesce($oa_templates, e.openapi_path_templates),
+                                    e.openapi_operation_id = coalesce($oa_operation_id, e.openapi_operation_id),
+                                    e.openapi_deprecated = coalesce($oa_deprecated, e.openapi_deprecated),
+                                    e.openapi_security = coalesce($oa_security, e.openapi_security),
+                                    e.openapi_tags = coalesce($oa_tags, e.openapi_tags),
+                                    e.openapi_spec_urls = CASE WHEN $oa_spec_urls IS NULL THEN e.openapi_spec_urls
+                                        ELSE coalesce(e.openapi_spec_urls, [])
+                                             + [u IN $oa_spec_urls WHERE NOT u IN coalesce(e.openapi_spec_urls, [])] END,
+                                    e.openapi_spec = coalesce($oa_spec, e.openapi_spec),
+                                    e.openapi_spec_version = coalesce($oa_spec_version, e.openapi_spec_version),
+                                    e.openapi_operation_count = coalesce($oa_op_count, e.openapi_operation_count),
                                     e.updated_at = datetime()
                                 """,
                                 path=path, method=method, baseurl=base_url,
@@ -141,6 +196,7 @@ class ResourceMixin:
                                 sources=ep_sources,
                                 ai_interface_type=ai_interface_type,
                                 is_ai_rag_ingest=is_ai_rag_ingest,
+                                **oa,
                             )
                             stats["endpoints_created"] += 1
                             created_endpoints.add(endpoint_key)
@@ -215,6 +271,56 @@ class ResourceMixin:
                                     """,
                                     path=path, method=method, baseurl=base_url,
                                     param_name=param_name, position="query",
+                                    user_id=user_id, project_id=project_id
+                                )
+                                stats["relationships_created"] += 1
+
+                        # Process path parameters (an API specification declares them)
+                        for param in parameters.get("path", []):
+                            param_name = param.get("name")
+                            if not param_name:
+                                continue
+
+                            param_key = (base_url, path, param_name, "path")
+                            if param_key in created_parameters:
+                                continue
+
+                            session.run(
+                                """
+                                MERGE (p:Parameter {name: $name, position: $position, endpoint_path: $endpoint_path, baseurl: $baseurl, user_id: $user_id, project_id: $project_id})
+                                SET p.user_id = $user_id,
+                                    p.project_id = $project_id,
+                                    p.type = $param_type,
+                                    p.category = $category,
+                                    p.sample_values = $sample_values,
+                                    p.required = $required,
+                                    p.is_injectable = coalesce(p.is_injectable, false),
+                                    p.source = 'resource_enum',
+                                    p.is_ai_prompt_injectable = COALESCE($is_ai_prompt_injectable, p.is_ai_prompt_injectable),
+                                    p.ai_tool_arg_path = COALESCE($ai_tool_arg_path, p.ai_tool_arg_path),
+                                    p.updated_at = datetime()
+                                """,
+                                name=param_name, position="path", endpoint_path=path, baseurl=base_url,
+                                user_id=user_id, project_id=project_id,
+                                param_type=param.get("type", "string"),
+                                category=param.get("category", "other"),
+                                sample_values=(param.get("sample_values") or [])[:5],
+                                required=param.get("required", True),
+                                is_ai_prompt_injectable=param.get("is_ai_prompt_injectable"),
+                                ai_tool_arg_path=param.get("ai_tool_arg_path"),
+                            )
+                            stats["parameters_created"] += 1
+                            created_parameters.add(param_key)
+
+                            for method in methods:
+                                session.run(
+                                    """
+                                    MATCH (e:Endpoint {path: $path, method: $method, baseurl: $baseurl, user_id: $user_id, project_id: $project_id})
+                                    MATCH (p:Parameter {name: $param_name, position: $position, endpoint_path: $path, baseurl: $baseurl, user_id: $user_id, project_id: $project_id})
+                                    MERGE (e)-[:HAS_PARAMETER]->(p)
+                                    """,
+                                    path=path, method=method, baseurl=base_url,
+                                    param_name=param_name, position="path",
                                     user_id=user_id, project_id=project_id
                                 )
                                 stats["relationships_created"] += 1
@@ -438,6 +544,24 @@ class ResourceMixin:
                     )
                 except Exception as e:
                     stats["errors"].append(f"Domain update failed: {e}")
+
+            # Per-source OpenAPI status, on the Domain this run covers (the
+            # group root in a batch, ip-targets.<project> in IP mode). Present
+            # whenever OpenAPI ran, so a removed source's status is cleared.
+            openapi_inventory = resource_enum_data.get("openapi")
+            run_root = recon_data.get("domain")
+            if isinstance(openapi_inventory, dict) and "source_status" in openapi_inventory and run_root:
+                try:
+                    session.run(
+                        """
+                        MATCH (d:Domain {name: $root, user_id: $user_id, project_id: $project_id})
+                        SET d.openapi_source_status = $status
+                        """,
+                        root=run_root, user_id=user_id, project_id=project_id,
+                        status=[s for s in openapi_inventory.get("source_status") or [] if isinstance(s, str)],
+                    )
+                except Exception as e:
+                    stats["errors"].append(f"OpenAPI source status update failed: {e}")
 
             # Connect orphaned BaseURLs to their Subdomain node.
             # BaseURLs created by resource_enum may not have a Service -[:SERVES_URL]-> link

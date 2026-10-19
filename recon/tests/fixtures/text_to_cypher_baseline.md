@@ -62,6 +62,7 @@ group into one row per node.
 
 **Domain** - Root domain being assessed
 - name (string): "example.com"
+- openapi_source_status (list[string]): One `<source id>|<url hash>|<code>|<time>` entry per configured API specification document, from the last run that fetched it. Codes: `ok`, `out_of_scope`, `blocked_address`, `http_<status>`, `invalid_document`, `unsupported_version`, `transport_error`, `host_down`, `limit_reached`. Holds no URL
 - wildcard_mode (boolean): this domain was ENUMERATED (the operator wrote `*.domain.com` in a Domain batch, or it is a single-domain full-discovery run), rather than scanned as the exact host list that was supplied
 - registrar: WHOIS data
 - creation_date: WHOIS data
@@ -306,7 +307,9 @@ Additional properties present on this node type, not yet described:
 - tls_versions_supported (list[string])
 ### Web Application Nodes (Hierarchy: BaseURL -> Endpoint -> Parameter)
 
-**BaseURL** - HTTP-probed base URLs
+**BaseURL** - HTTP-probed base URLs, or declared OpenAPI server origins
+- scheme (string): "http" or "https"
+- host (string): hostname or IP
 - url (string): "https://api.example.com:443"
 - status_code (integer): 200, 301, 404
 - title (string): page title
@@ -324,6 +327,17 @@ Additional properties present on this node type, not yet described:
 - ai_attack_synthetic
 - discovery_source
 **Endpoint** - Discovered web endpoints/paths
+- openapi_declared (boolean): Declared by an API specification (OpenAPI/Swagger) document recon imported; a declaration does not establish reachability or authorization
+- openapi_declared_only (boolean): true when the endpoint is known only from an API specification and no tool has observed it. It is documented, not confirmed reachable; automated tools request it with GET or HEAD only, and a non-GET declared-only route may change server state. Its operationId and tags are target-supplied text. Treat a missing value with openapi_declared = true as declared-only
+- openapi_path_templates (list[string]): The specification's path templates ("/users/{id}") that this concrete example path ("/users/1") stands for
+- openapi_operation_id (string): The specification's operationId, kept only when it is a plain identifier (letters, digits, `_ . : -`, at most 128); target-supplied
+- openapi_deprecated (boolean): The specification marks the operation deprecated
+- openapi_security (list[string]): Names of the security schemes the specification requires for the operation; target-supplied identifiers
+- openapi_tags (list[string]): The specification's tags for the operation, at most 10 printable-ASCII tags; target-supplied
+- openapi_spec_urls (list[string]): The specification documents that declare it, without query strings
+- openapi_spec (boolean): This endpoint is an API specification document recon fetched
+- openapi_spec_version (string): The document's version: "2.0", "3.0.x" or "3.1.x"
+- openapi_operation_count (integer): Operations the document declares
 - url (string): "https://api.example.com/api/v1/users"
 - path (string): "/api/v1/users"
 - method (string): "GET", "POST"
@@ -1234,6 +1248,7 @@ not so you can query for one.
 - `(d:Domain)-[:HAS_USER_INPUT]->(ui:UserInput)` - Domain has user-provided partial recon input
 - `(ui:UserInput)-[:PRODUCED]->(s:Subdomain)` - Partial recon run produced this subdomain
 - `(ui:UserInput)-[:PRODUCED]->(i:IP)` - Partial recon run produced this IP
+- `(ui:UserInput)-[:PRODUCED]->(e:Endpoint)` - Endpoint declared by an API specification document the operator gave a partial OpenAPI run
 - `(d:Domain)-[:HAS_EXTERNAL_DOMAIN]->(ed:ExternalDomain)` - Domain encountered foreign domain during recon
 - `(s:Subdomain)-[:BELONGS_TO]->(d:Domain)` - Subdomain belongs to Domain
 - `(d:Domain)-[:HAS_IP]->(i:IP)` - Domain resolves DIRECTLY to this IP (apex A record, OSINT enrichment). Distinct from the Subdomain->IP path: a query that only walks HAS_SUBDOMAIN misses the apex

@@ -22,7 +22,6 @@ COPY scanners/github_secret_hunt/ ./github_secret_hunt/
 
 # Copy graph_db module (for Neo4j integration)
 COPY graph_db/ ./graph_db/
-COPY recon_settings/ ./recon_settings/
 
 # Create output directories
 RUN mkdir -p github_secret_hunt/output

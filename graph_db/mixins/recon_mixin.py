@@ -12,7 +12,6 @@ by per-topic sub-mixins in the graph_db.mixins.recon package:
     JsReconMixin   -> JS recon (JsReconFinding, Secret)
     TriageMixin    -> finding triage verdicts + mute/unmute suppression
     UserInputMixin -> user input nodes + partial discovery + tool input gathering
-    OpenApiMixin   -> target-scoped OpenAPI operation declarations
 
 The public surface is unchanged: Neo4jClient(... ReconMixin ...) resolves
 every original method via MRO.
@@ -31,7 +30,6 @@ from graph_db.mixins.recon.vhost_sni_mixin import VhostSniMixin
 from graph_db.mixins.recon.ai_surface_recon_mixin import AiSurfaceReconMixin
 from graph_db.mixins.recon.triage_mixin import TriageMixin
 from graph_db.mixins.recon.tlsx_mixin import TlsxMixin
-from graph_db.mixins.recon.openapi_mixin import OpenApiMixin
 
 
 class ReconMixin(
@@ -48,6 +46,5 @@ class ReconMixin(
     AiSurfaceReconMixin,
     TriageMixin,
     TlsxMixin,
-    OpenApiMixin,
 ):
     pass
