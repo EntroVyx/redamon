@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8080'
 
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
     // Re-encode as multipart for upstream. fetch() handles this for FormData.
     const resp = await fetch(`${AGENT_API_URL}/workspace/upload`, {
       method: 'POST',
+      headers: internalKeyHeaders(),
       body: formData,
     })
     const data = await resp.json()

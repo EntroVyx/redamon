@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getGraphSession } from '../../graph/neo4j'
 import { requireEffectiveUser, requireConversationAccess } from '@/lib/access'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 // GET /api/conversations/[id] - Get conversation with all messages
 export async function GET(
@@ -112,7 +113,7 @@ export async function DELETE(
       const AGENT_API_URL = process.env.AGENT_API_URL || process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://agent:8080'
       await fetch(`${AGENT_API_URL}/agent-session/stop`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalKeyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           user_id: conversation.userId,
           project_id: conversation.projectId,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getGraphSession } from '../../../graph/neo4j'
 import { requireEffectiveUser, requireProjectAccess } from '@/lib/access'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 // POST /api/projects/[id]/purge-orphan-chains
 //
@@ -51,7 +52,7 @@ export async function POST(
         try {
           await fetch(`${AGENT_API_URL}/agent-session/stop`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: internalKeyHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ user_id: orphan.userId, project_id: projectId, session_id: orphan.chainId }),
           })
           stopped.push(orphan.chainId)

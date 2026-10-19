@@ -246,6 +246,28 @@ async def require_master_internal_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+async def require_configured_master_auth(request: Request) -> None:
+    """FastAPI dependency: the MASTER key only, and FAIL-CLOSED without one.
+
+    For routes whose open use is code execution or another tenant's data: the
+    workspace file API (read/write/delete any project's files, and the drop the
+    kali-sandbox shares through /workspace), the Metasploit session proxy (runs
+    commands on every host the operator holds a session on), and agent-session
+    stop. The agent port is published on 0.0.0.0, so the fail-open of
+    `require_master_internal_auth` would hand these to anyone on the network.
+    Every redamon.sh install generates the key, and without it the agent
+    WebSocket and the MCP tools already refuse, so refusing here bricks nothing
+    that worked.
+    """
+    if master_key_is_weak():
+        raise HTTPException(
+            status_code=503,
+            detail="INTERNAL_API_KEY is not configured; this endpoint is disabled. "
+                   "Generate the secret via redamon.sh.",
+        )
+    await require_master_internal_auth(request)
+
+
 async def require_internal_auth_only(request: Request) -> None:
     """FastAPI dependency: AUTH ONLY (no LLM rate-limit / daily spend cap).
 

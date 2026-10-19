@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8080'
 
@@ -17,7 +18,7 @@ export async function GET(request: NextRequest) {
   try {
     let url = `${AGENT_API_URL}/workspace/preview?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(path)}`
     if (maxBytes) url += `&maxBytes=${encodeURIComponent(maxBytes)}`
-    const resp = await fetch(url, { cache: 'no-store' })
+    const resp = await fetch(url, { cache: 'no-store', headers: internalKeyHeaders() })
     const data = await resp.json()
     return NextResponse.json(data, { status: resp.status })
   } catch (error) {

@@ -98,9 +98,9 @@ class LiveSessionsEndpoint(unittest.TestCase):
         self.fail("/agent-sessions/live is not registered")
 
     def test_scanner_key_cannot_enumerate_live_sessions(self):
-        # The kali sandbox holds SCANNER_API_KEY and faces the target. Live
-        # session ids plus the unauthenticated /agent-session/stop would let it
-        # cancel an operator's run, so only the master key may list them.
+        # The kali sandbox holds SCANNER_API_KEY and faces the target. A live
+        # session id is what /agent-session/stop takes to cancel an operator's
+        # run, so only the master key may list them.
         from fastapi.testclient import TestClient
 
         mgr = WebSocketManager()

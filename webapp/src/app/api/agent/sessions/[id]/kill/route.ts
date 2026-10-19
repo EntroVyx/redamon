@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { internalKeyHeaders } from '@/lib/agentAuth'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8080'
 
@@ -10,6 +11,7 @@ export async function POST(
   try {
     const resp = await fetch(`${AGENT_API_URL}/sessions/${id}/kill`, {
       method: 'POST',
+      headers: internalKeyHeaders(),
     })
     if (!resp.ok) {
       const text = await resp.text()

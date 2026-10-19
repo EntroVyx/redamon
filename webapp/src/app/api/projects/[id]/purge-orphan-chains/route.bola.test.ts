@@ -51,4 +51,29 @@ describe('POST purge-orphan-chains — BOLA', () => {
     await POST(new NextRequest('http://x/api/projects/victimProj/purge-orphan-chains', { method: 'POST' }), params('victimProj'))
     expect(mockConversationFindMany).toHaveBeenCalled()
   })
+
+  test('stops each orphan through the master-key-gated /agent-session/stop', async () => {
+    // Without the key the agent answers 401, the orphan loop keeps running and
+    // re-seeds the chain the purge just deleted.
+    vi.stubEnv('INTERNAL_API_KEY', 'test-master-key')
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response('{"stopped":true}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const orphan = { get: (k: string) => ({ chainId: 'orphan-1', userId: 'victim' } as Record<string, string>)[k] }
+    mockGetGraphSession.mockReturnValue({
+      run: vi.fn().mockResolvedValueOnce({ records: [orphan] }).mockResolvedValue({ records: [] }),
+      close: vi.fn(),
+    })
+    mockRequireEff.mockResolvedValue({ userId: 'victim' })
+    mockRequireProjectAccess.mockResolvedValue({ project: { id: 'victimProj', userId: 'victim' } })
+    try {
+      await POST(new NextRequest('http://x/api/projects/victimProj/purge-orphan-chains', { method: 'POST' }), params('victimProj'))
+      const stop = fetchMock.mock.calls.find(c => String(c[0]).endsWith('/agent-session/stop'))
+      expect(stop).toBeDefined()
+      const headers = stop![1]?.headers as Record<string, string>
+      expect(headers['x-internal-key']).toBe('test-master-key')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
 })
