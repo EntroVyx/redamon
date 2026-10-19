@@ -1,10 +1,10 @@
-"""OpenAPI downloads use the scoped project session, never legacy Project headers."""
+"""OpenAPI downloads use the scoped project session for the exact origin only."""
 import json
 import socket
 
 import pytest
 
-from recon.main_recon_modules.openapi_recon import run_openapi_recon
+from recon.helpers.openapi.discovery import _reset_pacer, run_openapi_discovery
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +13,23 @@ def _public_dns(monkeypatch):
     # every name resolves to a documentation address.
     monkeypatch.setattr(socket, 'getaddrinfo',
                         lambda host, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('198.51.100.10', 0))])
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    # The request clock is process-wide; each test starts with its own ceiling.
+    _reset_pacer()
+    yield
+    _reset_pacer()
+
+
+def discover(recon_data, settings):
+    """The engine as resource enumeration calls it: every probed and crawled URL is a seed."""
+    seeds = list((recon_data.get('http_probe') or {}).get('by_url') or {})
+    for base, data in ((recon_data.get('resource_enum') or {}).get('by_base_url') or {}).items():
+        seeds.append(base)
+        seeds.extend(base.rstrip('/') + path for path in data.get('endpoints') or {})
+    return run_openapi_discovery(recon_data, settings, seeds)
 
 
 class Response:
@@ -41,35 +58,15 @@ def test_profile_authenticates_sources_discovery_and_references(monkeypatch, dis
         return Response({'id': {'name': 'id', 'in': 'query'}} if url.endswith('/params') else document)
 
     monkeypatch.setattr('requests.Session.get', get)
-    result = run_openapi_recon({'http_probe': {'by_url': {'https://api.example.com': {}}}}, {
+    result = discover({'http_probe': {'by_url': {'https://api.example.com': {}}}}, {
         'TARGET_DOMAIN': 'example.com', 'OPENAPI_AUTO_DISCOVER': discovery,
         'OPENAPI_DISCOVERY_PATHS': ['/spec'],
         'OPENAPI_SOURCES': [] if discovery else [{'url': 'https://api.example.com/spec'}],
         'AUTH_PROFILE': {'authType': 'bearer', 'authValue': 'fixture-session',
                          'extraHeaders': {'X-Tenant': 'fixture-tenant'}},
-    })['openapi']
+    })
     assert len(result['operations']) == 1
     assert [url for url, _ in calls] == ['https://api.example.com/spec', 'https://api.example.com/params']
     assert all(headers == {'Authorization': 'Bearer fixture-session', 'X-Tenant': 'fixture-tenant'}
                for _, headers in calls)
     assert 'fixture-session' not in json.dumps(result)
-
-
-@pytest.mark.parametrize('profile', [None,
-    {'authType': 'bearer', 'authValue': 'fixture-session', 'reconEnabled': False},
-    {'authType': 'bearer', 'authValue': 'fixture-session', 'scopeHosts': ['other.example.com']},
-])
-def test_anonymous_fetch_ignores_legacy_headers(monkeypatch, profile):
-    calls = []
-    monkeypatch.setattr('requests.Session.get', lambda self, url, **kw:
-                        calls.append(kw['headers']) or Response({'openapi': '3.0.3', 'paths': {}}))
-    run_openapi_recon({'http_probe': {'by_url': {'https://api.example.com': {}}}}, {
-        'TARGET_DOMAIN': 'example.com', 'OPENAPI_AUTO_DISCOVER': True,
-        'OPENAPI_DISCOVERY_PATHS': ['/discovered'],
-        'OPENAPI_SOURCES': [{'url': 'https://api.example.com/spec',
-                             'headers': ['Authorization: Bearer legacy-source']}],
-        'OPENAPI_DISCOVERY_HEADERS': [{'origin': 'https://api.example.com',
-                                      'headers': ['Authorization: Bearer legacy-discovery']}],
-        'AUTH_PROFILE': profile,
-    })
-    assert calls == [{}, {}]

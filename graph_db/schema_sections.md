@@ -1083,6 +1083,7 @@ not so you can query for one.
 - `(d:Domain)-[:HAS_USER_INPUT]->(ui:UserInput)` - Domain has user-provided partial recon input
 - `(ui:UserInput)-[:PRODUCED]->(s:Subdomain)` - Partial recon run produced this subdomain
 - `(ui:UserInput)-[:PRODUCED]->(i:IP)` - Partial recon run produced this IP
+- `(ui:UserInput)-[:PRODUCED]->(e:Endpoint)` - Endpoint declared by an API specification document the operator gave a partial OpenAPI run
 - `(d:Domain)-[:HAS_EXTERNAL_DOMAIN]->(ed:ExternalDomain)` - Domain encountered foreign domain during recon
 - `(s:Subdomain)-[:BELONGS_TO]->(d:Domain)` - Subdomain belongs to Domain
 - `(d:Domain)-[:HAS_IP]->(i:IP)` - Domain resolves DIRECTLY to this IP (apex A record, OSINT enrichment). Distinct from the Subdomain->IP path: a query that only walks HAS_SUBDOMAIN misses the apex

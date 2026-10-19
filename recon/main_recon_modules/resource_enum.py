@@ -61,6 +61,9 @@ from recon.helpers.resource_enum import (
     run_kiterunner_discovery,
     merge_kiterunner_into_by_base_url,
     detect_kiterunner_methods,
+    # OpenAPI helpers
+    build_openapi_inventory,
+    merge_openapi_into_by_base_url,
     # Katana helpers
     run_katana_crawler,
     pull_katana_docker_image,
@@ -332,6 +335,10 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
     if "ZAP_AJAX_SPIDER_CUSTOM_HEADERS" in effective_settings_display:
         header_count = len(effective_settings_display.get("ZAP_AJAX_SPIDER_CUSTOM_HEADERS") or [])
         effective_settings_display["ZAP_AJAX_SPIDER_CUSTOM_HEADERS"] = f"<{header_count} header(s), redacted>"
+    if "OPENAPI_SOURCES" in effective_settings_display:
+        # A document URL can carry a token in its query.
+        source_count = len(effective_settings_display.get("OPENAPI_SOURCES") or [])
+        effective_settings_display["OPENAPI_SOURCES"] = f"<{source_count} source(s), redacted>"
 
     from recon.helpers import print_effective_settings
     print_effective_settings(
@@ -420,6 +427,12 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
             ("ARJUN_MAX_ENDPOINTS", "Arjun"),
             ("ARJUN_DISABLE_REDIRECTS", "Arjun"),
             ("ARJUN_CUSTOM_HEADERS", "Arjun"),
+            ("OPENAPI_ENABLED", "OpenAPI"),
+            ("OPENAPI_AUTO_DISCOVER", "OpenAPI"),
+            ("OPENAPI_SOURCES", "OpenAPI"),
+            ("OPENAPI_DISCOVERY_PATHS", "OpenAPI"),
+            ("OPENAPI_TIMEOUT", "OpenAPI"),
+            ("OPENAPI_MAX_DOCUMENTS", "OpenAPI"),
         ],
     )
 
@@ -586,6 +599,15 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
     KITERUNNER_METHOD_DETECT_RATE_LIMIT = settings.get('KITERUNNER_METHOD_DETECT_RATE_LIMIT', 50)
     KITERUNNER_METHOD_DETECT_THREADS = settings.get('KITERUNNER_METHOD_DETECT_THREADS', 20)
     KITERUNNER_PARALLELISM = settings.get('KITERUNNER_PARALLELISM', 2)
+
+    # OpenAPI settings. The engine reads them from `settings`; they are read
+    # here for the start-up summary.
+    OPENAPI_ENABLED = settings.get('OPENAPI_ENABLED', True)
+    OPENAPI_AUTO_DISCOVER = settings.get('OPENAPI_AUTO_DISCOVER', False)
+    OPENAPI_SOURCES = settings.get('OPENAPI_SOURCES') or []
+    OPENAPI_DISCOVERY_PATHS = settings.get('OPENAPI_DISCOVERY_PATHS')
+    OPENAPI_TIMEOUT = settings.get('OPENAPI_TIMEOUT', 10)
+    OPENAPI_MAX_DOCUMENTS = settings.get('OPENAPI_MAX_DOCUMENTS', 50)
 
     # Check Docker
     if not is_docker_installed():
@@ -817,6 +839,15 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
         print(f"[*][Arjun] Stable mode: {ARJUN_STABLE}")
         if ARJUN_CUSTOM_HEADERS:
             print(f"[*][Arjun] Custom headers: {len(ARJUN_CUSTOM_HEADERS)}")
+    # OpenAPI settings
+    print(f"[*][OpenAPI] Enabled: {OPENAPI_ENABLED}")
+    if OPENAPI_ENABLED:
+        print(f"[*][OpenAPI] Configured documents: {len(OPENAPI_SOURCES)}")
+        print(f"[*][OpenAPI] Auto-discover: {OPENAPI_AUTO_DISCOVER}")
+        if OPENAPI_AUTO_DISCOVER:
+            paths = OPENAPI_DISCOVERY_PATHS
+            print(f"[*][OpenAPI] Discovery paths: {'defaults' if paths is None else len(paths)}")
+        print(f"[*][OpenAPI] Timeout: {OPENAPI_TIMEOUT}s, max documents: {OPENAPI_MAX_DOCUMENTS}")
     print("=" * 70)
 
     # Archive health for GAU and ParamSpider (they share Wayback): a paused
@@ -1483,6 +1514,32 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
         if KITERUNNER_DETECT_METHODS and kr_stats.get('kr_with_multiple_methods', 0) > 0:
             print(f"[+][Kiterunner] Endpoints with multiple methods: {kr_stats['kr_with_multiple_methods']}")
 
+    # OpenAPI runs last, after every crawler has merged, so no tool in this
+    # module ever requests a path known only from a specification. Fail-soft:
+    # an OpenAPI failure costs the run its declarations, never its endpoints.
+    openapi_inventory = None
+    if OPENAPI_ENABLED:
+        try:
+            from recon.helpers.openapi.discovery import SPEC_LIKE_PATH, run_openapi_discovery
+            seed_urls = list(target_urls) + [
+                base.rstrip('/') + path
+                for base, data in organized_data['by_base_url'].items()
+                for path in (data.get('endpoints') or {})
+                if SPEC_LIKE_PATH.search(path)
+            ]
+            print("\n[*][OpenAPI] Discovering and parsing API specifications...")
+            openapi_payload = run_openapi_discovery(recon_data, settings, seed_urls)
+            organized_data['by_base_url'], oa_stats = merge_openapi_into_by_base_url(
+                openapi_payload, organized_data['by_base_url'])
+            openapi_inventory = build_openapi_inventory(recon_data, openapi_payload, oa_stats)
+            print(f"[+][OpenAPI] Documents: {len(openapi_payload['documents'])}")
+            print(f"[+][OpenAPI] Operations: {oa_stats['openapi_operations']}")
+            print(f"[+][OpenAPI] New endpoints: {oa_stats['openapi_new']}")
+            print(f"[+][OpenAPI] Overlap with crawled endpoints: {oa_stats['openapi_overlap']}")
+        except Exception:  # noqa: BLE001
+            # Request exceptions can carry credentials: a fixed text only.
+            print("[!][OpenAPI] Ingestion failed; resource enumeration continues")
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
@@ -1593,6 +1650,8 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
             'kiterunner_method_detection_enabled': KITERUNNER_DETECT_METHODS if KITERUNNER_ENABLED else False,
             'kiterunner_method_detection_mode': KITERUNNER_METHOD_DETECTION_MODE if KITERUNNER_ENABLED else None,
             'kiterunner_stats': kr_stats,
+            # OpenAPI metadata (counts per group live in resource_enum.openapi)
+            'openapi_enabled': OPENAPI_ENABLED,
             # Arjun metadata
             'arjun_enabled': ARJUN_ENABLED,
             'arjun_methods': ARJUN_METHODS if ARJUN_ENABLED else [],
@@ -1702,6 +1761,9 @@ def run_resource_enum(recon_data: dict, output_file: Optional[Path] = None, sett
         recon_data=recon_data,
         extra_headers=[*KATANA_CUSTOM_HEADERS, *HAKRAWLER_CUSTOM_HEADERS, *FFUF_CUSTOM_HEADERS,
                        *ZAP_AJAX_SPIDER_CUSTOM_HEADERS, *ARJUN_CUSTOM_HEADERS, *KITERUNNER_HEADERS])
+
+    if openapi_inventory is not None:
+        resource_enum_result['openapi'] = openapi_inventory
 
     # Add to recon_data
     recon_data['resource_enum'] = resource_enum_result

@@ -1,9 +1,9 @@
 """Shared engagement matching preserves OpenAPI's restricted target selection."""
 import pytest
 
-from graph_db.mixins.recon.openapi_scope import Scope
+from recon.helpers.openapi.scope import Scope
 from recon.helpers.roe_scope import _is_roe_excluded
-from recon.main_recon_modules.openapi_recon import scope_payload
+from recon.helpers.openapi.discovery import scope_payload
 
 
 @pytest.mark.parametrize('prefixes,root_allowed,child_allowed', [

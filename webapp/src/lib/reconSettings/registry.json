@@ -15660,15 +15660,13 @@
   "openapi_recon": {
    "enabled_key": "OPENAPI_ENABLED",
    "form_section": "OpenApiSection",
-   "graph_writer": "update_graph_from_openapi",
-   "module": "recon.main_recon_modules.openapi_recon",
+   "module": "recon.main_recon_modules.resource_enum",
    "partial_recon_module": "openapi_recon",
    "phase": "resource_enum",
    "produces": [
-    "Domain",
-    "Subdomain",
-    "BaseURL",
-    "Endpoint"
+    "Endpoint",
+    "Parameter",
+    "BaseURL"
    ],
    "title": "OpenAPI ingestion",
    "traffic": "active"

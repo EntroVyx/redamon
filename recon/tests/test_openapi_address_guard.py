@@ -131,7 +131,7 @@ def test_a_refused_host_gets_no_request(monkeypatch, dns):
 
 
 def _engine(monkeypatch, settings, data):
-    from recon.main_recon_modules.openapi_recon import run_openapi_recon
+    from recon.helpers.openapi.discovery import _reset_pacer, run_openapi_discovery
     sent = []
 
     def get(self, url, **kwargs):
@@ -139,8 +139,10 @@ def _engine(monkeypatch, settings, data):
         return _Response(404, '')
 
     monkeypatch.setattr('requests.Session.get', get)
+    _reset_pacer()
     base = {'OPENAPI_AUTO_DISCOVER': True, 'OPENAPI_SOURCES': [], 'OPENAPI_DISCOVERY_PATHS': ['/openapi.json']}
-    return run_openapi_recon(data, {**base, **settings})['openapi'], sent
+    seeds = list(data['http_probe']['by_url'])
+    return run_openapi_discovery(data, {**base, **settings}, seeds), sent
 
 
 def test_a_discovered_origin_resolving_to_loopback_gets_no_request(monkeypatch, dns):

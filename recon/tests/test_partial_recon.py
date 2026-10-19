@@ -5774,3 +5774,80 @@ class TestRunTlsx(unittest.TestCase):
         targets = self._run([], ports=(443, 993))
         self.assertNotIn(f"{self.IP}:443", targets)
         self.assertIn(f"{self.IP}:993", targets)
+
+
+class TestRunOpenAPI(unittest.TestCase):
+    """Partial OpenAPI: one engine, merged and written through resource enumeration."""
+
+    SETTINGS = {'TARGET_DOMAIN': 'example.com', 'SUBDOMAIN_LIST': ['api.'], 'OPENAPI_AUTO_DISCOVER': False,
+                'UPDATE_GRAPH_DB': True}
+    DOC = 'https://api.example.com/openapi.json'
+
+    def _payload(self, custom=True):
+        return {
+            'documents': [{'url': self.DOC, 'version': '3.0.3', 'operation_count': 1}],
+            'operations': [{'baseurl': 'https://api.example.com', 'path': '/users/{id}', 'method': 'GET',
+                            'source_url': self.DOC, 'operation_ref': '#/paths/~1users~1{id}/get',
+                            'custom': custom, 'operation': {'parameters': [
+                                {'name': 'id', 'in': 'path', 'schema': {'example': 7}}]}}],
+            'diagnostics': [], 'skipped_servers': [], 'source_status': [], 'requests': [],
+        }
+
+    def _run(self, config, settings=None, payload=None):
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.verify_connection.return_value = True
+        client.update_graph_from_resource_enum.return_value = {'errors': [], 'endpoints_created': 2}
+        discover = MagicMock(return_value=payload or self._payload())
+        with patch('recon.partial_recon_modules.helpers.partial_settings',
+                   return_value=dict(settings or self.SETTINGS)), \
+             patch('recon.helpers.openapi.discovery.run_openapi_discovery', discover), \
+             patch('graph_db.Neo4jClient', return_value=client), \
+             patch('recon.partial_recon_modules.helpers.ROOT_PAUSE_S', 0), \
+             patch.dict(os.environ, {'USER_ID': 'u1', 'PROJECT_ID': 'p1'}):
+            from recon.partial_recon_modules.openapi_recon import run_openapi_partial
+            statuses = run_openapi_partial(config)
+        return statuses, discover, client
+
+    def test_custom_urls_are_documents_and_out_of_root_ones_are_skipped(self):
+        _, discover, _ = self._run({'domains': ['example.com'], 'include_graph_targets': False,
+                                    'user_targets': {'urls': [self.DOC + '?token=fixture-secret',
+                                                              'https://elsewhere.example.org/spec']}})
+        args, kwargs = discover.call_args
+        self.assertEqual(kwargs['documents'], [self.DOC + '?token=fixture-secret'])
+        self.assertEqual(args[2], [])  # no seeds without the graph
+
+    def test_graph_off_branch_stamps_the_root_domain_scope(self):
+        _, discover, _ = self._run({'domains': ['example.com'], 'include_graph_targets': False})
+        recon_data = discover.call_args.args[0]
+        self.assertEqual(recon_data['metadata'], {'include_root_domain': False})
+        self.assertEqual(recon_data['domain'], 'example.com')
+
+    def test_writes_through_resource_enum_and_links_custom_documents(self):
+        _, _, client = self._run({'domains': ['example.com'], 'include_graph_targets': False,
+                                  'user_targets': {'urls': [self.DOC + '?token=fixture-secret']}})
+        result = client.update_graph_from_resource_enum.call_args.kwargs.get('recon_data') \
+            or client.update_graph_from_resource_enum.call_args.args[0]
+        endpoints = result['resource_enum']['by_base_url']['https://api.example.com']['endpoints']
+        self.assertTrue(endpoints['/users/7']['declared_only'])
+        self.assertNotIn('operations', result['resource_enum']['openapi'])
+        self.assertIn('api.example.com', result['subdomains'])
+        client.update_graph_from_openapi.assert_not_called()
+        user_input = client.create_user_input_node.call_args.kwargs['user_input_data']
+        self.assertEqual(user_input['values'], [self.DOC])
+        self.assertEqual(user_input['tool_id'], 'OpenAPI')
+        rows = client.driver.session.return_value.__enter__.return_value.run.call_args.kwargs['rows']
+        self.assertEqual(rows, [{'baseurl': 'https://api.example.com', 'path': '/users/7', 'method': 'GET'}])
+
+    def test_graph_declarations_get_no_user_input(self):
+        _, _, client = self._run({'domains': ['example.com'], 'include_graph_targets': False},
+                                 payload=self._payload(custom=False))
+        client.update_graph_from_resource_enum.assert_called_once()
+        client.create_user_input_node.assert_not_called()
+
+    def test_stealth_mode_runs_nothing(self):
+        statuses, discover, client = self._run({'domains': ['example.com']},
+                                               settings={**self.SETTINGS, 'STEALTH_MODE': True})
+        self.assertIsNone(statuses)
+        discover.assert_not_called()
+        client.update_graph_from_resource_enum.assert_not_called()

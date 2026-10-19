@@ -370,11 +370,10 @@ tools:
     phase: resource_enum
     traffic: active
     enabled_key: "OPENAPI_ENABLED"
-    module: "recon.main_recon_modules.openapi_recon"
+    module: "recon.main_recon_modules.resource_enum"
     partial_recon_module: "openapi_recon"
-    graph_writer: "update_graph_from_openapi"
     form_section: "OpenApiSection"
-    produces: ["Domain", "Subdomain", "BaseURL", "Endpoint"]
+    produces: ["Endpoint", "Parameter", "BaseURL"]
   osint_enrichment:
     title: "OSINT enrichment"
     phase: domain_discovery

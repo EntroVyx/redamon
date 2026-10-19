@@ -8,6 +8,7 @@ This package contains helper functions for resource enumeration:
 - classification: Parameter and endpoint classification
 - gau_helpers: GAU passive URL discovery from web archives
 - kiterunner_helpers: Kiterunner API endpoint bruteforcing
+- openapi_helpers: OpenAPI declarations merged into by_base_url
 - katana_helpers: Katana active web crawling
 - endpoint_helpers: Endpoint organization and structuring
 """
@@ -45,6 +46,9 @@ from .kiterunner_helpers import (
     merge_kiterunner_into_by_base_url,
     detect_kiterunner_methods,
 )
+
+# OpenAPI helpers
+from .openapi_helpers import build_openapi_inventory, merge_openapi_into_by_base_url
 
 # Katana helpers
 from .katana_helpers import (
@@ -131,6 +135,9 @@ __all__ = [
     "run_kiterunner_discovery",
     "merge_kiterunner_into_by_base_url",
     "detect_kiterunner_methods",
+    # OpenAPI
+    "build_openapi_inventory",
+    "merge_openapi_into_by_base_url",
     # Katana
     "run_katana_crawler",
     "fetch_forms_from_urls",

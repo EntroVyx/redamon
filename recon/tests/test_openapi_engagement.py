@@ -5,7 +5,24 @@ import pytest
 
 from helpers import proxy_routing
 from recon.helpers.openapi.fetch import Fetcher, DocumentError
-from recon.main_recon_modules.openapi_recon import run_openapi_recon
+from recon.helpers.openapi.discovery import _reset_pacer, run_openapi_discovery
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    # The request clock is process-wide; each test starts with its own ceiling.
+    _reset_pacer()
+    yield
+    _reset_pacer()
+
+
+def discover(recon_data, settings):
+    """The engine as resource enumeration calls it: every probed and crawled URL is a seed."""
+    seeds = list((recon_data.get('http_probe') or {}).get('by_url') or {})
+    for base, data in ((recon_data.get('resource_enum') or {}).get('by_base_url') or {}).items():
+        seeds.append(base)
+        seeds.extend(base.rstrip('/') + path for path in data.get('endpoints') or {})
+    return run_openapi_discovery(recon_data, settings, seeds)
 
 
 class Response:
@@ -31,10 +48,10 @@ class Response:
 def test_configured_sources_cannot_escape_scope(monkeypatch, url, extra):
     calls = []
     monkeypatch.setattr('requests.Session.get', lambda *a, **kw: calls.append(a) or Response())
-    data = run_openapi_recon({}, {
+    data = discover({}, {
         'TARGET_DOMAIN': 'example.com', 'OPENAPI_AUTO_DISCOVER': False,
         'OPENAPI_SOURCES': [{'url': url}], **extra,
-    })['openapi']
+    })
     assert calls == []
     assert data['documents'] == []
     assert data['diagnostics'][0]['code'] == 'out_of_scope'
@@ -44,17 +61,17 @@ def test_configured_sources_cannot_escape_scope(monkeypatch, url, extra):
 def test_omitted_auto_discovery_setting_sends_no_probes(monkeypatch):
     calls = []
     monkeypatch.setattr('requests.Session.get', lambda *a, **kw: calls.append(a) or Response())
-    run_openapi_recon({'http_probe': {'by_url': {'https://api.example.com': {}}}},
-                      {'TARGET_DOMAIN': 'example.com'})
+    discover({'http_probe': {'by_url': {'https://api.example.com': {}}}},
+             {'TARGET_DOMAIN': 'example.com'})
     assert calls == []
 
 
 def test_stealth_blocks_even_explicit_sources(monkeypatch):
     calls = []
     monkeypatch.setattr('requests.Session.get', lambda *a, **kw: calls.append(a) or Response())
-    run_openapi_recon({}, {'TARGET_DOMAIN': 'example.com', 'STEALTH_MODE': True,
-                          'OPENAPI_ENABLED': True, 'OPENAPI_AUTO_DISCOVER': True,
-                          'OPENAPI_SOURCES': [{'url': 'https://api.example.com/spec'}]})
+    discover({}, {'TARGET_DOMAIN': 'example.com', 'STEALTH_MODE': True,
+                  'OPENAPI_ENABLED': True, 'OPENAPI_AUTO_DISCOVER': True,
+                  'OPENAPI_SOURCES': [{'url': 'https://api.example.com/spec'}]})
     assert calls == []
 
 
@@ -76,10 +93,10 @@ def test_rate_ceiling_covers_redirects_references_and_separate_documents(monkeyp
         calls.append((url, now[0]))
         return responses[url]
     monkeypatch.setattr('requests.Session.get', get)
-    output = run_openapi_recon({}, {'TARGET_DOMAIN': 'example.com',
+    output = discover({}, {'TARGET_DOMAIN': 'example.com',
         'ROE_GLOBAL_MAX_RPS': 2, 'ROE_ENABLED': False, 'OPENAPI_AUTO_DISCOVER': False,
         'OPENAPI_SOURCES': [{'url': 'https://api.example.com/start'},
-                            {'url': 'https://api.example.com/second'}]})['openapi']
+                            {'url': 'https://api.example.com/second'}]})
     assert len(output['documents']) == 2
     assert [url for url, _ in calls] == list(responses)
     assert [stamp for _, stamp in calls] == [100.0, 100.5, 101.0, 101.5]
@@ -101,7 +118,8 @@ def test_proxy_tag_is_sent_only_with_capture_proxy(monkeypatch):
     assert calls[0]['headers']['X-Redamon-Ctx'] == 'signed-fixture-tag'
     assert calls[0]['verify'] is False
     assert calls[1]['proxies'] == {}
-    assert calls[1]['verify'] is True
+    # Direct fetches do not verify TLS either, like every recon fetcher.
+    assert calls[1]['verify'] is False
     assert not any(k.lower() == 'x-redamon-ctx' for k in calls[1]['headers'])
     assert headers['x-redamon-ctx'] == 'untrusted-tag'
     assert all(call['headers']['Authorization'] == 'Bearer fixture' for call in calls)

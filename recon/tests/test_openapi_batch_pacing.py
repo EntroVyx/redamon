@@ -1,10 +1,26 @@
-"""Domain groups share an engagement clock without sharing fetch caches or budgets."""
-import ast
-from datetime import datetime
-from pathlib import Path
-from unittest.mock import Mock
+"""One request clock per scan paces every OpenAPI fetch, and a Domain batch splits its sources by group.
+
+A batch runs its groups one after another in one process, and a partial run
+walks its roots the same way: the RoE ceiling holds across all of them because
+the clock is process-wide (D11). A new scan is a new process; _reset_pacer()
+stands in for it here. Each configured source is fetched and reported by the
+one group whose scope allows it (D18), so the canonical file adds the groups
+up instead of repeating or contradicting them.
+"""
 
 import pytest
+
+from recon.helpers.openapi.discovery import _reset_pacer, run_openapi_discovery
+
+ROOTS = ('one.example.test', 'two.example.test')
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    _reset_pacer()
+    yield
+    _reset_pacer()
+
 
 @pytest.fixture
 def clock_and_requests(monkeypatch):
@@ -32,22 +48,30 @@ def clock_and_requests(monkeypatch):
     return now, calls
 
 
-def settings():
+def settings(extra_sources=()):
     return {
         'DOMAIN_BATCH_MODE': True, 'ROE_GLOBAL_MAX_RPS': 1,
         'UPDATE_GRAPH_DB': False,
-        'DOMAIN_BATCH_GROUPS': [
-            {'rootDomain': root, 'prefixes': ['.']}
-            for root in ('one.example.test', 'two.example.test')
-        ],
-        'OPENAPI_SOURCES': [
-            {'url': f'https://{root}/spec'}
-            for root in ('one.example.test', 'two.example.test')
-        ],
+        'DOMAIN_BATCH_GROUPS': [{'rootDomain': root, 'prefixes': ['.']} for root in ROOTS],
+        'OPENAPI_SOURCES': [{'id': root, 'url': f'https://{root}/spec'} for root in ROOTS]
+                           + list(extra_sources),
     }
 
 
-def test_partial_batch_paces_groups_and_resets_for_next_scan(monkeypatch, clock_and_requests):
+def test_sequential_groups_share_one_clock_and_a_new_scan_starts_a_new_one(clock_and_requests):
+    _, calls = clock_and_requests
+    config = settings()
+    for root in ROOTS:
+        payload = run_openapi_discovery({'domain': root}, config, [])
+        # D18: each group fetches only the source its own scope allows.
+        assert [d['url'] for d in payload['documents']] == [f'https://{root}/spec']
+    assert [stamp for _, stamp in calls] == [100.0, 101.0]
+    _reset_pacer()
+    run_openapi_discovery({'domain': ROOTS[0]}, config, [])
+    assert [stamp for _, stamp in calls] == [100.0, 101.0, 101.0]
+
+
+def test_partial_batch_paces_its_roots_on_the_same_clock(monkeypatch, clock_and_requests):
     from recon.partial_recon_modules.openapi_recon import run_openapi_partial
     monkeypatch.setattr('recon.project_settings.get_settings', settings)
     # Isolate the request ceiling from the separate inter-root pause.
@@ -55,54 +79,44 @@ def test_partial_batch_paces_groups_and_resets_for_next_scan(monkeypatch, clock_
     monkeypatch.setenv('USER_ID', 'fixture-user')
     monkeypatch.setenv('PROJECT_ID', 'fixture-project')
     _, calls = clock_and_requests
-    run_openapi_partial({'include_graph_targets': False})
+    run_openapi_partial({'domains': list(ROOTS), 'include_graph_targets': False})
+    assert [url for url, _ in calls] == [f'https://{root}/spec' for root in ROOTS]
     assert [stamp for _, stamp in calls] == [100.0, 101.0]
-    run_openapi_partial({'include_graph_targets': False})
-    assert [stamp for _, stamp in calls] == [100.0, 101.0, 101.0, 102.0]
 
 
-def test_full_batch_paces_groups_and_resets_for_next_scan(tmp_path, clock_and_requests):
-    path = Path(__file__).parents[1] / 'main.py'
-    tree = ast.parse(path.read_text())
-    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name in ('run_domain_batch', '_maybe_run_openapi', '_eligible_batch_roots')]
-    config = settings()
-    namespace = {
-        'Path': Path, 'datetime': datetime, '_settings': config,
-        'VERIFY_DOMAIN_OWNERSHIP': False, '_seed_batch_root_domains': Mock(),
-        'OUTPUT_DIR': tmp_path, 'PROJECT_ID': 'fixture-project',
-        'clear_batch_outputs': Mock(return_value=0), 'initialize_batch_canonical': Mock(),
-        'merge_batch_outputs': Mock(), 'save_recon_file': Mock(),
-        '_prune_recon_findings': Mock(),
-    }
-    exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), namespace)
-
-    def group(root, prefixes, start_time, openapi_pacer=None):
-        result = namespace['_maybe_run_openapi'](
-            {'domain': root}, config, tmp_path / 'out.json', pacer=openapi_pacer)
-        assert len(result['openapi']['documents']) == 1
-        return 0
-
-    namespace['run_domain_group'] = group
+def test_a_source_no_group_allows_is_reported_once_by_the_first_group(clock_and_requests):
     _, calls = clock_and_requests
-    for _ in range(2):
-        assert namespace['run_domain_batch'](config['DOMAIN_BATCH_GROUPS'], datetime.now()) == 0
-    assert [stamp for _, stamp in calls] == [100.0, 101.0, 101.0, 102.0]
+    config = settings([{'id': 'stray', 'url': 'https://elsewhere.example.org/spec'}])
+    first = run_openapi_discovery({'domain': ROOTS[0]}, config, [])
+    second = run_openapi_discovery({'domain': ROOTS[1]}, config, [])
+    assert [s.split('|')[:3:2] for s in first['source_status']] == [[ROOTS[0], 'ok'], ['stray', 'out_of_scope']]
+    assert [s.split('|')[:3:2] for s in second['source_status']] == [[ROOTS[1], 'ok']]
+    assert [d['code'] for d in second['diagnostics']] == []
+    assert 'https://elsewhere.example.org/spec' not in [url for url, _ in calls]
 
 
-def test_full_pipeline_forwards_pacer_through_discovery_and_saved_recon():
-    tree = ast.parse((Path(__file__).parents[1] / 'main.py').read_text())
-    calls = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in ('run_domain_group', 'run_domain_recon'):
-            calls.extend(call for call in ast.walk(node) if isinstance(call, ast.Call)
-                         and isinstance(call.func, ast.Name)
-                         and call.func.id in ('run_domain_recon', '_maybe_run_openapi'))
-    assert len(calls) == 3
-    for call in calls:
-        keyword = 'pacer' if call.func.id == '_maybe_run_openapi' else 'openapi_pacer'
-        assert any(arg.arg == keyword and isinstance(arg.value, ast.Name)
-                   and arg.value.id == 'openapi_pacer' for arg in call.keywords)
+def test_a_run_that_is_not_a_batch_group_fetches_nothing(clock_and_requests):
+    _, calls = clock_and_requests
+    payload = run_openapi_discovery({'domain': 'unlisted.example.test'}, settings(), [])
+    assert calls == []
+    assert [d['code'] for d in payload['diagnostics']] == ['invalid_scope']
+
+
+def test_group_inventories_add_up_in_the_canonical_file(tmp_path):
+    from recon.helpers.output_paths import _merge_group_into
+    from recon.helpers.resource_enum import build_openapi_inventory
+    merged = {}
+    for root in ROOTS:
+        payload = {'documents': [{'url': f'https://{root}/spec'}], 'source_status': [f'{root}|h|ok|t'],
+                   'requests': [{'url': f'https://{root}/spec'}], 'diagnostics': [], 'skipped_servers': []}
+        group = {'resource_enum': {'openapi': build_openapi_inventory(
+            {'domain': root}, payload, {'openapi_operations': 3, 'openapi_new': 2})}}
+        _merge_group_into(merged, group)
+    inventory = merged['resource_enum']['openapi']
+    assert [g['root'] for g in inventory['groups']] == list(ROOTS)
+    assert sum(g['operations_count'] for g in inventory['groups']) == 6
+    assert [s.split('|')[0] for s in inventory['source_status']] == list(ROOTS)
+    assert len(inventory['requests']) == 2
 
 
 def test_shared_clock_keeps_fetcher_caches_and_budgets_separate(clock_and_requests):

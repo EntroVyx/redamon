@@ -6,10 +6,15 @@ import time
 from urllib.parse import urldefrag, urljoin, urlsplit, urlunsplit
 
 import requests
+import urllib3
 import yaml
 from urllib3.exceptions import HTTPError
 
 from helpers import proxy_routing
+
+# Fetches use verify=False like the rest of recon; one warning per request
+# would flood the run log.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class OpenApiLoader(yaml.SafeLoader):
@@ -156,12 +161,17 @@ class RequestPacer:
 
 
 class Fetcher:
-    def __init__(self, timeout=10, max_requests=500, max_rps=0, *, pacer=None, address_guard=None):
+    def __init__(self, timeout=10, max_requests=500, max_rps=0, *, pacer=None, address_guard=None,
+                 health=None, on_request=None):
         self.timeout = min(max(float(timeout), 1), 60)
         self.max_requests = min(max(int(max_requests), 1), 1000)
         self.pacer = pacer if pacer is not None else RequestPacer(max_rps)
         # host -> bool, asked before every hop; None trusts every host (tests).
         self.address_guard = address_guard
+        # Circuit-breaker hooks (skip_if_down / host_alive / host_failed).
+        self.health = health
+        # (url, code, session_headers, routed) for every request actually sent.
+        self.on_request = on_request
         self.count = 0
         self.total_bytes = 0
         self.max_total_bytes = 32 * 1024 * 1024
@@ -193,6 +203,8 @@ class Fetcher:
             if self.address_guard is not None and not self.address_guard(urlsplit(url).hostname or ''):
                 raise DocumentError('Document host resolves to an address recon never scans',
                                     code='blocked_address')
+            if self.health is not None and self.health.skip_if_down(url):
+                raise DocumentError('Document host is unreachable this run', code='host_down')
             proxy_url, token = proxy_routing.get_capture_routing('openapi')
             routed = bool(proxy_url and token)
             request_headers = {key: value for key, value in headers.items()
@@ -207,50 +219,70 @@ class Fetcher:
             self.count += 1
             self.session.cookies.clear()
             try:
-                # Capture terminates TLS with its local CA; direct requests
-                # retain certificate verification and never carry the context tag.
+                # TLS is not verified, as for every recon fetcher: the capture
+                # proxy terminates TLS with its own CA, and targets often serve
+                # self-signed certificates. Only routed requests carry the tag.
                 response = self.session.get(url, headers=request_headers, timeout=remaining,
-                                            proxies=proxies, verify=not routed,
+                                            proxies=proxies, verify=False,
                                             allow_redirects=False, stream=True)
-                try:
-                    if response.status_code in (301, 302, 303, 307, 308):
-                        location = response.headers.get('Location') or response.headers.get('location')
-                        if not location:
-                            raise DocumentError('Redirect without location')
-                        url = http_url(urljoin(url, location))
-                        continue
-                    if response.status_code != 200:
-                        raise DocumentError(f'Document HTTP status {response.status_code}',
-                                            code=f'http_{int(response.status_code)}')
-                    chunks, size = [], 0
-                    raw = getattr(response, 'raw', None)
-                    if raw is not None and hasattr(raw, 'read1'):
-                        # read1 returns available bytes, unlike iter_content's
-                        # full-chunk reads which can hide an endless trickle.
-                        def chunks_available():
-                            while True:
-                                chunk = raw.read1(65536, decode_content=True)
-                                if not chunk:
-                                    break
-                                yield chunk
-                        stream = chunks_available()
-                    else:
-                        stream = response.iter_content(chunk_size=1)
-                    for chunk in stream:
-                        if time.monotonic() >= deadline:
-                            raise DocumentError('Document fetch deadline exceeded', code='transport_error')
-                        size += len(chunk)
-                        self.total_bytes += len(chunk)
-                        if self.total_bytes > self.max_total_bytes:
-                            raise DocumentError('Total document byte limit reached', code='limit_reached')
-                        if size > 5 * 1024 * 1024:
-                            raise DocumentError('Document exceeds 5 MiB limit', code='limit_reached')
-                        chunks.append(chunk)
-                    text = b''.join(chunks).decode('utf-8-sig')
-                finally:
-                    response.close()
-            except (requests.RequestException, HTTPError, OSError, UnicodeError):
-                raise DocumentError('Document transport or encoding error', code='transport_error') from None
+            except (requests.RequestException, HTTPError, OSError) as exc:
+                if self.health is not None:
+                    self.health.host_failed(url, exc)
+                self._record(url, 'transport_error', headers, routed)
+                raise DocumentError('Document transport error', code='transport_error') from None
+            if self.health is not None:
+                self.health.host_alive(url)
+            self._record(url, response.status_code, headers, routed)
+            try:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get('Location') or response.headers.get('location')
+                    if not location:
+                        raise DocumentError('Redirect without location')
+                    url = http_url(urljoin(url, location))
+                    continue
+                if response.status_code != 200:
+                    raise DocumentError(f'Document HTTP status {response.status_code}',
+                                        code=f'http_{int(response.status_code)}')
+                chunks, size = [], 0
+                raw = getattr(response, 'raw', None)
+                if raw is not None and hasattr(raw, 'read1'):
+                    # read1 returns available bytes, unlike iter_content's
+                    # full-chunk reads which can hide an endless trickle.
+                    def chunks_available():
+                        while True:
+                            chunk = raw.read1(65536, decode_content=True)
+                            if not chunk:
+                                break
+                            yield chunk
+                    stream = chunks_available()
+                else:
+                    stream = response.iter_content(chunk_size=1)
+                for chunk in stream:
+                    if time.monotonic() >= deadline:
+                        raise DocumentError('Document fetch deadline exceeded', code='transport_error')
+                    size += len(chunk)
+                    self.total_bytes += len(chunk)
+                    if self.total_bytes > self.max_total_bytes:
+                        raise DocumentError('Total document byte limit reached', code='limit_reached')
+                    if size > 5 * 1024 * 1024:
+                        raise DocumentError('Document exceeds 5 MiB limit', code='limit_reached')
+                    chunks.append(chunk)
+                body = b''.join(chunks)
+            except (requests.RequestException, HTTPError, OSError):
+                raise DocumentError('Document transport error', code='transport_error') from None
+            finally:
+                response.close()
+            try:
+                text = body.decode('utf-8-sig')
+            except UnicodeError:
+                raise DocumentError('Document is not UTF-8 text') from None
             self.cache[key] = (url, text)
             return url, text
         raise DocumentError('Document redirect limit reached', code='limit_reached')
+
+    def _record(self, url, code, headers, routed):
+        if self.on_request is not None:
+            try:
+                self.on_request(url, code, bool(headers), routed)
+            except Exception:  # noqa: BLE001 - the ledger must never stop a fetch
+                pass

@@ -1,10 +1,9 @@
-import copy
 import json
 import socket
 
 import pytest
 
-from recon.main_recon_modules.openapi_recon import run_openapi_recon, run_openapi_recon_isolated
+from recon.helpers.openapi.discovery import _reset_pacer, run_openapi_discovery
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +12,23 @@ def _public_dns(monkeypatch):
     # every name resolves to a documentation address.
     monkeypatch.setattr(socket, 'getaddrinfo',
                         lambda host, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('198.51.100.10', 0))])
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    # The request clock is process-wide; each test starts with its own ceiling.
+    _reset_pacer()
+    yield
+    _reset_pacer()
+
+
+def discover(recon_data, settings):
+    """The engine as resource enumeration calls it: every probed and crawled URL is a seed."""
+    seeds = list((recon_data.get('http_probe') or {}).get('by_url') or {})
+    for base, data in ((recon_data.get('resource_enum') or {}).get('by_base_url') or {}).items():
+        seeds.append(base)
+        seeds.extend(base.rstrip('/') + path for path in data.get('endpoints') or {})
+    return run_openapi_discovery(recon_data, settings, seeds)
 
 
 class Response:
@@ -49,7 +65,7 @@ def run(monkeypatch, documents, settings=None, data=None):
               'OPENAPI_AUTO_DISCOVER': False,
               'OPENAPI_SOURCES': [{'url': 'https://docs.example.com/openapi.json'}]}
     config.update(settings or {})
-    result = run_openapi_recon(data or {}, config)['openapi']
+    result = discover(data or {}, config)
     return result, calls
 
 
@@ -169,14 +185,6 @@ def test_recursive_schema_is_bounded_and_preserved(monkeypatch):
     assert '$ref' in json.dumps(result['operations'][0]['operation'])
 
 
-def test_isolated_wrapper_does_not_mutate(monkeypatch):
-    original = {'domain': 'example.com'}
-    before = copy.deepcopy(original)
-    result = run_openapi_recon_isolated(original, {'OPENAPI_ENABLED': False})
-    assert original == before
-    assert result == {}
-
-
 def test_automatic_discovery_includes_crawled_nonstandard_spec(monkeypatch):
     url = 'https://api.example.com/custom/swagger.yml'
     result, calls = run(monkeypatch, {url: Response(spec())},
@@ -292,9 +300,9 @@ def test_selector_redirects_keep_separate_sources(monkeypatch):
             return Response('', 302, {'Location': '/current.json'})
         return Response(spec(paths={'/users': {'get': {'summary': str(len(calls)), 'responses': {}}}}))
     monkeypatch.setattr('requests.Session.get', get)
-    data = run_openapi_recon({}, {'TARGET_DOMAIN': 'example.com', 'OPENAPI_AUTO_DISCOVER': False,
-                                 'OPENAPI_SOURCES': [{'url': 'https://docs.example.com/spec?group=one'},
-                                                     {'url': 'https://docs.example.com/spec?group=two'}]})['openapi']
+    data = discover({}, {'TARGET_DOMAIN': 'example.com', 'OPENAPI_AUTO_DISCOVER': False,
+                         'OPENAPI_SOURCES': [{'url': 'https://docs.example.com/spec?group=one'},
+                                             {'url': 'https://docs.example.com/spec?group=two'}]})
     assert len(data['operations']) == 2
     assert len({op['source_id'] for op in data['operations']}) == 2
 

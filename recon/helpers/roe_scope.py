@@ -5,9 +5,72 @@ Excluded-host matching for the RoE governor. Extracted from ``recon.main`` so
 active scanners (e.g. origin_discovery) can enforce the excluded-hosts list
 without importing ``recon.main`` (which pulls the whole pipeline). ``recon.main``
 re-exports these names, so ``from main import _is_roe_excluded`` still resolves.
+
+It imports no other recon module: the auth profile and the OpenAPI scope build
+on its normalizers.
 """
 
-from recon_settings.scope import _is_roe_excluded
+import ipaddress
+from urllib.parse import urlsplit
+
+
+def _is_roe_excluded(host: str, excluded_list: list) -> bool:
+    """True when ``host`` matches an RoE exclusion.
+
+    An exclusion is an exact host or IP; a domain, which also excludes its
+    subdomains; ``*.domain``, which excludes its subdomains only; or a CIDR.
+    Case, port, scheme, path and a trailing dot are ignored on both sides, and
+    an IPv6 address matches in any spelling. A bare string suffix is never an
+    IP rule: ``0.5`` does not exclude ``10.0.0.5``.
+    """
+    host = _normalize_host(host)
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    for value in excluded_list:
+        entry = _normalize_scope_entry(value)
+        if not entry:
+            continue
+        if entry.startswith('*.'):
+            if host.endswith(entry[1:]):
+                return True
+        elif '/' in entry or address is not None:
+            try:
+                if address is not None and address in ipaddress.ip_network(entry, strict=False):
+                    return True
+            except ValueError:
+                pass
+        elif host == entry or host.endswith('.' + entry):
+            return True
+    return False
+
+
+def _normalize_host(host) -> str:
+    """Lower-cased hostname/IP with any scheme, path, port and trailing dot removed."""
+    if not isinstance(host, str):
+        return ''
+    host = host.strip()
+    if '://' in host:
+        host = urlsplit(host).hostname or ''
+    elif host.startswith('['):
+        host = host[1:].split(']', 1)[0]
+    elif host.count(':') == 1:
+        host = host.split(':', 1)[0]
+    return host.strip().rstrip('.').lower()
+
+
+def _normalize_scope_entry(entry) -> str:
+    if not isinstance(entry, str):
+        return ''
+    entry = entry.strip()
+    if entry.startswith('*.'):
+        return '*.' + _normalize_host(entry[2:])
+    if '/' in entry and '://' not in entry:
+        return entry.lower()
+    return _normalize_host(entry)
 
 
 def _filter_roe_excluded(hosts: list, settings: dict, label: str = "host") -> list:
