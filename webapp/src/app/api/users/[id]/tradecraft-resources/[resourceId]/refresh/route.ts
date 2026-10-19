@@ -45,6 +45,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           user_id: id,
           github_token: tokenForFetch,
           force: true,
+          // Without it the agent falls back to its default model, which the
+          // user may have no key for, and the refresh fails with 503.
+          model: (existing as unknown as { llmModel?: string }).llmModel || '',
         }),
         signal: controller.signal,
       })

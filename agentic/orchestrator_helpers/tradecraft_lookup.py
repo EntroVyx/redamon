@@ -667,7 +667,10 @@ async def smart_fetch(
         f"[tradecraft] tier1 thin (status={r.status} ct={r.content_type} bytes={len(r.text)}), escalating to playwright"
     )
     r2 = await fetch_tier2(url, mcp_manager)
-    if r2.text:
+    # A browser-side block wins over tier 1's thin page: it carries the reason
+    # verify and the tool report, and stops verify before the crawl retries the
+    # same URL in the browser.
+    if r2.text or r2.blocked:
         return r2
     return r
 

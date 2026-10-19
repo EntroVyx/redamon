@@ -3,7 +3,9 @@
  *
  * The route proxies to the agent's /tradecraft/verify with force=true. That
  * agent route requires the internal key (CVE-2026-111323), so a refresh that
- * forgets the header fails with 401 instead of refreshing.
+ * forgets the header fails with 401 instead of refreshing. It must also send
+ * the resource's model: without one the agent falls back to its default
+ * model, which the user may have no key for, and the refresh fails with 503.
  *
  * @vitest-environment node
  */
@@ -76,5 +78,24 @@ describe('refresh route calls the agent verify endpoint', () => {
     const headers = capturedFetch!.init.headers as Record<string, string>
     expect(headers['x-internal-key']).toBe('test-internal-key')
     expect(JSON.parse(String(capturedFetch!.init.body)).force).toBe(true)
+  })
+
+  test("forwards the resource's model", async () => {
+    const req = new NextRequest(
+      'http://webapp.test/api/users/user-1/tradecraft-resources/res-1/refresh',
+      { method: 'POST' },
+    )
+    await route.POST(req as never, PARAMS as never)
+    expect(JSON.parse(String(capturedFetch!.init.body)).model).toBe('gpt-4o')
+  })
+
+  test('a legacy row with no model sends model="" (the agent then uses its fallback)', async () => {
+    mockFindFirst.mockResolvedValue({ ...EXISTING, llmModel: '' })
+    const req = new NextRequest(
+      'http://webapp.test/api/users/user-1/tradecraft-resources/res-1/refresh',
+      { method: 'POST' },
+    )
+    await route.POST(req as never, PARAMS as never)
+    expect(JSON.parse(String(capturedFetch!.init.body)).model).toBe('')
   })
 })

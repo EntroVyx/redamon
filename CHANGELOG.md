@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Refreshing a Tradecraft resource no longer fails with 503.** The refresh button did not tell the agent which model the resource uses, so the agent fell back to its default model (`claude-opus-4-6`) and failed for anyone without an Anthropic key. It now sends the resource's model, as the first verify already did.
+- **A Tradecraft page blocked by the browser guard now says so.** When the Playwright fallback refused a page reached through an internal address, verify showed `homepage rendered to thin body` and the agent's lookup `failed to fetch`, which hid the reason. Both now report `blocked: ...` with the guard's reason, and verify stops there instead of crawling the same URL.
+
 ## [7.0.3] - 2026-10-18
 
 ### Added

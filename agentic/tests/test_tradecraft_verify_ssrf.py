@@ -8,7 +8,8 @@ One class per layer of the fix:
   C. fetch_tier1, through real httpx and a loopback server, refuses a public
      page's 302 into 169.254.169.254 before the second request is sent;
   D. the GitHub token goes only to exact GitHub hosts, over https;
-  E. a refused fetch never reaches the sitemap builders, the crawl or the LLM;
+  E. a refused fetch, by httpx or by the browser, never reaches the sitemap
+     builders, the crawl or the LLM, and is reported as blocked;
   F. the browser guard script carries the URL inertly and applies the same
      address policy, and its [BLOCKED] verdict reaches the caller.
 
@@ -394,6 +395,44 @@ class VerifyStopsOnBlockedHomepage(unittest.TestCase):
         self.assertEqual(out["summary"], "")
         self.assertEqual(out["sitemap"], {})
         self.assertEqual(touched, [])
+
+
+class BrowserBlockIsReported(unittest.TestCase):
+    """httpx gets a thin page, the browser render of it is blocked: callers see
+    the block, not tier 1's thin page (which read as "thin body" in the UI)."""
+
+    REASON = "navigation reached a non-public address: http://127.0.0.1:8000/"
+
+    def _tiers(self):
+        async def thin_tier1(url, **_kw):
+            return tl.FetchResult(text="", content_type="text/html", status=200, tier=1)
+
+        async def blocked_tier2(url, _mcp):
+            return tl.FetchResult(text="", content_type="", status=0, tier=2, blocked=self.REASON)
+
+        return patch.object(tl, "fetch_tier1", thin_tier1), patch.object(tl, "fetch_tier2", blocked_tier2)
+
+    def test_smart_fetch_returns_the_browser_block(self):
+        tier1, tier2 = self._tiers()
+        with tier1, tier2:
+            r = asyncio.run(tl.smart_fetch("https://docs.example.test/", mcp_manager=object()))
+        self.assertEqual(r.blocked, self.REASON)
+        self.assertEqual(r.text, "")
+
+    def test_verify_reports_the_block_and_never_crawls(self):
+        crawled = []
+
+        async def crawl(*_a, **_kw):
+            crawled.append(True)
+            return {"nav": []}
+
+        tier1, tier2 = self._tiers()
+        with tier1, tier2, patch.object(tl, "validate_url", return_value=(True, "")), \
+             patch.object(tl, "_build_sitemap_agentic_crawl", crawl):
+            out = asyncio.run(tl.verify_resource("https://docs.example.test/",
+                                                 llm=object(), mcp_manager=object()))
+        self.assertEqual(out["last_error"], "blocked: " + self.REASON)
+        self.assertEqual(crawled, [])
 
 
 # =========================================================================
