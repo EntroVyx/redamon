@@ -528,6 +528,7 @@ Everything runs on a **fan-out / fan-in** architecture: each phase fires as many
 | | **Browser Crawling** | ZAP Ajax Spider | Active | Sequential (post-FFuf), per-seed Docker containers in parallel |
 | | **Parameter Discovery** | Arjun | Active / Passive | Methods parallel (GET/POST/JSON/XML) |
 | | **API Discovery** | Kiterunner | Active | Sequential per wordlist |
+| | **API Specification Import** | OpenAPI / Swagger (declared endpoints, never called) | Active (documents only) | Sequential (after the other sources) |
 | | **Endpoint AI Classifier** | Path + parameter classifier — tags `Endpoint.ai_interface_type` (`llm-chat`, `llm-completion`, `llm-embedding`, `llm-tool-call`, `sse-stream`, `mcp`, `llm-graphql`), `is_ai_rag_ingest`, `Parameter.is_ai_prompt_injectable` against catalogued AI signatures | Passive | Sequential (post-crawl) |
 | **JS Recon** | **JS Secret Detection** | 100 regex patterns + custom uploads | Passive | Parallel per file |
 | | **Key Validation** | 21 service validators (AWS, GitHub, Stripe, etc.) | Active | Rate-limited (1/sec/svc) |

@@ -18,13 +18,14 @@
 6. [Kiterunner Configuration](#kiterunner-configuration)
 7. [Hakrawler Configuration](#hakrawler-configuration)
 8. [jsluice Configuration](#jsluice-configuration)
-9. [Architecture & Flow](#architecture--flow)
-10. [Output Data Structure](#output-data-structure)
-11. [Endpoint Classification](#endpoint-classification)
-12. [Parameter Classification](#parameter-classification)
-13. [Form Parsing](#form-parsing)
-14. [Usage Examples](#usage-examples)
-15. [Troubleshooting](#troubleshooting)
+9. [OpenAPI / Swagger Import](#openapi--swagger-import)
+10. [Architecture & Flow](#architecture--flow)
+11. [Output Data Structure](#output-data-structure)
+12. [Endpoint Classification](#endpoint-classification)
+13. [Parameter Classification](#parameter-classification)
+14. [Form Parsing](#form-parsing)
+15. [Usage Examples](#usage-examples)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -97,7 +98,8 @@ The `resource_enum.py` module provides comprehensive endpoint discovery and clas
 | **Type Inference** | Infers parameter data types (integer, email, URL, etc.) |
 | **Endpoint Classification** | Categorizes endpoints (auth, api, admin, file_access, etc.) |
 | **Parameter Classification** | Identifies sensitive params (id, file, auth, redirect, command) |
-| **Source Tracking** | Each endpoint tracked with `sources` array: `["katana", "hakrawler", "gau", "paramspider", "kiterunner", "jsluice", "arjun"]` |
+| **Source Tracking** | Each endpoint tracked with `sources` array: `["katana", "hakrawler", "gau", "paramspider", "kiterunner", "jsluice", "arjun", "openapi"]` |
+| **OpenAPI / Swagger Import** | Endpoints and parameters declared in API specification documents, merged last and never called |
 | **Docker Execution** | Runs via Docker for consistency |
 | **Incremental Output** | Saves results as crawling progresses |
 
@@ -583,6 +585,140 @@ jsluice runs **sequentially after** the parallel crawling phase (Katana + Hakraw
 
 ---
 
+## OpenAPI / Swagger Import
+
+OpenAPI is a resource-enumeration source, next to Kiterunner. It downloads
+Swagger 2.0 and OpenAPI 3.0/3.1 documents (JSON or YAML) and turns every
+operation they declare into an `Endpoint`, with its declared `Parameter`s,
+through the same writer as every other source. **OpenAPI never calls a declared
+operation. Later scanners request an endpoint known only from a specification
+with GET or HEAD only. Nuclei templates send their own requests to such an
+endpoint, as to any other target URL.**
+
+### 1. Configuration
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `openapiEnabled` / `OPENAPI_ENABLED` | `true` | The source on or off. It runs inside Resource Enumeration, so it also needs `resource_enum` in the scan modules. |
+| `openapiSources` / `OPENAPI_SOURCES` | `[]` | Configured documents: `{id, url, serverOverride?, enabled}`. Always fetched. A token in a URL is stored and exported with the project, like the project's other secrets; it never reaches a log, the graph, a preset or MCP. |
+| `openapiAutoDiscover` / `OPENAPI_AUTO_DISCOVER` | `false` | Also look for documents on the live BaseURLs, on crawled URLs whose path looks like API documentation (`openapi`, `swagger`, `api-docs`, `/docs`), and at the discovery paths on each in-scope origin. |
+| `openapiDiscoveryPaths` / `OPENAPI_DISCOVERY_PATHS` | 12 common paths | At most 200 origin-relative paths (`url_path_list` validator: starts with `/`, no `//`, no whitespace, query or fragment). A bad entry is refused at the write and skipped on its own at scan time. Empty disables the common-path probes. |
+| `openapiTimeout` / `OPENAPI_TIMEOUT` | `10` | Seconds per document, 1 to 60. |
+| `openapiMaxDocuments` / `OPENAPI_MAX_DOCUMENTS` | `50` | Documents parsed per run, 1 to 200 (at most ten requests per document). |
+
+Literal Swagger UI `url`, `urls` and `configUrl` references, Redoc `spec-url`
+attributes and JSON literals under `swaggerDoc`/`spec` are followed; page
+JavaScript is never executed. Fixed limits: 5 MiB per document, 32 MiB per run,
+five redirects, 10,000 operations and 16 MiB of operation data per run.
+
+**Run conditions.** OpenAPI follows Resource Enumeration's gates: it does not
+run when active scans are skipped, when `resource_enum` is not a scan module, or
+when the run has no live target URL; stealth mode turns it off in full and
+partial runs. A partial **OpenAPI** run imports documents without a full recon:
+it fetches the configured documents, and each custom URL typed in the partial
+recon window as a specification document even with Auto-discover off (it must
+sit under the project scope).
+
+### 2. Security model
+
+- **Scope before any request.** Every document, redirect and `$ref` must stay on
+  the same origin and inside the project scope and the Rules of Engagement
+  exclusions; anything else is refused before a request is sent. A declared API
+  server outside the scope is never fetched and never written.
+- **Address guard.** A host the operator typed (the target domain and its
+  subdomain prefixes, Domain-batch hosts, configured document URLs, custom URLs,
+  target IPs and CIDRs) is fetched whatever it resolves to, as everywhere in
+  recon. Any other host is resolved on every hop and refused if it is a cloud
+  metadata name, if any address is loopback, link-local, unspecified or
+  multicast (IPv4-mapped IPv6 judged on its IPv4), or if it does not resolve:
+  recon runs on the host network, and the agent API there serves `/openapi.json`.
+  Private and CGNAT addresses stay allowed. A refusal sends nothing and reports
+  `blocked_address`. The check and the connection resolve separately (the
+  recon-wide DNS-rebinding limitation in README.SECURITY_POSTURE.md).
+- **Credentials.** The Authenticated Session profile's headers go to the exact
+  document origin (scheme, host, port) only; cookies are cleared per request and
+  no ambient credentials are used.
+- **Rate.** One request clock per scan on the engagement ceiling
+  (`ROE_GLOBAL_MAX_RPS`), shared by every Domain-batch group and partial root;
+  redirects and references count.
+- **Capture proxy.** With traffic capture on, document requests go through the
+  proxy with the signed context tag; direct requests never carry it. TLS is not
+  verified, as for every recon fetcher.
+- **Circuit breaker.** A host another phase found down is skipped (`host_down`),
+  and the run reports what it could not re-check.
+- **Ledger.** Every request is logged as
+  `[*][OpenAPI] GET <url> session=<yes|no> capture=<yes|no> -> <code>` and kept
+  (at most 500) under `resource_enum.openapi.requests`; neither holds a header
+  value or a query string.
+
+### 3. Graph output
+
+Each declared operation becomes an `Endpoint` under the `BaseURL` of the API
+server it names (`HAS_ENDPOINT`), keyed like every endpoint by path, method and
+base URL. A path with variables is stored as a concrete example path (the
+parameter's `example`, then `examples`, `default`, `enum[0]`, else `1`, or the
+nil UUID for a `uuid` string); a value longer than 64 characters, with a control
+character, or with `/`, `\`, `?`, `#` or a dot segment once percent-decoded
+becomes `1`, so a specification cannot rewrite a request target. The template
+is kept in `openapi_path_templates`. The document itself is a `GET` endpoint with
+`openapi_spec`, `openapi_spec_version` and `openapi_operation_count`.
+
+| Endpoint property | Meaning |
+|-------------------|---------|
+| `openapi_declared` | Declared by a specification recon imported |
+| `openapi_declared_only` | Known only from a specification, not observed by any tool; requested with GET/HEAD only. Cleared by any tool that observes the endpoint. |
+| `openapi_path_templates` | The templates this concrete path stands for |
+| `openapi_operation_id` | operationId, kept only when it is a plain identifier (`[A-Za-z0-9_.:-]`, at most 128) |
+| `openapi_deprecated` | Declared deprecated |
+| `openapi_security` | Security scheme names (plain identifiers, at most 16) |
+| `openapi_tags` | Tags (printable ASCII without quotes, backticks or angle brackets, at most 10) |
+| `openapi_spec_urls` | The declaring documents, without query strings |
+
+No free text from a specification (summary, description) reaches the graph or
+the agent. Declared `query`, body (JSON, form, multipart top-level properties,
+Swagger 2 `body`/`formData`) and `path` parameters become `Parameter` nodes;
+header and cookie parameters are counted, not stored. An endpoint a crawler
+already found keeps everything it had and is marked as declared, not
+declared-only. A declared server on a host discovery has not found is listed in
+`resource_enum.openapi.skipped_servers` (at most 200), not added. Each Domain
+records `openapi_source_status`: one `<source id>|<url hash>|<code>|<time>`
+string per configured document, which the project form shows as a badge while
+the row's URL is the one fetched.
+
+**Withdrawn declarations.** A full run clears every recon asset first. A partial
+run withdraws what a document it fetched and parsed no longer declares: the
+document's URL leaves the endpoint, and when no declaring document is left, an
+endpoint known only from a specification, with no finding on it or its
+parameters, is deleted; any other one stops being declared. A failed fetch
+withdraws nothing. A removed configured document's endpoints are cleared at the
+next full recon. A changed specification example moves a declared endpoint to a
+new concrete path, so Recon Delta shows it as removed and added.
+
+**Domain batch.** A configured document is fetched and reported by the one group
+whose scope allows it; a document no group allows is reported `out_of_scope`
+once, by the first group. `resource_enum.openapi.groups` holds one entry per
+group, so the canonical file adds them up.
+
+**Consumers.** The partial crawlers, JS analysis, supply chain, cache poisoning,
+the GraphQL scanner and the serialized scan read declared-only endpoints only
+when they are GET or HEAD; partial Arjun, which sends its own methods, reads
+none when any method but GET is configured; AI Surface's chat-shape probe skips
+them; nuclei gets a declared-only path only when it declares GET or HEAD, and at
+most 500 of them per run (the overflow is logged and recorded as
+`declared_not_sent_to_nuclei`). A node written by an earlier release with
+`openapi_declared` and no `openapi_declared_only` counts as declared-only.
+
+### 4. Verification
+
+```bash
+./redamon.sh test unit   # includes the OpenAPI recon, merge, guard, consumer and writer tests
+# real-Neo4j writer and withdrawal checks (disposable database, see the file's docstring):
+#   tests/test_resource_enum_openapi_graph_integration.py
+#   recon/tests/test_declared_only_predicate_integration.py
+```
+
+---
+
 ## Architecture & Flow
 
 > **Pipeline context:** Resource enumeration runs in **GROUP 5** of the parallelized recon pipeline, after HTTP probing (GROUP 4). The four discovery tools (Katana, Hakrawler, GAU, Kiterunner) run concurrently via an internal `ThreadPoolExecutor`. jsluice then runs sequentially on discovered JS files. Graph DB updates happen in a background thread.
@@ -644,6 +780,8 @@ jsluice runs **sequentially after** the parallel crawling phase (Katana + Hakraw
    └── Merge jsluice URLs, add 'jsluice' to sources array
    └── Apply detected methods to endpoints
    └── Track overlap statistics for each tool
+   └── OpenAPI last: fetch and parse specification documents, merge their
+       declared operations (no tool in this module requests one)
 
 7. FORM PARSING
    └── Extract HTML from http_probe responses

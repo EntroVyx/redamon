@@ -227,6 +227,7 @@ on the direct (non-proxy) path, so internal identifiers cannot leak to a target.
 | hakrawler | `-proxy` + `-H` | same |
 | kiterunner | `--proxy` + `-H` | same |
 | arjun | `HTTP_PROXY` env + `--headers` | same |
+| openapi | `requests` `proxies=` + `X-Redamon-Ctx` header, set in the same branch as the proxy | same |
 | agent curl | `-x` + `-H` | `redamon-capture-proxy:8888` (DNS) |
 | agent httpx | `-proxy` + `-H` | same |
 | agent playwright | launch `proxy={server}` + `extra_http_headers` (both wrapped and self-contained scripts) | same |
