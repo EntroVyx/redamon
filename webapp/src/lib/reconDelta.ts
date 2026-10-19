@@ -77,6 +77,8 @@ export const VOLATILE_PROPERTIES = new Set([
   'recon_coverage_gaps',
   'recon_skipped_hosts',
   'recon_nuclei_truncated',
+  // Stamped on the Domain by every OpenAPI import, even when nothing changed.
+  'openapi_last_import_at',
   // Triage and mute state: a run, a verdict or a review rewrites these on
   // every finding without the finding itself changing (C20).
   ...TRIAGE_PROPERTIES,

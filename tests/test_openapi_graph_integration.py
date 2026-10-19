@@ -209,9 +209,9 @@ class TestOpenApiGraphIntegration(unittest.TestCase):
                     ):
                         session.run(
                             "MERGE (d:Domain {name: $domain, user_id: $user_id, project_id: $project_id}) "
-                            "CREATE (s:Subdomain {name: 'foreign.example.com', user_id: $foreign_user, "
-                            "project_id: $foreign_project, actual_ip: $ip}) "
-                            "CREATE (d)-[:HAS_SUBDOMAIN]->(s)",
+                            "MERGE (s:Subdomain {name: 'foreign.example.com', user_id: $foreign_user, "
+                            "project_id: $foreign_project}) SET s.actual_ip = $ip "
+                            "MERGE (d)-[:HAS_SUBDOMAIN]->(s)",
                             domain=domain, user_id=self.user_id, project_id=self.project_id,
                             foreign_user=foreign_user, foreign_project=foreign_project, ip=expanded,
                         ).consume()
