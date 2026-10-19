@@ -328,6 +328,11 @@ function renderCisaKevCallout(data: ReportData): string {
  * documented by the target, not observed by any tool, so it is never folded
  * into the observed count.
  */
+/** A metric card counts what a tool observed; this names what only an API specification declares. */
+function declaredLabel(declared: number | undefined): string {
+  return declared ? ` (+${declared} declared)` : ''
+}
+
 function observedVsDeclared(observed: number, declared: number, noun: string): string {
   if (declared === 0) return ''
   return `<p style="margin-bottom:8px;color:#64748b">${observed} ${noun} observed, ${declared} declared in API specifications.</p>`
@@ -746,8 +751,8 @@ function renderScope(data: ReportData, narrative?: string): string {
     <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.subdomainStats.total}</div><div class="metric-label-sm">Subdomains</div></div>
     <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.infrastructureStats.totalIps}</div><div class="metric-label-sm">Unique IPs</div></div>
     <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.endpointCoverage.baseUrls}</div><div class="metric-label-sm">Base URLs</div></div>
-    <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.endpointCoverage.endpoints}</div><div class="metric-label-sm">Endpoints</div></div>
-    <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.endpointCoverage.parameters}</div><div class="metric-label-sm">Parameters</div></div>
+    <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.endpointCoverage.endpoints}</div><div class="metric-label-sm">Endpoints${declaredLabel(graphOverview.endpointCoverage.declaredEndpoints)}</div></div>
+    <div class="metric-card-sm"><div class="metric-value-sm">${graphOverview.endpointCoverage.parameters}</div><div class="metric-label-sm">Parameters${declaredLabel(graphOverview.endpointCoverage.declaredParameters)}</div></div>
   </div>
 
   <h3>Target Information</h3>

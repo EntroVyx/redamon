@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
 import { getGraphSession } from '@/app/api/graph/neo4j'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 
 function toNum(val: unknown): number {
   if (val && typeof val === 'object' && 'low' in val) return (val as { low: number }).low
@@ -99,47 +100,62 @@ export async function GET(request: NextRequest) {
       count: toNum(r.get('count')),
     }))
 
+    // An endpoint known only from an API specification is documented, not
+    // observed: Q7-Q9 count it apart, so the surface (and the risk gauge and
+    // posture radar built on Q9) is not inflated by declarations.
+
     // Q7: Endpoint categories
     const epCatResult = await session.run(
       `MATCH (:BaseURL {project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)
-       RETURN COALESCE(e.category, 'other') AS category, count(e) AS count
-       ORDER BY count DESC`,
+       WITH e, ${DECLARED_ONLY('e')} AS declared
+       RETURN COALESCE(e.category, 'other') AS category,
+              count(CASE WHEN NOT declared THEN 1 END) AS count,
+              count(CASE WHEN declared THEN 1 END) AS declared
+       ORDER BY count DESC, declared DESC`,
       { pid: projectId }
     )
     const endpointCategories = epCatResult.records.map(r => ({
       category: (r.get('category') as string) || 'other',
       count: toNum(r.get('count')),
+      declared: toNum(r.get('declared')),
     }))
 
     // Q8: Endpoint types (form / parameterized / static)
     const epTypeResult = await session.run(
       `MATCH (:BaseURL {project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)
+       WITH e, ${DECLARED_ONLY('e')} AS declared
        RETURN CASE
          WHEN e.is_form = true THEN 'Form'
          WHEN e.has_parameters = true THEN 'Parameterized'
          ELSE 'Static'
-       END AS type, count(e) AS count
-       ORDER BY count DESC`,
+       END AS type,
+       count(CASE WHEN NOT declared THEN 1 END) AS count,
+       count(CASE WHEN declared THEN 1 END) AS declared
+       ORDER BY count DESC, declared DESC`,
       { pid: projectId }
     )
     const endpointTypes = epTypeResult.records.map(r => ({
       type: (r.get('type') as string) || 'Static',
       count: toNum(r.get('count')),
+      declared: toNum(r.get('declared')),
     }))
 
     // Q9: Parameter analysis by position
     const paramResult = await session.run(
       `MATCH (:BaseURL {project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)-[:HAS_PARAMETER]->(p:Parameter)
+       WITH e, p, ${DECLARED_ONLY('e')} AS declared
        RETURN COALESCE(p.position, 'unknown') AS position,
-              count(p) AS total,
-              count(CASE WHEN p.is_injectable = true THEN 1 END) AS injectable
-       ORDER BY total DESC`,
+              count(CASE WHEN NOT declared THEN 1 END) AS total,
+              count(CASE WHEN NOT declared AND p.is_injectable = true THEN 1 END) AS injectable,
+              count(CASE WHEN declared THEN 1 END) AS declared
+       ORDER BY total DESC, declared DESC`,
       { pid: projectId }
     )
     const parameterAnalysis = paramResult.records.map(r => ({
       position: (r.get('position') as string) || 'unknown',
       total: toNum(r.get('total')),
       injectable: toNum(r.get('injectable')),
+      declared: toNum(r.get('declared')),
     }))
 
     // Q10: CDN distribution

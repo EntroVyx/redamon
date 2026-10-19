@@ -90,6 +90,7 @@ def _census_cypher(source: str) -> str:
     for raw in re.findall(r"\{(.*?)\}", body, re.S):
         key = re.search(r"key:\s*'([^']+)'", raw)
         pattern = re.search(r"pattern:\s*'([^']+)'", raw)
+        match = re.search(r"match:\s*'([^']+)'", raw)
         assert key and pattern, raw
         where_m = re.search(r"where:\s*(.*?),?\s*$", raw, re.S)
         where = None
@@ -97,16 +98,16 @@ def _census_cypher(source: str) -> str:
             # Join the string literals a `+` concatenation is made of.
             parts = re.findall(r'"([^"]*)"|\'([^\']*)\'', where_m.group(1))
             where = "".join(a or b for a, b in parts)
-        entries.append((key.group(1), pattern.group(1), where))
+        entries.append((key.group(1), pattern.group(1), where, match.group(1) if match else None))
 
     assert len(entries) >= 15, f"only {len(entries)} census entries extracted"
 
     lines, carried = [], []
-    for key, pattern, where in entries:
+    for key, pattern, where, match in entries:
         variable = pattern.split(":")[0]
         prefix = (", ".join(carried) + ", ") if carried else ""
-        lines.append(f"OPTIONAL MATCH ({pattern})" + (f" WHERE {where}" if where else ""))
-        lines.append(f"WITH {prefix}count({variable}) AS {key}")
+        lines.append(f"OPTIONAL MATCH {match or f'({pattern})'}" + (f" WHERE {where}" if where else ""))
+        lines.append(f"WITH {prefix}count({'DISTINCT ' if match else ''}{variable}) AS {key}")
         carried.append(key)
     lines.append("RETURN " + ", ".join(carried))
     return "\n".join(lines)
@@ -133,8 +134,11 @@ class McpCypherScopingTests(unittest.TestCase):
         # one place drift can hide. Pin the shape and a few keys: if the builder
         # changes, this fails loudly instead of testing a query nobody ships.
         q = self.queries["attack_surface"]
-        for key in ("subdomains", "criticalVulnerabilities", "knownExploits"):
+        for key in ("subdomains", "criticalVulnerabilities", "knownExploits",
+                    "declaredEndpoints", "declaredParameters"):
             self.assertIn(f"AS {key}", q)
+        self.assertIn("OPTIONAL MATCH (a6e:Endpoint)-[:HAS_PARAMETER]->(a6:Parameter) WHERE NOT ", q)
+        self.assertIn("count(DISTINCT a6) AS parameters", q)
         self.assertTrue(q.startswith("OPTIONAL MATCH (a0:Subdomain)"))
         self.assertIn("b7.stale_since IS NULL", q)
         self.assertEqual(q.count("OPTIONAL MATCH"), q.count("WITH "))

@@ -5,9 +5,10 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } fro
 import { useTheme } from '@/hooks/useTheme'
 import { getChartChrome, getTooltipStyle, getTooltipItemStyle, getTooltipLabelStyle, getCursorStyle } from '../utils/chartTheme'
 import { ChartCard } from './ChartCard'
+import { declaredNote } from '../utils/declared'
 
 interface ParameterAnalysisBarProps {
-  data: { position: string; total: number; injectable: number }[] | undefined
+  data: { position: string; total: number; injectable: number; declared?: number }[] | undefined
   isLoading: boolean
 }
 
@@ -19,18 +20,20 @@ export function ParameterAnalysisBar({ data, isLoading }: ParameterAnalysisBarPr
   const tooltipLabelStyle = useMemo(() => getTooltipLabelStyle(), [theme])
   const cursorStyle = useMemo(() => getCursorStyle(), [theme])
 
-  const totalParams = data?.reduce((s, d) => s + d.total, 0) || 0
-  const totalInjectable = data?.reduce((s, d) => s + d.injectable, 0) || 0
+  const observed = (data || []).filter(d => d.total > 0)
+  const totalParams = observed.reduce((s, d) => s + d.total, 0)
+  const totalInjectable = observed.reduce((s, d) => s + d.injectable, 0)
+  const declared = data?.reduce((s, d) => s + (d.declared ?? 0), 0) || 0
 
   return (
     <ChartCard
       title="Parameters by Position"
-      subtitle={`${totalInjectable} injectable of ${totalParams} total`}
+      subtitle={`${totalInjectable} injectable of ${totalParams} total${declaredNote(declared)}`}
       isLoading={isLoading}
-      isEmpty={!data?.length}
+      isEmpty={!observed.length}
     >
       <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={data || []} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
+        <BarChart data={observed} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
           <XAxis
             dataKey="position"
             tick={{ fontSize: 11, fill: chrome.axisColor }}

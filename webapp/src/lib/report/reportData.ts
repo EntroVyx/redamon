@@ -307,7 +307,7 @@ export interface ReportData {
      *  input and are escaped by the template. */
     suppressedRules: { name: string; count: number }[]
     subdomainStats: { total: number; resolved: number; uniqueIps: number }
-    endpointCoverage: { baseUrls: number; endpoints: number; parameters: number }
+    endpointCoverage: { baseUrls: number; endpoints: number; parameters: number; declaredEndpoints?: number; declaredParameters?: number }
     certificateHealth: { total: number; expired: number; expiringSoon: number; selfSigned: number; mismatched: number }
     infrastructureStats: {
       totalIps: number; ipv4: number; ipv6: number
@@ -983,11 +983,19 @@ export async function queryGraphOverview(session: any, pid: string) {
             count(DISTINCT i) AS uniqueIps`,
     { pid }
   )
+  // Observed only: an endpoint known only from an API specification is counted
+  // apart, so the Endpoints card, the posture score and attackSurfaceSize are
+  // not inflated by declarations.
   const epRes = await session.run(
     `MATCH (b:BaseURL {project_id: $pid})
      OPTIONAL MATCH (b)-[:HAS_ENDPOINT]->(e:Endpoint)
      OPTIONAL MATCH (e)-[:HAS_PARAMETER]->(p:Parameter)
-     RETURN count(DISTINCT b) AS baseUrls, count(DISTINCT e) AS endpoints, count(DISTINCT p) AS parameters`,
+     WITH b, e, p, ${DECLARED_ONLY('e')} AS declared
+     RETURN count(DISTINCT b) AS baseUrls,
+            count(DISTINCT CASE WHEN NOT declared THEN e END) AS endpoints,
+            count(DISTINCT CASE WHEN NOT declared THEN p END) AS parameters,
+            count(DISTINCT CASE WHEN declared THEN e END) AS declaredEndpoints,
+            count(DISTINCT CASE WHEN declared THEN p END) AS declaredParameters`,
     { pid }
   )
   const certRes = await session.run(
@@ -1133,8 +1141,9 @@ export async function queryGraphOverview(session: any, pid: string) {
       ? { total: toNum(subRec.get('total')), resolved: toNum(subRec.get('resolved')), uniqueIps: toNum(subRec.get('uniqueIps')) }
       : { total: 0, resolved: 0, uniqueIps: 0 },
     endpointCoverage: epRec
-      ? { baseUrls: toNum(epRec.get('baseUrls')), endpoints: toNum(epRec.get('endpoints')), parameters: toNum(epRec.get('parameters')) }
-      : { baseUrls: 0, endpoints: 0, parameters: 0 },
+      ? { baseUrls: toNum(epRec.get('baseUrls')), endpoints: toNum(epRec.get('endpoints')), parameters: toNum(epRec.get('parameters')),
+          declaredEndpoints: toNum(epRec.get('declaredEndpoints')), declaredParameters: toNum(epRec.get('declaredParameters')) }
+      : { baseUrls: 0, endpoints: 0, parameters: 0, declaredEndpoints: 0, declaredParameters: 0 },
     certificateHealth: certRec
       ? { total: toNum(certRec.get('total')), expired: toNum(certRec.get('expired')), expiringSoon: toNum(certRec.get('expiringSoon')),
           selfSigned: toNum(certRec.get('selfSigned')), mismatched: toNum(certRec.get('mismatched')) }

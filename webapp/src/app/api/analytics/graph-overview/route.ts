@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { guardProject } from '@/lib/access'
 import { getGraphSession } from '@/app/api/graph/neo4j'
 import { notMuted } from '@/lib/graphMute'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 
 function toNum(val: unknown): number {
   if (val && typeof val === 'object' && 'low' in val) return (val as { low: number }).low
@@ -56,18 +57,25 @@ export async function GET(request: NextRequest) {
       ? { total: toNum(subRec.get('total')), resolved: toNum(subRec.get('resolved')), uniqueIps: toNum(subRec.get('uniqueIps')) }
       : { total: 0, resolved: 0, uniqueIps: 0 }
 
-    // Q4: Endpoint coverage
+    // Q4: Endpoint coverage. Observed only: an endpoint known only from an API
+    // specification is counted apart, so the posture radar is not inflated.
     const epResult = await session.run(
       `MATCH (b:BaseURL {project_id: $pid})
        OPTIONAL MATCH (b)-[:HAS_ENDPOINT]->(e:Endpoint)
        OPTIONAL MATCH (e)-[:HAS_PARAMETER]->(p:Parameter)
-       RETURN count(DISTINCT b) AS baseUrls, count(DISTINCT e) AS endpoints, count(DISTINCT p) AS parameters`,
+       WITH b, e, p, ${DECLARED_ONLY('e')} AS declared
+       RETURN count(DISTINCT b) AS baseUrls,
+              count(DISTINCT CASE WHEN NOT declared THEN e END) AS endpoints,
+              count(DISTINCT CASE WHEN NOT declared THEN p END) AS parameters,
+              count(DISTINCT CASE WHEN declared THEN e END) AS declaredEndpoints,
+              count(DISTINCT CASE WHEN declared THEN p END) AS declaredParameters`,
       { pid: projectId }
     )
     const epRec = epResult.records[0]
     const endpointCoverage = epRec
-      ? { baseUrls: toNum(epRec.get('baseUrls')), endpoints: toNum(epRec.get('endpoints')), parameters: toNum(epRec.get('parameters')) }
-      : { baseUrls: 0, endpoints: 0, parameters: 0 }
+      ? { baseUrls: toNum(epRec.get('baseUrls')), endpoints: toNum(epRec.get('endpoints')), parameters: toNum(epRec.get('parameters')),
+          declaredEndpoints: toNum(epRec.get('declaredEndpoints')), declaredParameters: toNum(epRec.get('declaredParameters')) }
+      : { baseUrls: 0, endpoints: 0, parameters: 0, declaredEndpoints: 0, declaredParameters: 0 }
 
     // Q5: Certificate health - match both BaseURL and IP certificate paths,
     // cast string not_after to datetime for correct comparison

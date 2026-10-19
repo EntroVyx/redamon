@@ -48,6 +48,7 @@ import {
   listExploitPaths,
 } from './analyticsTools'
 import type { McpContext } from './tools'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 
 const ctx = (scopes: string[] = ['recon:read']): McpContext => ({
   token: {
@@ -222,6 +223,28 @@ describe('the overview census', () => {
     for (const k of ['criticalVulnerabilities', 'highVulnerabilities', 'mediumVulnerabilities']) {
       expect(q).toContain(k)
     }
+  })
+
+  test('declared-only endpoints and their parameters are counted apart, on the shared predicate', () => {
+    // An API specification can declare thousands of operations no tool ever
+    // observed; counted as surface, they inflated endpoints by that much.
+    const q = attackSurfaceCypher()
+    expect(q).toContain(`OPTIONAL MATCH (a5:Endpoint) WHERE NOT ${DECLARED_ONLY('a5')}\n`)
+    expect(q).toContain(`OPTIONAL MATCH (a5d:Endpoint) WHERE ${DECLARED_ONLY('a5d')}\n`)
+    expect(q).toContain(
+      `OPTIONAL MATCH (a6e:Endpoint)-[:HAS_PARAMETER]->(a6:Parameter) WHERE NOT ${DECLARED_ONLY('a6e')}\n`)
+    expect(q).toContain(
+      `OPTIONAL MATCH (a6f:Endpoint)-[:HAS_PARAMETER]->(a6p:Parameter) WHERE ${DECLARED_ONLY('a6f')}\n`)
+    // A parameter several observed endpoints share is one parameter.
+    expect(q).toContain('count(DISTINCT a6) AS parameters')
+    expect(q).toContain('count(DISTINCT a6p) AS declaredParameters')
+  })
+
+  test('the response says which counts are observed and which only declared', async () => {
+    h.execCypher.mockResolvedValue({ records: [{ endpoints: 7, declaredEndpoints: 10000 }] })
+    const r = await getAttackSurfaceOverview(ctx(), 'p1')
+    expect(r.surface).toMatchObject({ endpoints: 7, declaredEndpoints: 10000 })
+    expect(r.notes.join(' ')).toMatch(/declaredEndpoints .* documented, not confirmed reachable/)
   })
 
   test('it returns the single aggregated row', async () => {

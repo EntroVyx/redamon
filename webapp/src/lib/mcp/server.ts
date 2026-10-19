@@ -878,6 +878,8 @@ export function buildMcpServer(ctx: McpContext, instructions?: string): McpServe
         'Counts exclude suppressed findings and findings a later scan stopped reporting, so they ' +
         'agree with graph_summary. A category at zero can mean that surface was never scanned; ' +
         'graph_summary and get_project_activity are how you tell those apart.\n\n' +
+        'Endpoints and parameters known only from an API specification are counted apart, as ' +
+        'declaredEndpoints and declaredParameters: documented, not observed.\n\n' +
         `${UNTRUSTED_DATA_NOTE}`,
       annotations: READ_ONLY,
       _meta: scopesMeta({ required: ['recon:read'] }),

@@ -11,7 +11,7 @@ import { describe, test, expect, vi } from 'vitest'
 
 vi.mock('@/lib/prisma', () => ({ default: {} }))
 
-import { queryAttackSurface } from './reportData'
+import { queryAttackSurface, queryGraphOverview } from './reportData'
 
 function int(n: number) { return { low: n, high: 0 } }
 
@@ -24,6 +24,9 @@ function fakeSession() {
       queries.push(cypher)
       if (cypher.includes('AS category')) {
         return { records: [{ get: (k: string) => ({ category: 'api', count: int(3), declared: int(2) } as Record<string, unknown>)[k] }] }
+      }
+      if (cypher.includes('AS baseUrls')) {
+        return { records: [{ get: (k: string) => ({ baseUrls: int(1), endpoints: int(7), parameters: int(4), declaredEndpoints: int(9999), declaredParameters: int(13) } as Record<string, unknown>)[k] }] }
       }
       if (cypher.includes('AS position')) {
         return { records: [{ get: (k: string) => ({ position: 'query', total: int(4), injectable: int(1), declared: int(5) } as Record<string, unknown>)[k] }] }
@@ -52,5 +55,18 @@ describe('queryAttackSurface — observed and declared endpoints', () => {
     expect(q).toContain(PREDICATE)
     expect(q).toContain('count(CASE WHEN NOT declared AND p.is_injectable = true THEN 1 END) AS injectable')
     expect(surface.parameterAnalysis).toEqual([{ position: 'query', total: 4, injectable: 1, declared: 5 }])
+  })
+})
+
+describe('queryGraphOverview — endpoint coverage', () => {
+  test('the Endpoints card, the posture score and attackSurfaceSize read observed counts', async () => {
+    const s = fakeSession()
+    const overview = await queryGraphOverview(s, 'p1')
+    const q = s.queries.find(c => c.includes('AS baseUrls'))!
+    expect(q).toContain(PREDICATE)
+    expect(q).toContain('count(DISTINCT CASE WHEN NOT declared THEN e END) AS endpoints')
+    expect(q).toContain('count(DISTINCT CASE WHEN NOT declared THEN p END) AS parameters')
+    expect(overview.endpointCoverage).toEqual(
+      { baseUrls: 1, endpoints: 7, parameters: 4, declaredEndpoints: 9999, declaredParameters: 13 })
   })
 })

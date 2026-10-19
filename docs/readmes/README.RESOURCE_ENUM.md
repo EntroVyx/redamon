@@ -709,6 +709,12 @@ most 500 of them per run (the overflow is logged and recorded as
 `declared_not_sent_to_nuclei`). A node written by an earlier release with
 `openapi_declared` and no `openapi_declared_only` counts as declared-only.
 
+**Counts.** Red Zone, the report, Insights and the MCP
+`get_attack_surface_overview` count declared-only endpoints and their parameters
+apart from observed ones, so a specification never inflates the surface, the
+risk gauge or the posture score; the overview reports them as
+`declaredEndpoints` and `declaredParameters`.
+
 ### 4. Verification
 
 ```bash

@@ -878,4 +878,12 @@ describe('Endpoints known only from an API specification', () => {
     ), null)
     expect(html).not.toContain('declared in API specifications')
   })
+
+  test('the Endpoints and Parameters cards show observed counts, declared ones beside them', () => {
+    const base = makeReportData()
+    const html = generateReportHtml(makeReportData({ graphOverview: { ...base.graphOverview,
+      endpointCoverage: { baseUrls: 1, endpoints: 7, parameters: 4, declaredEndpoints: 9999, declaredParameters: 13 } } }), null)
+    expect(html).toContain('<div class="metric-value-sm">7</div><div class="metric-label-sm">Endpoints (+9999 declared)</div>')
+    expect(html).toContain('<div class="metric-value-sm">4</div><div class="metric-label-sm">Parameters (+13 declared)</div>')
+  })
 })

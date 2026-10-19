@@ -4,7 +4,7 @@ export interface GraphOverviewData {
   totalNodes: number
   totalRelationships: number
   subdomainStats: { total: number; resolved: number; uniqueIps: number }
-  endpointCoverage: { baseUrls: number; endpoints: number; parameters: number }
+  endpointCoverage: { baseUrls: number; endpoints: number; parameters: number; declaredEndpoints?: number; declaredParameters?: number }
   certificateHealth: { total: number; expired: number; expiringSoon: number }
   topConnected: { label: string; name: string; degree: number }[]
   infrastructureStats: {
@@ -73,9 +73,10 @@ export interface AttackSurfaceData {
   dnsRecords: { type: string; count: number }[]
   securityHeaders: { name: string; isSecurity: boolean; count: number }[]
   headerCategories: { category: string; count: number }[]
-  endpointCategories: { category: string; count: number }[]
-  endpointTypes: { type: string; count: number }[]
-  parameterAnalysis: { position: string; total: number; injectable: number }[]
+  /** count / total: observed; declared: known only from an API specification. */
+  endpointCategories: { category: string; count: number; declared?: number }[]
+  endpointTypes: { type: string; count: number; declared?: number }[]
+  parameterAnalysis: { position: string; total: number; injectable: number; declared?: number }[]
   cdnDistribution: { segment: string; count: number }[]
   ipConcentration: { ip: string; subCount: number; isCdn: boolean }[]
 }

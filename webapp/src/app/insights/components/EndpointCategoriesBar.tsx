@@ -5,9 +5,10 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 
 import { useTheme } from '@/hooks/useTheme'
 import { getChartPalette, getChartChrome, getTooltipStyle, getTooltipItemStyle, getTooltipLabelStyle, getCursorStyle } from '../utils/chartTheme'
 import { ChartCard } from './ChartCard'
+import { declaredNote } from '../utils/declared'
 
 interface EndpointCategoriesBarProps {
-  data: { category: string; count: number }[] | undefined
+  data: { category: string; count: number; declared?: number }[] | undefined
   isLoading: boolean
 }
 
@@ -20,12 +21,16 @@ export function EndpointCategoriesBar({ data, isLoading }: EndpointCategoriesBar
   const tooltipLabelStyle = useMemo(() => getTooltipLabelStyle(), [theme])
   const cursorStyle = useMemo(() => getCursorStyle(), [theme])
 
-  const total = data?.reduce((s, d) => s + d.count, 0) || 0
+  // Bars show what a tool observed; endpoints only an API specification
+  // declares are named in the subtitle, not drawn as surface.
+  const observed = (data || []).filter(d => d.count > 0)
+  const total = observed.reduce((s, d) => s + d.count, 0)
+  const declared = data?.reduce((s, d) => s + (d.declared ?? 0), 0) || 0
 
   return (
-    <ChartCard title="Endpoint Categories" subtitle={`${total} endpoints`} isLoading={isLoading} isEmpty={!data?.length}>
+    <ChartCard title="Endpoint Categories" subtitle={`${total} endpoints${declaredNote(declared)}`} isLoading={isLoading} isEmpty={!observed.length}>
       <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={data || []} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
+        <BarChart data={observed} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
           <XAxis
             dataKey="category"
             tick={{ fontSize: 10, fill: chrome.axisColor }}
@@ -35,7 +40,7 @@ export function EndpointCategoriesBar({ data, isLoading }: EndpointCategoriesBar
           <YAxis tick={{ fontSize: 11, fill: chrome.axisColor }} axisLine={false} tickLine={false} />
           <Tooltip cursor={cursorStyle} contentStyle={tooltipStyle} itemStyle={tooltipItemStyle} labelStyle={tooltipLabelStyle} />
           <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={32} name="Endpoints">
-            {(data || []).map((_, i) => (
+            {observed.map((_, i) => (
               <Cell key={i} fill={colors[i % colors.length]} />
             ))}
           </Bar>

@@ -57,8 +57,11 @@ const TOP_N = 50
 
 interface CensusEntry {
   key: string
+  /** The node counted, `variable:Label`. */
   pattern: string
   where?: string
+  /** A relationship pattern that reaches `pattern`'s node, counted DISTINCT. */
+  match?: string
 }
 
 /**
@@ -76,8 +79,28 @@ const CENSUS: CensusEntry[] = [
   { key: 'openPorts', pattern: 'a2:Port' },
   { key: 'services', pattern: 'a3:Service' },
   { key: 'baseUrls', pattern: 'a4:BaseURL' },
-  { key: 'endpoints', pattern: 'a5:Endpoint' },
-  { key: 'parameters', pattern: 'a6:Parameter' },
+  // An endpoint known only from an API specification is documented, not
+  // observed, so it is counted apart. The predicate is DECLARED_ONLY written
+  // out: tests/test_mcp_cypher_scoping.py reads these entries as string
+  // literals, and analyticsTools.test.ts pins them to the helper.
+  {
+    key: 'endpoints', pattern: 'a5:Endpoint',
+    where: 'NOT coalesce(a5.openapi_declared_only, a5.openapi_declared, false)',
+  },
+  {
+    key: 'declaredEndpoints', pattern: 'a5d:Endpoint',
+    where: 'coalesce(a5d.openapi_declared_only, a5d.openapi_declared, false)',
+  },
+  {
+    key: 'parameters', pattern: 'a6:Parameter',
+    match: '(a6e:Endpoint)-[:HAS_PARAMETER]->(a6:Parameter)',
+    where: 'NOT coalesce(a6e.openapi_declared_only, a6e.openapi_declared, false)',
+  },
+  {
+    key: 'declaredParameters', pattern: 'a6p:Parameter',
+    match: '(a6f:Endpoint)-[:HAS_PARAMETER]->(a6p:Parameter)',
+    where: 'coalesce(a6f.openapi_declared_only, a6f.openapi_declared, false)',
+  },
   { key: 'technologies', pattern: 'a7:Technology' },
   { key: 'certificates', pattern: 'a8:Certificate' },
   { key: 'dnsRecords', pattern: 'a9:DNSRecord' },
@@ -111,11 +134,11 @@ const CENSUS: CensusEntry[] = [
 export function attackSurfaceCypher(): string {
   const lines: string[] = []
   const carried: string[] = []
-  for (const { key, pattern, where } of CENSUS) {
+  for (const { key, pattern, where, match } of CENSUS) {
     const variable = pattern.slice(0, pattern.indexOf(':'))
     const prefix = carried.length ? `${carried.join(', ')}, ` : ''
-    lines.push(`OPTIONAL MATCH (${pattern})${where ? ` WHERE ${where}` : ''}`)
-    lines.push(`WITH ${prefix}count(${variable}) AS ${key}`)
+    lines.push(`OPTIONAL MATCH ${match ?? `(${pattern})`}${where ? ` WHERE ${where}` : ''}`)
+    lines.push(`WITH ${prefix}count(${match ? 'DISTINCT ' : ''}${variable}) AS ${key}`)
     carried.push(key)
   }
   lines.push(`RETURN ${carried.join(', ')}`)
@@ -215,6 +238,9 @@ export async function getAttackSurfaceOverview(ctx: McpContext, projectId: strin
       STALE_NOTE,
       'A category at zero means nothing of that kind is in the graph, which can equally mean ' +
         'that surface was never scanned. graph_summary and get_project_activity tell those apart.',
+      'endpoints and parameters count what a tool observed. declaredEndpoints and ' +
+        'declaredParameters count what only an API specification declares: documented, not ' +
+        'confirmed reachable (Endpoint.openapi_declared_only).',
     ],
   }
 }
