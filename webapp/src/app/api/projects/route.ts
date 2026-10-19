@@ -14,6 +14,7 @@ import { buildCreateRoeArtefacts, stripRoeArtefacts } from '@/lib/roe/createRoe'
 import { extractRoeText, ExtractError, type ExtractedDocument } from '@/lib/roe/extractText'
 import { ALLOWED_EXTENSIONS_LABEL, MAX_FILE_SIZE, classifyRoeFile, type RoeFileKind } from '@/lib/roe/limits'
 import { contentLengthProblem } from '@/lib/roe/upload'
+import { normalizeOpenApiSourceIds, validateOpenApiSettings, stripLegacyOpenApiHeaders } from '@/lib/validation/openapiSettings'
 
 const AGENT_API_URL = process.env.AGENT_API_URL || 'http://localhost:8080'
 
@@ -47,7 +48,7 @@ export async function GET() {
       }
     })
 
-    return NextResponse.json(projects)
+    return NextResponse.json(projects.map(project => stripLegacyOpenApiHeaders(project)))
   } catch (error) {
     console.error('Failed to fetch projects:', error)
     return NextResponse.json(
@@ -102,6 +103,15 @@ export async function POST(request: NextRequest) {
       }
     } else {
       body = await request.json()
+    }
+
+    body = stripLegacyOpenApiHeaders(body)
+    const openapiError = validateOpenApiSettings(body)
+    if (openapiError) {
+      return NextResponse.json({ error: openapiError }, { status: 400 })
+    }
+    if ('openapiSources' in body) {
+      body.openapiSources = normalizeOpenApiSourceIds(body.openapiSources)
     }
 
     const { userId: _bodyUserId, name, targetDomain, ipMode, domainBatchMode,
@@ -447,7 +457,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json(project, { status: 201 })
+    return NextResponse.json(stripLegacyOpenApiHeaders(project), { status: 201 })
   } catch (error) {
     console.error('Failed to create project:', error)
     return NextResponse.json(
