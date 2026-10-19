@@ -50,18 +50,14 @@ function clamp(raw: string, min: number, max: number): number {
   return Number.isNaN(n) ? min : Math.min(max, Math.max(min, n))
 }
 
-const BADGE_COLORS: Record<string, string> = {
-  Imported: '#16a34a',
-  'Not fetched yet': '#64748b',
+const BADGE_TONES: Record<string, string> = {
+  Imported: 'success',
+  'Not fetched yet': 'muted',
 }
 
 function StatusBadge({ label }: { label: string }) {
-  const color = BADGE_COLORS[label] ?? '#d97706'
   return (
-    <span style={{
-      fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-      color, border: `1px solid ${color}55`, background: `${color}14`, whiteSpace: 'nowrap',
-    }}>
+    <span className={styles.statusBadge} data-tone={BADGE_TONES[label] ?? 'warning'}>
       {label}
     </span>
   )
@@ -94,7 +90,7 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
     setSources(sources.map((source, sourceIndex) => sourceIndex === index ? { ...source, ...patch } : source))
   }
   return (
-    <div className={styles.section}>
+    <div className={`${styles.section} ${styles.formSkin}`}>
       <div className={styles.sectionHeader} onClick={() => setIsOpen(!isOpen)}>
         <h2 className={styles.sectionTitle}>
           <Braces size={16} /> OpenAPI Import
@@ -104,8 +100,8 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
         </h2>
         <div className={styles.sectionHeaderRight}>
           {onRun && enabled && (
-            <button type="button" onClick={(event) => { event.stopPropagation(); onRun() }} className="secondaryButton" title="Run OpenAPI import">
-              <Play size={11} /> Run partial recon
+            <button type="button" onClick={(event) => { event.stopPropagation(); onRun() }} className={styles.runPartialButton} title="Run OpenAPI import">
+              <Play size={10} /> Run partial recon
             </button>
           )}
           <div onClick={(event) => event.stopPropagation()}>
@@ -126,7 +122,7 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
           </p>
 
           {enabled && idle && (
-            <p className={styles.fieldHint} role="status" style={{ color: '#64748b' }}>
+            <p className={styles.fieldHint} role="status">
               {OPENAPI_IDLE_MESSAGE}: this step has nothing to import.
             </p>
           )}
@@ -144,14 +140,20 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
               <div className={styles.subSection}>
                 <h3 className={styles.subSectionTitle}>Discovery paths</h3>
                 <p className={styles.fieldHint}>Paths to try on each discovered HTTP origin, at most 200. Start with /, no query or fragment. An empty list skips common-path probes; discovered links and configured documents still work.</p>
-                {discoveryPaths.map((path, index) => (
-                  <div className={styles.fieldRow} key={`openapi-path-${index}`}>
-                    <input className="textInput" aria-label={`Discovery path ${index + 1}`} value={path} placeholder="/api-docs/" onChange={(event) => updateField('openapiDiscoveryPaths', discoveryPaths.map((value, i) => i === index ? event.target.value : value))} />
-                    <button type="button" className="iconButton" aria-label={`Remove discovery path ${index + 1}`} onClick={() => updateField('openapiDiscoveryPaths', discoveryPaths.filter((_, i) => i !== index))}><Trash2 size={14} /></button>
+                {discoveryPaths.length > 0 && (
+                  <div className={styles.itemList}>
+                    {discoveryPaths.map((path, index) => (
+                      <div className={styles.listInputRow} key={`openapi-path-${index}`}>
+                        <input className="textInput" aria-label={`Discovery path ${index + 1}`} value={path} placeholder="/api-docs/" onChange={(event) => updateField('openapiDiscoveryPaths', discoveryPaths.map((value, i) => i === index ? event.target.value : value))} />
+                        <button type="button" className={styles.removeButton} aria-label={`Remove discovery path ${index + 1}`} title="Remove" onClick={() => updateField('openapiDiscoveryPaths', discoveryPaths.filter((_, i) => i !== index))}><Trash2 size={14} /></button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                <button type="button" className="secondaryButton" disabled={discoveryPaths.length >= 200} onClick={() => updateField('openapiDiscoveryPaths', [...discoveryPaths, ''])}><Plus size={14} /> Add path</button>
-                <button type="button" className="secondaryButton" onClick={() => updateField('openapiDiscoveryPaths', [...DEFAULT_DISCOVERY_PATHS])}>Restore defaults</button>
+                )}
+                <div className={styles.controlRow}>
+                  <button type="button" className={styles.actionButton} disabled={discoveryPaths.length >= 200} onClick={() => updateField('openapiDiscoveryPaths', [...discoveryPaths, ''])}><Plus size={14} /> Add path</button>
+                  <button type="button" className="secondaryButton" onClick={() => updateField('openapiDiscoveryPaths', [...DEFAULT_DISCOVERY_PATHS])}>Restore defaults</button>
+                </div>
               </div>
               <div className={styles.fieldRow}>
                 <div className={styles.fieldGroup}>
@@ -166,7 +168,7 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
                 </div>
               </div>
 
-              <div className={styles.subSection}>
+              <div className={styles.groupHeader}>
                 <h3 className={styles.subSectionTitle}>Configured documents</h3>
                 <p className={styles.fieldHint}>
                   Protected specifications use the project&apos;s Authenticated Session; its headers and cookies are
@@ -174,40 +176,40 @@ export function OpenApiSection({ data, updateField, onRun, projectId }: OpenApiS
                   project. Endpoints a removed document declared are cleared at the next full recon. Rows left blank
                   are not saved.
                 </p>
-                {sources.map((source, index) => {
-                  const inScope = source.url ? documentInProjectScope(source.url, data) : null
-                  return (
-                    <div className={styles.subSection} key={source.id ?? `openapi-source-${index}`}>
-                      <div className={styles.toggleRow}>
-                        <span className={styles.toggleLabel} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          Source {index + 1}
-                          {projectId && labels[index] && <StatusBadge label={labels[index]!} />}
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Toggle checked={source.enabled ?? true} onChange={(checked) => updateSource(index, { enabled: checked })} />
-                          <button type="button" className="iconButton" onClick={() => setSources(sources.filter((_, i) => i !== index))} aria-label={`Remove source ${index + 1}`}><Trash2 size={14} /></button>
-                        </div>
+              </div>
+              {sources.map((source, index) => {
+                const inScope = source.url ? documentInProjectScope(source.url, data) : null
+                return (
+                  <div className={styles.subSection} key={source.id ?? `openapi-source-${index}`}>
+                    <div className={styles.docCardHead}>
+                      <div className={styles.sourceCardHeading}>
+                        <strong className={styles.sourceCardTitle}>Source {index + 1}</strong>
+                        {projectId && labels[index] && <StatusBadge label={labels[index]!} />}
                       </div>
-                      <div className={styles.fieldRow}>
-                        <div className={styles.fieldGroup}>
-                          <label className={styles.fieldLabel}>Document URL</label>
-                          <input type="url" className="textInput" value={source.url} placeholder="https://docs.example.test/openapi.json" onChange={(event) => updateSource(index, { url: event.target.value })} />
-                          {inScope === false && (
-                            <span className={styles.fieldHint} style={{ color: '#d97706' }}>
-                              Outside the project scope: this document will be skipped.
-                            </span>
-                          )}
-                        </div>
-                        <div className={styles.fieldGroup}>
-                          <label className={styles.fieldLabel}>Server override (optional)</label>
-                          <input type="url" className="textInput" value={source.serverOverride ?? ''} placeholder="https://api.example.test/v2" onChange={(event) => updateSource(index, { serverOverride: event.target.value || undefined })} />
-                        </div>
+                      <div className={styles.controlRow}>
+                        <Toggle checked={source.enabled ?? true} onChange={(checked) => updateSource(index, { enabled: checked })} />
+                        <button type="button" className={styles.removeButton} onClick={() => setSources(sources.filter((_, i) => i !== index))} aria-label={`Remove source ${index + 1}`} title="Remove"><Trash2 size={14} /></button>
                       </div>
                     </div>
-                  )
-                })}
-                <button type="button" className="secondaryButton" onClick={() => setSources([...sources, { id: newSourceId(), url: '', enabled: true }])}><Plus size={14} /> Add document</button>
-              </div>
+                    <div className={styles.fieldRow}>
+                      <div className={styles.fieldGroup}>
+                        <label className={styles.fieldLabel}>Document URL</label>
+                        <input type="url" className="textInput" value={source.url} placeholder="https://docs.example.test/openapi.json" onChange={(event) => updateSource(index, { url: event.target.value })} />
+                        {inScope === false && (
+                          <span className={`${styles.fieldHint} ${styles.fieldHintCaution}`}>
+                            Outside the project scope: this document will be skipped.
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles.fieldGroup}>
+                        <label className={styles.fieldLabel}>Server override (optional)</label>
+                        <input type="url" className="textInput" value={source.serverOverride ?? ''} placeholder="https://api.example.test/v2" onChange={(event) => updateSource(index, { serverOverride: event.target.value || undefined })} />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              <button type="button" className={styles.actionButton} onClick={() => setSources([...sources, { id: newSourceId(), url: '', enabled: true }])}><Plus size={14} /> Add document</button>
             </>
           )}
         </div>
