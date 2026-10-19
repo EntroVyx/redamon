@@ -277,5 +277,64 @@ class TestResourceEnumOpenApiGraph(unittest.TestCase):
         self.assertIsNone(other[0]['s'])
 
 
+    # -- D17: a re-read specification that no longer declares an endpoint ---
+
+    def _withdraw(self, reread, redeclared, started_before_import=False, started_at=None):
+        from graph_db.mixins.base_mixin import run_timestamp
+        return self.client.prune_withdrawn_openapi_declarations(
+            *A, reread, started_at or run_timestamp(), redeclared)
+
+    def _only_user(self, doc=DOC):
+        return {'/users/7': _declaration(doc)['/users/7']}
+
+    def test_a_dropped_declaration_is_deleted_with_its_orphan_parameter(self):
+        self._import({BASE: {'endpoints': _declaration()}})
+        stats = self._withdraw([DOC], {f'POST {BASE}/orders': [DOC]})
+        self.assertEqual(stats, {'deleted': 1, 'withdrawn': 0})
+        self.assertEqual(self._run('MATCH (e:Endpoint {path: "/users/7", user_id: $u, project_id: $p}) '
+                                   'RETURN count(e) AS n', u=A[0], p=A[1])[0]['n'], 0)
+        self.assertEqual(self._run('MATCH (q:Parameter {name: "id", position: "path", user_id: $u, project_id: $p}) '
+                                   'RETURN count(q) AS n', u=A[0], p=A[1])[0]['n'], 0)
+        # The observed endpoint the same document also declared is untouched.
+        self.assertEqual(self._endpoint('/orders', 'POST')['openapi_spec_urls'], [DOC])
+
+    def test_a_dropped_declaration_with_a_finding_is_kept_and_stops_being_declared(self):
+        self._import({BASE: {'endpoints': self._only_user()}})
+        self._run('MATCH (e:Endpoint {path: "/users/7", method: "GET", user_id: $u, project_id: $p}) '
+                  'MERGE (v:Vulnerability {id: "fixture-d17", user_id: $u, project_id: $p}) '
+                  'MERGE (e)-[:HAS_VULNERABILITY]->(v)', u=A[0], p=A[1])
+        stats = self._withdraw([DOC], {})
+        self.assertEqual(stats, {'deleted': 0, 'withdrawn': 1})
+        user = self._endpoint('/users/7', 'GET')
+        self.assertFalse(user['openapi_declared'])
+        for gone in ('openapi_spec_urls', 'openapi_declared_only', 'openapi_operation_id', 'openapi_tags',
+                     'openapi_path_templates', 'openapi_security', 'openapi_deprecated'):
+            self.assertNotIn(gone, user)
+
+    def test_a_failed_fetch_or_another_document_removes_nothing(self):
+        self._import({BASE: {'endpoints': _declaration()}})
+        before = self._counts(A)
+        self.assertEqual(self._withdraw([], {}), {'deleted': 0, 'withdrawn': 0})
+        self.assertEqual(self._withdraw([DOC2], {}), {'deleted': 0, 'withdrawn': 0})
+        self.assertEqual(self._counts(A), before)
+        self.assertTrue(self._endpoint('/users/7', 'GET')['openapi_declared_only'])
+
+    def test_of_two_documents_the_one_that_dropped_it_loses_only_its_url(self):
+        self._import({BASE: {'endpoints': self._only_user()}})
+        self._import({BASE: {'endpoints': self._only_user(DOC2)}})
+        stats = self._withdraw([DOC, DOC2], {f'GET {BASE}/users/7': [DOC2]})
+        self.assertEqual(stats, {'deleted': 0, 'withdrawn': 1})
+        user = self._endpoint('/users/7', 'GET')
+        self.assertEqual(user['openapi_spec_urls'], [DOC2])
+        self.assertTrue(user['openapi_declared_only'])
+
+    def test_an_endpoint_this_run_wrote_is_never_deleted(self):
+        from graph_db.mixins.base_mixin import run_timestamp
+        started = run_timestamp()
+        self._import({BASE: {'endpoints': self._only_user()}})
+        stats = self._withdraw([DOC], {}, started_at=started)
+        self.assertEqual(stats, {'deleted': 0, 'withdrawn': 1})
+        self.assertFalse(self._endpoint('/users/7', 'GET')['openapi_declared'])
+
 if __name__ == '__main__':
     unittest.main()

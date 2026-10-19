@@ -633,3 +633,99 @@ class ResourceMixin:
                 print(f"[!][graph-db] {len(stats['errors'])} errors occurred")
 
         return stats
+
+    def prune_withdrawn_openapi_declarations(self, user_id: str, project_id: str, reread_spec_urls,
+                                             run_started_at: str, redeclared=None) -> dict:
+        """Withdraw what a re-read specification no longer declares (D17).
+
+        Partial OpenAPI runs only: a full run clears every recon asset first,
+        and a partial run is the project's only writer while it runs.
+        ``reread_spec_urls`` are the documents this run fetched AND parsed, so a
+        failed fetch withdraws nothing. ``redeclared`` maps
+        ``"<METHOD> <baseurl><path>"`` to the spec URLs that declared that
+        endpoint this run.
+
+        An endpoint carrying a re-read URL that did not declare it again loses
+        that URL. When no URL is left, an endpoint known only from a
+        specification, with no finding on it or its parameters and not written
+        by this run, is deleted; any other one stops being declared. The write
+        lock is taken before anything attached is read (the prune_unseen_findings
+        idiom), so a finding committed meanwhile is never deleted with its node.
+        """
+        stats = {"deleted": 0, "withdrawn": 0}
+        urls = sorted({u for u in reread_spec_urls or [] if isinstance(u, str) and u})
+        if not urls:
+            return stats
+        params = dict(user_id=user_id, project_id=project_id)
+
+        def work(tx):
+            rows = tx.run(
+                """
+                MATCH (e:Endpoint {user_id: $user_id, project_id: $project_id})
+                WHERE any(u IN coalesce(e.openapi_spec_urls, []) WHERE u IN $urls)
+                WITH e, coalesce($redeclared[e.method + ' ' + e.baseurl + e.path], []) AS again
+                WITH e, [u IN e.openapi_spec_urls WHERE u IN $urls AND NOT u IN again] AS dropped
+                WHERE size(dropped) > 0
+                SET e._prune_lock = true
+                REMOVE e._prune_lock
+                WITH e, [u IN e.openapi_spec_urls WHERE NOT u IN dropped] AS remaining
+                RETURN elementId(e) AS eid, remaining,
+                       size(remaining) = 0
+                       AND coalesce(e.openapi_declared_only, e.openapi_declared, false)
+                       AND (e.updated_at IS NULL OR e.updated_at < datetime($run_started_at))
+                       AND NOT EXISTS { (e)-[:HAS_VULNERABILITY]->() }
+                       AND NOT EXISTS { ()-[:FOUND_AT]->(e) }
+                       AND NOT EXISTS {
+                           MATCH (e)-[:HAS_PARAMETER]->(p:Parameter)
+                           WHERE EXISTS { ()-[:AFFECTS_PARAMETER]->(p) }
+                              OR EXISTS { (p)-[:HAS_VULNERABILITY]->() }
+                       } AS delete_it
+                """,
+                urls=urls, redeclared=redeclared or {}, run_started_at=run_started_at, **params,
+            ).data()
+            gone = [r["eid"] for r in rows if r["delete_it"]]
+            kept = [{"eid": r["eid"], "remaining": r["remaining"]} for r in rows if not r["delete_it"]]
+            tx.run(
+                """
+                UNWIND $rows AS row
+                MATCH (e:Endpoint {user_id: $user_id, project_id: $project_id})
+                WHERE elementId(e) = row.eid
+                SET e.openapi_spec_urls = CASE WHEN size(row.remaining) = 0 THEN null ELSE row.remaining END
+                WITH e, row WHERE size(row.remaining) = 0
+                SET e.openapi_declared = false
+                REMOVE e.openapi_declared_only, e.openapi_operation_id, e.openapi_deprecated,
+                       e.openapi_security, e.openapi_tags, e.openapi_path_templates
+                """,
+                rows=kept, **params,
+            ).consume()
+            orphans = tx.run(
+                """
+                UNWIND $ids AS eid
+                MATCH (e:Endpoint {user_id: $user_id, project_id: $project_id})
+                WHERE elementId(e) = eid
+                OPTIONAL MATCH (e)-[:HAS_PARAMETER]->(p:Parameter)
+                WITH e, collect(elementId(p)) AS pids
+                DETACH DELETE e
+                RETURN pids
+                """,
+                ids=gone, **params,
+            ).data()
+            pids = sorted({pid for r in orphans for pid in r["pids"] if pid})
+            # Parameters are keyed per path; one another method still uses stays.
+            tx.run(
+                """
+                UNWIND $pids AS pid
+                MATCH (p:Parameter {user_id: $user_id, project_id: $project_id})
+                WHERE elementId(p) = pid
+                  AND NOT EXISTS { ()-[:HAS_PARAMETER]->(p) }
+                  AND NOT EXISTS { ()-[:AFFECTS_PARAMETER]->(p) }
+                  AND NOT EXISTS { (p)-[:HAS_VULNERABILITY]->() }
+                DETACH DELETE p
+                """,
+                pids=pids, **params,
+            ).consume()
+            return len(gone), len(kept)
+
+        with self.driver.session() as session:
+            stats["deleted"], stats["withdrawn"] = session.execute_write(work)
+        return stats

@@ -5851,3 +5851,18 @@ class TestRunOpenAPI(unittest.TestCase):
         self.assertIsNone(statuses)
         discover.assert_not_called()
         client.update_graph_from_resource_enum.assert_not_called()
+
+    def test_withdrawal_runs_after_the_write_for_parsed_documents_only(self):
+        _, _, client = self._run({'domains': ['example.com'], 'include_graph_targets': False})
+        args = client.prune_withdrawn_openapi_declarations.call_args.args
+        self.assertEqual(args[:3], ('u1', 'p1', [self.DOC]))
+        self.assertEqual(args[4], {f'GET https://api.example.com/users/7': [self.DOC]})
+        calls = [c[0] for c in client.mock_calls]
+        self.assertLess(calls.index('update_graph_from_resource_enum'),
+                        calls.index('prune_withdrawn_openapi_declarations'))
+
+    def test_no_document_parsed_withdraws_nothing(self):
+        payload = self._payload()
+        payload['documents'] = []
+        _, _, client = self._run({'domains': ['example.com'], 'include_graph_targets': False}, payload=payload)
+        client.prune_withdrawn_openapi_declarations.assert_not_called()

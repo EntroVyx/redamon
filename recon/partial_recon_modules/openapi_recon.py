@@ -38,6 +38,16 @@ def _spec_like_graph_urls(roots, user_id, project_id, domain_groups):
     return urls
 
 
+def _redeclared(by_base_url):
+    """``"<METHOD> <baseurl><path>"`` -> the spec URLs that declared it this run."""
+    out = {}
+    for base, bucket in by_base_url.items():
+        for path, entry in (bucket.get("endpoints") or {}).items():
+            for method, meta in (entry.get("openapi") or {}).items():
+                out[f"{method} {base}{path}"] = list(meta.get("spec_urls") or [])
+    return out
+
+
 def _custom_endpoint_keys(payload):
     """(baseurl, concrete path, method) of every operation a custom document declared."""
     from recon.helpers.resource_enum.openapi_helpers import concrete_path
@@ -148,6 +158,14 @@ def run_openapi_partial(config: dict):
             graph_stats = client.update_graph_from_resource_enum(result, user_id, project_id)
             if graph_stats.get("errors"):
                 raise RuntimeError("OpenAPI graph write incomplete")
+            # D17: what a document read again no longer declares. Only documents
+            # fetched and parsed this run count, so a failed fetch removes nothing.
+            reread = [d["url"] for d in payload.get("documents") or [] if d.get("url")]
+            if reread:
+                pruned = client.prune_withdrawn_openapi_declarations(
+                    user_id, project_id, reread, run_started_at, _redeclared(by_base_url))
+                print(f"[+][OpenAPI] Withdrawn declarations: {pruned['deleted']} endpoint(s) deleted, "
+                      f"{pruned['withdrawn']} updated")
             custom = _custom_endpoint_keys(payload)
             if custom:
                 _link_user_input(client, roots, user_id, project_id, custom_urls, custom, graph_stats)
