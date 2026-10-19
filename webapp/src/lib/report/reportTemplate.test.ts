@@ -850,3 +850,32 @@ describe('RoE provenance', () => {
     expect(html).not.toContain('<img src=x')
   })
 })
+
+describe('Endpoints known only from an API specification', () => {
+  function withSurface(endpointCategories: ReportData['attackSurface']['endpointCategories'],
+                       parameterAnalysis: ReportData['attackSurface']['parameterAnalysis']) {
+    const base = makeReportData()
+    return makeReportData({ attackSurface: { ...base.attackSurface, endpointCategories, parameterAnalysis } })
+  }
+
+  test('observed and declared are reported side by side, never summed', () => {
+    const html = generateReportHtml(withSurface(
+      [{ category: 'api', count: 3, declared: 2 }, { category: 'auth', count: 1, declared: 0 }],
+      [{ position: 'query', total: 4, injectable: 1, declared: 5 }],
+    ), null)
+    expect(html).toContain('4 endpoints observed, 2 declared in API specifications.')
+    expect(html).toContain('<th>Category</th><th>Observed</th><th>Declared</th>')
+    expect(html).toContain('<tr><td>api</td><td>3</td><td>2</td></tr>')
+    expect(html).toContain('4 parameters observed, 5 declared in API specifications.')
+    // The injectable rate is over observed parameters only.
+    expect(html).toContain('of 4 parameters (25%) are injectable')
+  })
+
+  test('a project with no declaration shows no declared line', () => {
+    const html = generateReportHtml(withSurface(
+      [{ category: 'api', count: 3, declared: 0 }],
+      [{ position: 'query', total: 4, injectable: 1, declared: 0 }],
+    ), null)
+    expect(html).not.toContain('declared in API specifications')
+  })
+})

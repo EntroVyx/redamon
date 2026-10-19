@@ -179,7 +179,13 @@ function condenseForAgent(data: ReturnType<typeof gatherReportData> extends Prom
       services: data.attackSurface.services,
       ports: data.attackSurface.ports,
       securityHeaders: data.attackSurface.securityHeaders,
+      // Each position carries observed `total` and `declared` (known only
+      // from an API specification): the summary must not merge the two.
       parameterAnalysis: data.attackSurface.parameterAnalysis,
+      endpoints: {
+        observed: data.attackSurface.endpointCategories.reduce((s, c) => s + c.count, 0),
+        declaredInApiSpecifications: data.attackSurface.endpointCategories.reduce((s, c) => s + (c.declared ?? 0), 0),
+      },
     },
     vulnerabilities: {
       severityDistribution: data.vulnerabilities.severityDistribution,

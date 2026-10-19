@@ -102,6 +102,20 @@
   letter-spacing: 0.05em;
 }
 
+/* Known only from an API specification: documented, not observed. */
+.declaredBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: var(--font-semibold);
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-secondary);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  white-space: nowrap;
+}
+
 .boolTrue {
   color: #22c55e;
   font-weight: var(--font-medium);

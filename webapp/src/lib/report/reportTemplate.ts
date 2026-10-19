@@ -323,6 +323,16 @@ function renderCisaKevCallout(data: ReportData): string {
   </div>`
 }
 
+/**
+ * "N observed, M declared in API specifications". A declared endpoint is
+ * documented by the target, not observed by any tool, so it is never folded
+ * into the observed count.
+ */
+function observedVsDeclared(observed: number, declared: number, noun: string): string {
+  if (declared === 0) return ''
+  return `<p style="margin-bottom:8px;color:#64748b">${observed} ${noun} observed, ${declared} declared in API specifications.</p>`
+}
+
 /** Render Injectable Parameters Breakdown */
 function renderInjectableBreakdown(data: ReportData): string {
   const params = data.attackSurface.parameterAnalysis
@@ -353,6 +363,7 @@ function renderInjectableBreakdown(data: ReportData): string {
     <span style="color:#64748b"> of ${totalParams} parameters (${overallPct}%) are injectable</span>
   </p>
   <div style="margin-bottom:12px">${cssBarGaugeRisk(overallPct, `${totalInjectable} injectable / ${totalParams} total (${overallPct}%)`)}</div>
+  ${observedVsDeclared(totalParams, params.reduce((s, p) => s + (p.declared ?? 0), 0), 'parameters')}
   <table class="data-table">
     <thead><tr><th>Position</th><th>Total</th><th>Injectable</th><th>Rate</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -1046,9 +1057,13 @@ function renderAttackSurface(data: ReportData, narrative?: string): string {
 
   ${attackSurface.endpointCategories.length > 0 ? `
   <h3>Endpoint Categories</h3>
+  ${observedVsDeclared(
+    attackSurface.endpointCategories.reduce((s, c) => s + c.count, 0),
+    attackSurface.endpointCategories.reduce((s, c) => s + (c.declared ?? 0), 0),
+    'endpoints')}
   <table class="data-table">
-    <thead><tr><th>Category</th><th>Count</th></tr></thead>
-    <tbody>${attackSurface.endpointCategories.map(c => `<tr><td>${esc(c.category)}</td><td>${c.count}</td></tr>`).join('')}</tbody>
+    <thead><tr><th>Category</th><th>Observed</th><th>Declared</th></tr></thead>
+    <tbody>${attackSurface.endpointCategories.map(c => `<tr><td>${esc(c.category)}</td><td>${c.count}</td><td>${c.declared ?? 0}</td></tr>`).join('')}</tbody>
   </table>` : ''}
 
   ${renderInjectableBreakdown(data)}

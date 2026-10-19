@@ -19,7 +19,7 @@ import { NODE_ID_HEADER, NODE_ID_KEY, NodeIdCell, NodeIdTh } from './nodeId'
 import { MuteNodeButton, useMuteNodeContext } from '../MuteNode'
 import rowStyles from './RedZoneTableRow.module.css'
 
-type CellKind = 'url' | 'mono' | 'text' | 'bool' | 'num' | 'list' | 'sev' | 'date' | 'nodeId'
+type CellKind = 'url' | 'mono' | 'text' | 'bool' | 'num' | 'list' | 'sev' | 'date' | 'nodeId' | 'declared'
 
 /**
  * Appended to every sheet at render time rather than written into each of the
@@ -67,6 +67,10 @@ function renderCell(kind: CellKind, value: unknown, max?: number) {
     case 'sev': return <SeverityBadge severity={normalizeSeverity(value as string)} />
     case 'date': return <UpdatedAtCell value={value} />
     case 'nodeId': return <NodeIdCell value={value} />
+    // Known only from an API specification: documented, not observed.
+    case 'declared': return value === true
+      ? <span className={rowStyles.declaredBadge} title="Known only from an API specification: documented, not observed">Declared</span>
+      : <span>-</span>
     default: return <Truncated text={value == null ? '' : String(value)} max={max ?? 200} />
   }
 }
@@ -214,6 +218,7 @@ const AI_SURFACE_SHEETS: SheetDef[] = [
       { key: 'ragIngest', header: 'RAG', kind: 'bool' },
       { key: 'framework', header: 'Framework', kind: 'text' },
       { key: 'source', header: 'Source', kind: 'text' },
+      { key: 'declaredOnly', header: 'Declared', kind: 'declared' },
     ] },
   { key: 'mcpServers', label: 'MCP Servers',
     node: { label: 'Endpoint', nameKey: 'path' },
@@ -283,6 +288,7 @@ const AI_RISK_SHEETS: SheetDef[] = [
       { key: 'baseUrl', header: 'Base URL', kind: 'url' },
       { key: 'toolArgPath', header: 'Tool Arg Path', kind: 'mono' },
       { key: 'position', header: 'Position', kind: 'text' },
+      { key: 'declaredOnly', header: 'Declared', kind: 'declared' },
     ] },
   { key: 'ragPoints', label: 'RAG Ingestion',
     node: { label: 'Endpoint', nameKey: 'path' },
@@ -292,6 +298,7 @@ const AI_RISK_SHEETS: SheetDef[] = [
       { key: 'path', header: 'Path', kind: 'mono' },
       { key: 'method', header: 'Method', kind: 'text' },
       { key: 'interfaceType', header: 'Interface', kind: 'text' },
+      { key: 'declaredOnly', header: 'Declared', kind: 'declared' },
     ] },
   { key: 'exposedRuntimes', label: 'Exposed Runtimes',
     node: { label: 'Technology', nameKey: 'name' },

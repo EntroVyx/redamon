@@ -96,6 +96,17 @@ describe('phase B: shared contract', () => {
 // webInitAccess
 // ---------------------------------------------------------------------------
 describe('/api/analytics/redzone/webInitAccess', () => {
+  test('a declared-only auth endpoint is counted apart unless a finding sits on it', async () => {
+    runReturn = []
+    await webInitRoute.GET(makeRequest('p1'))
+    const c = runCalls[0].cypher
+    expect(c).toContain("AND (NOT coalesce(ep.openapi_declared_only, ep.openapi_declared, false) OR (ep)-[:HAS_VULNERABILITY]->())")
+    expect(c).toContain("AND coalesce(dep.openapi_declared_only, dep.openapi_declared, false) AND NOT (dep)-[:HAS_VULNERABILITY]->()")
+    expect(c).toMatch(/WITH bu, authEps, count\(DISTINCT dep\) AS declaredAuthCount/)
+    // A declaration alone never makes a row.
+    expect(c).toMatch(/WHERE size\(authEps\) > 0 OR size\(\[x IN vulnTags WHERE x IS NOT NULL\]\) > 0/)
+  })
+
   test('Cypher filters auth endpoints by category AND login-path regex', async () => {
     runReturn = []
     await webInitRoute.GET(makeRequest('p1'))
@@ -156,6 +167,16 @@ describe('/api/analytics/redzone/webInitAccess', () => {
     expect(r.headerGrid['Strict-Transport-Security']).toBe(false)
     // 4 headers missing + 1 vuln = 5 → D
     expect(r.grade).toBe('D')
+  })
+
+  test('maps the declared auth endpoint count, 0 when the graph has none', async () => {
+    runReturn = [
+      { baseUrl: 'https://a.example.com', authEndpointCount: { low: 0, high: 0 },
+        declaredAuthCount: { low: 1, high: 0 }, vulnTags: ['missing_coop'] },
+      { baseUrl: 'https://b.example.com', authEndpointCount: { low: 2, high: 0 }, vulnTags: [] },
+    ]
+    const body = await (await webInitRoute.GET(makeRequest('p1'))).json()
+    expect(body.rows.map((r: { declaredAuthCount: number }) => r.declaredAuthCount)).toEqual([1, 0])
   })
 })
 

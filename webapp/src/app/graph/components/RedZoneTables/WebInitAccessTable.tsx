@@ -34,6 +34,8 @@ interface WebInitAccessRow {
   authEndpointMethods: string[]
   authCategories: string[]
   authEndpointCount: number
+  /** Auth endpoints known only from an API specification, with no finding on them. */
+  declaredAuthCount: number
   totalEndpointCount: number
   vulnTags: string[]
   headerGrid: Record<string, boolean>
@@ -86,6 +88,7 @@ const COLUMNS: RedZoneFilterColumn[] = [
   { key: 'server', header: 'Server' },
   { key: 'grade', header: 'Grade' },
   { key: 'authEndpointCount', header: 'Auth Endpoints' },
+  { key: 'declaredAuthCount', header: 'Declared Auth Endpoints' },
   { key: 'totalEndpointCount', header: 'Total Endpoints' },
   { key: 'authEndpointPaths', header: 'Auth Paths' },
   { key: 'authCategories', header: 'Auth Categories' },
@@ -125,6 +128,7 @@ export const WebInitAccessTable = memo(function WebInitAccessTable({ projectId }
       server: r.server,
       grade: r.grade,
       authEndpointCount: r.authEndpointCount,
+      declaredAuthCount: r.declaredAuthCount ?? 0,
       totalEndpointCount: r.totalEndpointCount,
       authEndpointPaths: r.authEndpointPaths,
       authCategories: r.authCategories,
@@ -188,6 +192,12 @@ export const WebInitAccessTable = memo(function WebInitAccessTable({ projectId }
                     <span className={rowStyles.numCell}>{r.authEndpointCount}</span>
                   </span>
                 ) : <span className={rowStyles.nullCell}>0</span>}
+                {(r.declaredAuthCount ?? 0) > 0 && (
+                  <span className={rowStyles.declaredBadge}
+                    title="Auth endpoints known only from an API specification: documented, not observed">
+                    +{r.declaredAuthCount} declared
+                  </span>
+                )}
               </td>
               <td><GradeChip grade={r.grade} /></td>
               {HEADER_CHECKS.map(h => (

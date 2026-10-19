@@ -251,3 +251,28 @@ describe('AI red-zone routes — Node ID', () => {
     expect(sheets.testedVulns[0]).toMatchObject({ nodeId: '21', evidence: 'strong' })
   })
 })
+
+describe('AI red-zone routes — endpoints known only from an API specification', () => {
+  const PREDICATE = 'coalesce(ep.openapi_declared_only, ep.openapi_declared, false) AS declaredOnly'
+
+  test('aiSurface flags declared-only LLM endpoints instead of hiding them', async () => {
+    runQueue = [[{ baseUrl: 'https://a', path: '/v1/chat', method: 'POST', declaredOnly: true }]]
+    const body = await (await aiSurface.GET(req('p1'))).json()
+    expect(runCalls[0].cypher).toContain(PREDICATE)
+    expect(body.sheets.llmEndpoints[0].declaredOnly).toBe(true)
+  })
+
+  test('aiRisk reads the flag from the parent Endpoint for parameters, and on RAG points', async () => {
+    await aiRisk.GET(req('p1'))
+    const params = runCalls.find(c => c.cypher.includes('is_ai_prompt_injectable'))!.cypher
+    expect(params).toContain('coalesce(e.openapi_declared_only, e.openapi_declared, false) AS declaredOnly')
+    const rag = runCalls.find(c => c.cypher.includes('is_ai_rag_ingest = true'))!.cypher
+    expect(rag).toContain(PREDICATE)
+  })
+
+  test('a row without the flag reads as observed', async () => {
+    runQueue = [[{ baseUrl: 'https://a', path: '/v1/chat', declaredOnly: null }]]
+    const body = await (await aiSurface.GET(req('p1'))).json()
+    expect(body.sheets.llmEndpoints[0].declaredOnly).toBe(false)
+  })
+})

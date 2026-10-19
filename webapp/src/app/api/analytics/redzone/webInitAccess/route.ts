@@ -3,6 +3,7 @@ import { rowCap } from '../rowCap'
 import { guardProject } from '@/lib/access'
 import { getGraphSession } from '@/app/api/graph/neo4j'
 import { notMuted } from '@/lib/graphMute'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 import { deriveWebInitGrade, WEB_INIT_HEADER_CHECKS } from '@/app/graph/components/RedZoneTables/webInitGrade'
 
 function toNum(val: unknown): number {
@@ -55,6 +56,10 @@ export async function GET(request: NextRequest) {
     // they are read from there, the root path first. The BaseURL-level reads stay
     // for a graph written before that split. Each OPTIONAL MATCH is aggregated
     // before the next one so the endpoint, vuln and header rows never multiply.
+    //
+    // An auth endpoint known only from an API specification is documented, not
+    // observed: it is counted apart as "declared" unless a finding sits on it,
+    // and a declaration alone never makes a row.
     const result = await session.run(
       `MATCH (bu:BaseURL {project_id: $pid})
        OPTIONAL MATCH (bu)-[:HAS_ENDPOINT]->(ep:Endpoint)
@@ -62,23 +67,31 @@ export async function GET(request: NextRequest) {
            ep.category IN $authCategories OR
            ep.path =~ '(?i).*/(login|signin|sign-in|admin|auth|authenticate|oauth|sso)(/|$|\\\\?).*'
          )
+         AND (NOT ${DECLARED_ONLY('ep')} OR (ep)-[:HAS_VULNERABILITY]->())
        WITH bu, collect(DISTINCT ep) AS authEps
+       OPTIONAL MATCH (bu)-[:HAS_ENDPOINT]->(dep:Endpoint)
+         WHERE (
+           dep.category IN $authCategories OR
+           dep.path =~ '(?i).*/(login|signin|sign-in|admin|auth|authenticate|oauth|sso)(/|$|\\\\?).*'
+         )
+         AND ${DECLARED_ONLY('dep')} AND NOT (dep)-[:HAS_VULNERABILITY]->()
+       WITH bu, authEps, count(DISTINCT dep) AS declaredAuthCount
        OPTIONAL MATCH (bu)-[:HAS_VULNERABILITY]->(v:Vulnerability)
          WHERE (v.type IN $allTypes OR v.vulnerability_type IN $allTypes OR v.name IN $allTypes)
            AND ${notMuted('v')}
-       WITH bu, authEps, collect(DISTINCT coalesce(v.type, v.vulnerability_type, v.name)) AS vulnTags
+       WITH bu, authEps, declaredAuthCount, collect(DISTINCT coalesce(v.type, v.vulnerability_type, v.name)) AS vulnTags
        WHERE size(authEps) > 0 OR size([x IN vulnTags WHERE x IS NOT NULL]) > 0
        OPTIONAL MATCH (bu)-[:HAS_ENDPOINT]->(anyEp:Endpoint)
-       WITH bu, authEps, vulnTags, count(DISTINCT anyEp) AS totalEndpointCount
+       WITH bu, authEps, declaredAuthCount, vulnTags, count(DISTINCT anyEp) AS totalEndpointCount
        OPTIONAL MATCH (bu)-[:HAS_ENDPOINT*0..1]->()-[:HAS_HEADER]->(h:Header)
          WHERE h.is_security_header = true
-       WITH bu, authEps, vulnTags, totalEndpointCount, collect(DISTINCT h.name) AS secHeaders
+       WITH bu, authEps, declaredAuthCount, vulnTags, totalEndpointCount, collect(DISTINCT h.name) AS secHeaders
        OPTIONAL MATCH (bu)-[:HAS_ENDPOINT]->(probe:Endpoint)
          WHERE probe.status_code IS NOT NULL
-       WITH bu, authEps, vulnTags, totalEndpointCount, secHeaders, probe
+       WITH bu, authEps, declaredAuthCount, vulnTags, totalEndpointCount, secHeaders, probe
        ORDER BY CASE WHEN probe.path = '/' THEN 0
                      WHEN probe.server IS NOT NULL THEN 1 ELSE 2 END, probe.path
-       WITH bu, authEps, vulnTags, totalEndpointCount, secHeaders, head(collect(probe)) AS probe
+       WITH bu, authEps, declaredAuthCount, vulnTags, totalEndpointCount, secHeaders, head(collect(probe)) AS probe
        OPTIONAL MATCH (sd:Subdomain)-[:HAS_BASE_URL]->(bu)
        RETURN toString(id(bu))                       AS nodeId,
               bu.url                                 AS baseUrl,
@@ -91,6 +104,7 @@ export async function GET(request: NextRequest) {
               [e IN authEps WHERE e.category IS NOT NULL | e.category] AS authCategories,
               totalEndpointCount,
               size(authEps)                          AS authEndpointCount,
+              declaredAuthCount,
               [x IN vulnTags WHERE x IS NOT NULL]    AS vulnTags,
               [h IN secHeaders WHERE h IS NOT NULL]  AS securityHeadersPresent,
               bu.updated_at                          AS updatedAt
@@ -123,6 +137,7 @@ export async function GET(request: NextRequest) {
         authEndpointMethods: authMethods,
         authCategories: authCategoriesList,
         authEndpointCount: toNum(r.get('authEndpointCount')),
+        declaredAuthCount: toNum(r.get('declaredAuthCount')),
         totalEndpointCount: toNum(r.get('totalEndpointCount')),
         vulnTags,
         headerGrid,

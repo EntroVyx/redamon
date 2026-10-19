@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { rowCap } from '../rowCap'
 import { guardProject } from '@/lib/access'
 import { getGraphSession } from '@/app/api/graph/neo4j'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 
 function toNum(val: unknown): number | null {
   if (val == null) return null
@@ -38,7 +39,8 @@ export async function GET(request: NextRequest) {
               ep.ai_framework_name AS framework,
               ep.ai_frontend_product_guess AS frontend,
               ep.ai_tool_schema_ref AS schemaRef,
-              ep.source AS source, ep.updated_at AS updatedAt
+              ep.source AS source, ep.updated_at AS updatedAt,
+              ${DECLARED_ONLY('ep')} AS declaredOnly
        ORDER BY ep.ai_interface_type, ep.baseurl, ep.path LIMIT ${rowCap()}`,
       { pid })
 
@@ -105,6 +107,7 @@ export async function GET(request: NextRequest) {
         latencyMs: toNum(r.get('latencyMs')), ragIngest: r.get('ragIngest'),
         framework: r.get('framework'), frontend: r.get('frontend'),
         schemaRef: r.get('schemaRef'), source: r.get('source'),
+        declaredOnly: r.get('declaredOnly') === true,
         updatedAt: r.get('updatedAt') ?? null,
       })),
       mcpServers: mcp.records.map((r: { get: (key: string) => unknown }) => ({

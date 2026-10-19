@@ -7,6 +7,7 @@ import prisma from '@/lib/prisma'
 import { getGraphSession } from '@/app/api/graph/neo4j'
 import { RISK_TOP_N, projectRisk } from '@/lib/projectRisk'
 import { notMuted, agentCandidateConfirmedOrNA } from '@/lib/graphMute'
+import { DECLARED_ONLY } from '@/lib/declaredOnly'
 import type { Project, Remediation } from '@prisma/client'
 import { corroborateAttackFindings } from './aiAttackFindings'
 import type { AiAttackFindingRecord, RawAttackRow } from './aiAttackFindings'
@@ -323,8 +324,10 @@ export interface ReportData {
     technologies: { name: string; version: string | null; cveCount: number }[]
     dnsRecords: { type: string; count: number }[]
     securityHeaders: { name: string; isSecurity: boolean; count: number }[]
-    endpointCategories: { category: string; count: number }[]
-    parameterAnalysis: { position: string; total: number; injectable: number }[]
+    /** `count` is observed endpoints; `declared` those known only from an API specification. */
+    endpointCategories: { category: string; count: number; declared: number }[]
+    /** `total` counts parameters of observed endpoints; `declared` those of declared-only ones. */
+    parameterAnalysis: { position: string; total: number; injectable: number; declared: number }[]
   }
 
   // Vulnerabilities
@@ -1152,7 +1155,7 @@ export async function queryGraphOverview(session: any, pid: string) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function queryAttackSurface(session: any, pid: string) {
+export async function queryAttackSurface(session: any, pid: string) {
   const svcRes = await session.run(
     `MATCH (:IP {project_id: $pid})-[:HAS_PORT]->(p:Port)-[:RUNS_SERVICE]->(s:Service)
      RETURN s.name AS service, p.number AS port, count(DISTINCT p) AS count
@@ -1183,17 +1186,25 @@ async function queryAttackSurface(session: any, pid: string) {
      ORDER BY count DESC`,
     { pid }
   )
+  // An endpoint known only from an API specification is documented, not
+  // observed: counted apart, so the observed surface is not overstated.
   const epCatRes = await session.run(
     `MATCH (:BaseURL {project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)
-     RETURN COALESCE(e.category, 'other') AS category, count(e) AS count ORDER BY count DESC`,
+     WITH e, ${DECLARED_ONLY('e')} AS declared
+     RETURN COALESCE(e.category, 'other') AS category,
+            count(CASE WHEN NOT declared THEN 1 END) AS count,
+            count(CASE WHEN declared THEN 1 END) AS declared
+     ORDER BY count + declared DESC`,
     { pid }
   )
   const paramRes = await session.run(
     `MATCH (:BaseURL {project_id: $pid})-[:HAS_ENDPOINT]->(e:Endpoint)-[:HAS_PARAMETER]->(p:Parameter)
+     WITH e, p, ${DECLARED_ONLY('e')} AS declared
      RETURN COALESCE(p.position, 'unknown') AS position,
-            count(p) AS total,
-            count(CASE WHEN p.is_injectable = true THEN 1 END) AS injectable
-     ORDER BY total DESC`,
+            count(CASE WHEN NOT declared THEN 1 END) AS total,
+            count(CASE WHEN NOT declared AND p.is_injectable = true THEN 1 END) AS injectable,
+            count(CASE WHEN declared THEN 1 END) AS declared
+     ORDER BY total + declared DESC`,
     { pid }
   )
 
@@ -1225,11 +1236,13 @@ async function queryAttackSurface(session: any, pid: string) {
     endpointCategories: epCatRes.records.map((r: any) => ({
       category: (r.get('category') as string) || 'other',
       count: toNum(r.get('count')),
+      declared: toNum(r.get('declared')),
     })),
     parameterAnalysis: paramRes.records.map((r: any) => ({
       position: (r.get('position') as string) || 'unknown',
       total: toNum(r.get('total')),
       injectable: toNum(r.get('injectable')),
+      declared: toNum(r.get('declared')),
     })),
   }
 }
