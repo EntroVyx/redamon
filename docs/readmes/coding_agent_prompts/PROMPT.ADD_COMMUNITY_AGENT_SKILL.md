@@ -54,7 +54,7 @@ The agentic `GET /community-skills` endpoint auto-discovers files by globbing th
 - **No Prisma migration needed.** Community skills are not a Prisma model on their own, they become `UserAttackSkill` rows on import. The schema already supports this.
 - **Skills are per-user, not global, and import is by-name only.** Each user who wants this skill must click "Import from Community" in their Global Settings. Already-imported users will NOT auto-pick up new community skills, they need to re-import. Import skips any name the user already has (`import-community/route.ts`), so **editing an existing skill's `.md` does not reach users who already imported it**: re-import leaves their old copy in place. To adopt a rewrite they must delete the old skill first, then re-import. Call this out in the CHANGELOG whenever you change a shipped skill's content.
 - **Skill content is capped at 50 KB.** The validation is at [webapp/src/app/api/users/[id]/attack-skills/route.ts](../../../webapp/src/app/api/users/[id]/attack-skills/route.ts) POST handler (~line 67). Keep your file well under 50,000 characters.
-- **Max 20 user skills per user.** If you ship many community skills, be mindful: every imported one counts.
+- **Two different limits.** A user can hold up to 1000 skills (`MAX_SKILLS_PER_USER` in [webapp/src/lib/userSkills.ts](../../../webapp/src/lib/userSkills.ts)), but a project can enable at most 20 of them: the webapp refuses a 21st enabled skill, and the agent's `MAX_ENABLED_USER_SKILLS` in [agentic/project_settings.py](../../../agentic/project_settings.py) cuts the rest.
 - **The first non-heading paragraph becomes the description.** [agentic/api.py:2182](../../../agentic/api.py) extracts the first 200-char stripped non-`#` line as the description shown in the import dialog. Write that line well.
 - **No em dashes anywhere.** Use hyphens or rephrase. Enforced project-wide.
 
@@ -196,7 +196,7 @@ No rebuild. The file is live as soon as you save it (directory is volume-mounted
 
 3. In the webapp: Global Settings (gear icon, top right) > Agent Skills > **Import from Community**. The dialog shows how many will be imported. Confirm. If you had already imported previously, your new one will show in the "imported" count and duplicates in the "skipped" count.
 
-4. Create a fresh project. Project Settings > Agent Skills > scroll to "User Skills" section. Your skill should appear as a toggle (default ON).
+4. Create a fresh project. Project Settings > Agent Skills > scroll to the "User Agent Skills" section. Your skill appears as a toggle, OFF: a skill with no key in the project's `attackSkillConfig.user` is off, so a new project has none enabled. Turn it on and save (the key is the skill's database id, not its file stem).
 
 5. Open the AI Assistant drawer, send a message matching your "When to Classify Here" keywords. Watch the badge:
    - Matches: badge shows `SKILL` (blue), tooltip shows your skill name.
@@ -215,7 +215,8 @@ No rebuild. The file is live as soon as you save it (directory is volume-mounted
 | Import works but classifier never picks the skill | Description is generic or overlaps with a built-in. Edit the description via Global Settings > Agent Skills > pencil icon. Or rewrite the opening paragraph of the .md |
 | Badge shows `SKILL` but workflow not in system prompt | Unlikely; `_resolve_user_skill()` is non-conditional. Check agent logs for errors parsing the `attack_path_type` |
 | "Too large" error on import | File exceeds 50 KB. Trim the workflow |
-| "Maximum of 20 skills" error | User is at cap. They need to delete an existing skill first |
+| "You have 1000 skills, the maximum" error on import | User is at the library cap. They need to delete an existing skill first |
+| Cannot enable the skill in a project | The project already has 20 user skills enabled. Turn one off first |
 
 ---
 
