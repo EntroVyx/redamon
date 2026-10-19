@@ -8935,7 +8935,7 @@
    "form_section": "OpenApiSection",
    "has_default": true,
    "mcp": "settable",
-   "meaning": "Paths probed for OpenAPI documents during auto-discovery. Empty disables common-path probes.",
+   "meaning": "Paths probed for OpenAPI documents on every in-scope origin during auto-discovery: at most 200, each starting with /, without whitespace, a query or a fragment. A path that breaks those rules is refused at the write and skipped at scan time without dropping the others. Empty disables common-path probes.",
    "optional": false,
    "phase": "resource_enum",
    "prisma_type": "String[]",
@@ -8949,7 +8949,7 @@
    "traffic": "active",
    "type": "string-list",
    "unit": "none",
-   "validator": "free_text"
+   "validator": "url_path_list"
   },
   "openapiEnabled": {
    "default": true,

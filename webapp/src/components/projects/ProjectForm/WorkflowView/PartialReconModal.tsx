@@ -6,6 +6,8 @@ import { Modal, Tooltip, WikiInfoButton } from '@/components/ui'
 import { underAnyRoot } from '@/lib/partialReconScope'
 import { announceProjectWrite } from '@/lib/projectVersion'
 import type { GraphInputs, PartialReconParams, UserTargets } from '@/lib/recon-types'
+import { useOpenApiSourceLabels } from '@/hooks/useOpenApiSourceLabels'
+import { publicDocumentUrl, type OpenApiSourceRow } from '@/lib/openapiSourceStatus'
 import { SECTION_INPUT_MAP, SECTION_NODE_MAP, SECTION_ENRICH_MAP } from '../nodeMapping'
 import { WORKFLOW_TOOLS } from './workflowDefinition'
 import { INPUT_LOGIC_TOOLTIPS } from './inputLogicTooltips'
@@ -22,6 +24,8 @@ interface PartialReconModalProps {
   subdomainPrefixes?: string[]
   isStarting?: boolean
   userId?: string
+  /** OpenAPI: the project's configured documents, listed with their last status. */
+  openapiSources?: unknown
 }
 
 // --- API key requirements per tool ---
@@ -112,9 +116,11 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
     'You can also provide custom URLs below. ' +
     'Endpoint, Parameter, BaseURL, and ExternalDomain nodes are merged into the existing graph.',
   OpenAPI:
-    'Imports endpoint declarations from configured or discovered Swagger 2.0 and OpenAPI 3.0/3.1 documents without invoking declared operations. ' +
-    'Targets are loaded from graph BaseURLs and remain constrained to the project scope. You can also provide custom BaseURLs below. ' +
-    'Endpoint declarations are merged into the existing graph with their HTTP method and source provenance.',
+    'Imports the endpoints declared in Swagger 2.0 and OpenAPI 3.0/3.1 documents, without calling a declared operation. ' +
+    'It fetches the project\'s configured documents and, with Auto-discover on, looks for more on graph BaseURLs. ' +
+    'Custom URLs below are fetched as specification documents even with Auto-discover off, and must sit under the project scope. ' +
+    'Each operation becomes an Endpoint, with its declared Parameters, under the BaseURL of the API server it names; ' +
+    'what a document read again no longer declares is withdrawn.',
   ZapAjaxSpider:
     'Browser-driven crawling with OWASP ZAP Ajax Spider. Executes JavaScript and SPA interactions to discover API endpoints that static crawlers can miss. ' +
     'Targets are loaded from graph BaseURLs, with optional endpoint seeding from settings. You can also provide custom URLs below. ' +
@@ -380,6 +386,7 @@ export function PartialReconModal({
   subdomainPrefixes = [],
   isStarting = false,
   userId,
+  openapiSources,
 }: PartialReconModalProps) {
   const [graphInputs, setGraphInputs] = useState<GraphInputs | null>(null)
   const [loadingInputs, setLoadingInputs] = useState(false)
@@ -393,6 +400,14 @@ export function PartialReconModal({
   const [includeGraphTargets, setIncludeGraphTargets] = useState(true)
   // SubdomainDiscovery: the roots the operator left ticked (null = the default, all).
   const [discoveryPick, setDiscoveryPick] = useState<string[] | null>(null)
+  // OpenAPI: the configured documents with their last status (D19).
+  const openapiRows = useMemo(
+    () => (Array.isArray(openapiSources) ? openapiSources as OpenApiSourceRow[] : [])
+      .filter(row => row && typeof row === 'object' && row.url && row.enabled !== false),
+    [openapiSources],
+  )
+  const openapiLabels = useOpenApiSourceLabels(
+    toolId === 'OpenAPI' ? graphInputs?.openapiSourceStatus : undefined, openapiRows)
 
   // Nuclei sub-feature toggles (override project settings)
   const [nucleiCveLookup, setNucleiCveLookup] = useState(true)
@@ -640,7 +655,8 @@ export function PartialReconModal({
         ? {
             subdomains, ips, ip_attach_to: ipAttachTo,
             ...(ports.length ? { ports } : {}),
-            ...(urls.length ? { urls, url_attach_to: urlAttachTo } : {}),
+            // OpenAPI attaches what a document declares to the API server it names (D13).
+            ...(urls.length ? { urls, url_attach_to: toolId === 'OpenAPI' ? null : urlAttachTo } : {}),
           }
         : undefined
 
@@ -853,6 +869,19 @@ export function PartialReconModal({
           {TOOL_DESCRIPTIONS[toolId] || 'Runs this pipeline phase independently and merges results into the existing graph.'}
         </div>
 
+        {toolId === 'OpenAPI' && openapiRows.length > 0 && (
+          <div style={noteStyle} data-testid="openapi-source-status">
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Configured documents</div>
+            {openapiRows.map((row, i) => (
+              <div key={row.id ?? i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                {/* The location only: a query string can carry a token. */}
+                <span style={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{publicDocumentUrl(row.url ?? '') ?? row.url}</span>
+                <span style={{ whiteSpace: 'nowrap' }}>{openapiLabels[i] ?? 'Status unknown'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* API key warning */}
         {missingApiKeys.length > 0 && (
           <div style={{
@@ -947,7 +976,9 @@ export function PartialReconModal({
             fontSize: '11px', color: '#f87171', lineHeight: '1.5', padding: '8px 12px', borderRadius: '6px',
             backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)',
           }}>
-            {toolId === 'Jsluice'
+            {toolId === 'OpenAPI'
+              ? 'OpenAPI needs a document URL or graph BaseURLs. Provide a specification URL below or enable graph targets.'
+              : toolId === 'Jsluice'
               ? 'Jsluice requires URLs to analyze. Provide custom URLs below or enable graph targets (which include existing Endpoints from Katana/Hakrawler).'
               : toolId === 'JsRecon'
               ? 'JS Recon requires URLs to analyze for JavaScript files. Provide custom URLs below or enable graph targets (which include existing BaseURLs + Endpoints).'
@@ -1165,7 +1196,9 @@ export function PartialReconModal({
                 ))}
               </div>
             ) : (
-              <div style={hintStyle}>{isArjun
+              <div style={hintStyle}>{toolId === 'OpenAPI'
+                ? 'Full URLs of specification documents (http/https). Each is fetched as a document, even with Auto-discover off.'
+                : isArjun
                 ? 'Full endpoint URLs to test for hidden query/body parameters (e.g. /api/users, /login, /admin/settings).'
                 : toolId === 'Jsluice'
                 ? 'Full URLs to JS files. Will be downloaded and analyzed for hidden endpoints and secrets.'
@@ -1180,8 +1213,9 @@ export function PartialReconModal({
                 : 'Full URLs (http/https). Will be crawled to discover endpoints and parameters.'}</div>
             )}
 
-            {/* Dropdown: associate URLs to BaseURL */}
-            {customUrls.trim() && urlValidation.errors.length === 0 && (
+            {/* Dropdown: associate URLs to BaseURL. Not for OpenAPI, whose
+                endpoints go under the server each document declares. */}
+            {toolId !== 'OpenAPI' && customUrls.trim() && urlValidation.errors.length === 0 && (
               <div style={{ marginTop: '8px' }}>
                 <div style={labelStyle}>Associate URLs to</div>
                 <select

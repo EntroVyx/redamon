@@ -183,9 +183,9 @@ describe('PARTIAL_RECON_PHASE_MAP', () => {
     expect(PARTIAL_RECON_PHASE_MAP['Katana'][0]).toBe('Resource Enumeration')
   })
 
-  test('uses the OpenAPI ingestion phase for full and partial logs', () => {
-    expect(PARTIAL_RECON_PHASE_MAP.OpenAPI).toEqual(['OpenAPI Ingestion'])
-    expect(RECON_PHASES).toContain('OpenAPI Ingestion')
+  test('OpenAPI runs inside Resource Enumeration, in full and partial runs', () => {
+    expect(PARTIAL_RECON_PHASE_MAP.OpenAPI).toEqual(['Resource Enumeration'])
+    expect(RECON_PHASES).not.toContain('OpenAPI Ingestion')
   })
 
   test('has Hakrawler phases', () => {

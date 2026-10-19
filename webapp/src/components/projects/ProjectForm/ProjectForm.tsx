@@ -1336,7 +1336,7 @@ export function ProjectForm({
         {activeTab === 'resource' && viewMode === 'tabs' && (
           <>
             <KatanaSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('Katana') : undefined} />
-            <OpenApiSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('OpenAPI') : undefined} />
+            <OpenApiSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('OpenAPI') : undefined} projectId={mode === 'edit' ? projectId : undefined} />
             <ZapAjaxSpiderSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('ZapAjaxSpider') : undefined} />
             <HakrawlerSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('Hakrawler') : undefined} />
             <JsluiceSection data={formData} updateField={updateField} onRun={mode === 'edit' && projectId ? () => setPartialReconToolId('Jsluice') : undefined} />
@@ -1461,6 +1461,7 @@ export function ProjectForm({
         subdomainPrefixes={formData.subdomainList as string[] || []}
         isStarting={isPartialReconStarting}
         userId={userId ?? undefined}
+        openapiSources={formData.openapiSources}
       />
 
       {/* Partial Recon Logs Drawer */}

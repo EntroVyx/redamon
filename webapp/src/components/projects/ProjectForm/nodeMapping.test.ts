@@ -28,19 +28,28 @@ describe('ZapAjaxSpider node mapping', () => {
 })
 
 describe('OpenAPI workflow wiring', () => {
-  test('consumes BaseURL and produces declared endpoints', () => {
+  test('consumes BaseURL and produces declared endpoints with their parameters', () => {
     expect(SECTION_INPUT_MAP.OpenAPI).toEqual(['BaseURL'])
-    expect(SECTION_NODE_MAP.OpenAPI).toEqual(['Endpoint', 'BaseURL', 'Subdomain'])
+    expect(SECTION_NODE_MAP.OpenAPI).toEqual(['Endpoint', 'BaseURL', 'Parameter'])
   })
 
-  test('is registered after resource enumeration with the exact partial tool id', () => {
+  test('is a resource-enumeration tool with the exact partial tool id', () => {
     const tool = WORKFLOW_TOOLS.find(t => t.id === 'OpenAPI')
     expect(tool).toMatchObject({
       label: 'OpenAPI',
       enabledField: 'openapiEnabled',
-      group: 5.25,
+      group: 5,
       badge: 'active',
     })
+  })
+
+  test('is idle with no document configured and auto-discover off', () => {
+    const idle = WORKFLOW_TOOLS.find(t => t.id === 'OpenAPI')!.idleWhen!
+    expect(idle({ openapiAutoDiscover: false, openapiSources: [] })).toBe(true)
+    expect(idle({ openapiAutoDiscover: false, openapiSources: [{ url: 'https://a.example.com/o.json', enabled: false }] })).toBe(true)
+    expect(idle({ openapiAutoDiscover: false, openapiSources: [{ url: '' }] })).toBe(true)
+    expect(idle({ openapiAutoDiscover: false, openapiSources: [{ url: 'https://a.example.com/o.json' }] })).toBe(false)
+    expect(idle({ openapiAutoDiscover: true, openapiSources: [] })).toBe(false)
   })
 })
 

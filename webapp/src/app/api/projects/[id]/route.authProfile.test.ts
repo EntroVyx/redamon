@@ -52,9 +52,7 @@ function wireProject(authProfile: unknown) {
     args?.select
       ? Promise.resolve({ id: 'proj-1', userId: 'owner' })
       : Promise.resolve({ id: 'proj-1', userId: 'owner', name: 'p', targetDomain: 'example.test',
-          roeDocumentData: Buffer.from('pdf'), user: { id: 'owner' }, authProfile,
-          openapiSources: [{ id: 'source-1', url: 'https://example.test/spec', headers: ['Authorization: legacy-source-secret'] }],
-          openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: legacy-discovery-secret'] }] }),
+          roeDocumentData: Buffer.from('pdf'), user: { id: 'owner' }, authProfile }),
   )
 }
 const params = { params: Promise.resolve({ id: 'proj-1' }) }
@@ -75,8 +73,6 @@ describe('GET /api/projects/[id] — auth profile boundary', () => {
     expect(res.status).toBe(200)
     const raw = await res.text()
     expect(raw).not.toContain(SECRET)
-    expect(raw).not.toContain('legacy-source-secret')
-    expect(raw).not.toContain('legacy-discovery-secret')
     expect(raw).not.toContain(CSRF)
     const body = JSON.parse(raw)
     expect(body.authProfile).toEqual({
@@ -135,18 +131,21 @@ describe('PUT /api/projects/[id] — auth profile is not writable through the ro
   })
 })
 
-test('saving a legacy project strips headers before storage and from the response', async () => {
+test('a saved source keeps only its four fields, and a blank row is not a source', async () => {
   wireProject(PROFILE)
-  const legacy = {
-    openapiSources: [{ id: 's1', url: 'https://example.test/spec', headers: ['Authorization: legacy-secret'] }],
-    openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: legacy-secret'] }],
+  const body = {
+    openapiSources: [
+      { id: 's1', url: 'https://example.test/spec', headers: ['Authorization: extra-secret'] },
+      { id: 's2', url: '' },
+    ],
   }
-  mockProjectUpdate.mockResolvedValue({ id: 'proj-1', userId: 'owner', ipMode: true, ...legacy })
+  mockProjectUpdate.mockImplementation(async (args: { data: Record<string, unknown> }) =>
+    ({ id: 'proj-1', userId: 'owner', ipMode: true, ...args.data }))
   const res = await PUT(new NextRequest('http://x/api/projects/proj-1', {
-    method: 'PUT', body: JSON.stringify(legacy),
+    method: 'PUT', body: JSON.stringify(body),
   }), params)
   expect(res.status).toBe(200)
   const stored = mockProjectUpdate.mock.calls[0][0].data
   expect(stored).toEqual({ openapiSources: [{ id: 's1', url: 'https://example.test/spec' }], updatedById: 'owner' })
-  expect(await res.text()).not.toContain('legacy-secret')
+  expect(await res.text()).not.toContain('extra-secret')
 })

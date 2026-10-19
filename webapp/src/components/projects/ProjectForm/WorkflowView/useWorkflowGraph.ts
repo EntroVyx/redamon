@@ -27,7 +27,10 @@ const INPUT_PRODUCES = ['Domain', 'Subdomain', 'IP']
 
 export function useWorkflowGraph(formData: Record<string, unknown>) {
   // Extract all enabled fields into a stable dependency key
-  const enabledKey = WORKFLOW_TOOLS.map(t => formData[t.enabledField] ? '1' : '0').join('')
+  // An idle tool (enabled, nothing to work on) changes the graph too, so its
+  // state is part of the key.
+  const enabledKey = WORKFLOW_TOOLS.map(t =>
+    !formData[t.enabledField] ? '0' : t.idleWhen?.(formData) ? 'i' : '1').join('')
 
   return useMemo(() => {
     // ---- 1. Build data node status (active vs starved) ----
@@ -47,6 +50,7 @@ export function useWorkflowGraph(formData: Record<string, unknown>) {
       // not original sources -- they can't bootstrap from nothing.
       const hasTrueSource = WORKFLOW_TOOLS.some(
         t => formData[t.enabledField]
+          && !t.idleWhen?.(formData)
           && getToolProduces(t.id).includes(nodeType)
           && !getToolConsumes(t.id).includes(nodeType)
       )
@@ -195,6 +199,7 @@ export function useWorkflowGraph(formData: Record<string, unknown>) {
     for (const tool of WORKFLOW_TOOLS) {
       const pos = posMap.get(`tool-${tool.id}`) ?? { x: 0, y: 0 }
       const enabled = !!formData[tool.enabledField]
+      const idle = enabled && !!tool.idleWhen?.(formData)
       const brokenInputs = toolBrokenInputs.get(tool.id) ?? []
       rfNodes.push({
         id: `tool-${tool.id}`,
@@ -207,6 +212,7 @@ export function useWorkflowGraph(formData: Record<string, unknown>) {
           enabledField: tool.enabledField,
           group: tool.group,
           badge: tool.badge,
+          idle,
           chainBroken: !enabled ? false : brokenInputs.length > 0,
           starvedInputs: brokenInputs,
           groupColor: getGroupColor(tool.group),

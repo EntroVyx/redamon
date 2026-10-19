@@ -4,20 +4,20 @@ import { NextRequest } from 'next/server'
 import JSZip from 'jszip'
 
 const h = vi.hoisted(() => ({
-  legacy: {
-    openapiSources: [{ id: 's1', url: 'https://example.test/spec', headers: ['Authorization: legacy-secret'] }],
-    openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: legacy-secret'] }],
-  },
+  // As stored: a source with a token in its query (D10), and a preset, which
+  // the save path stored without the project's sources.
+  project: { openapiSources: [{ id: 's1', url: 'https://example.test/spec?token=fixture-token' }], openapiEnabled: true },
+  preset: { openapiEnabled: true, openapiAutoDiscover: true },
 }))
 vi.mock('@/lib/prisma', () => ({ default: {
   project: {
-    findUnique: vi.fn(async () => ({ id: 'p1', userId: 'u1', name: 'test', targetDomain: 'example.test', ...h.legacy })),
-    findMany: vi.fn(async () => [{ id: 'p1', name: 'test', ...h.legacy }]),
+    findUnique: vi.fn(async () => ({ id: 'p1', userId: 'u1', name: 'test', targetDomain: 'example.test', ...h.project })),
+    findMany: vi.fn(async () => [{ id: 'p1', name: 'test', ...h.project }]),
   },
   ...Object.fromEntries(['conversation', 'chatMessage', 'remediation', 'report', 'scanVersion',
     'scanJob', 'scanSchedule', 'engagementAuthorization', 'roeDocumentRevision', 'nodeFilterExemption', 'userMuteRulesPreset'].map(name => [name, { findMany: vi.fn(async () => []) }])),
   projectNodeFilter: { findUnique: vi.fn(async () => null) },
-  userProjectPreset: { findMany: vi.fn(async () => [{ id: 'preset', settings: h.legacy }]) },
+  userProjectPreset: { findMany: vi.fn(async () => [{ id: 'preset', settings: h.preset }]) },
 } }))
 vi.mock('@/lib/access', () => ({
   requireEffectiveUser: vi.fn(async () => ({ userId: 'u1' })),
@@ -34,18 +34,13 @@ vi.mock('fs', async original => ({
 import { GET } from './route'
 import { GET as listProjects } from '../../route'
 
-test('exported project and embedded presets contain no legacy header credentials', async () => {
+test('the export carries the project its document sources, token included, and no preset does', async () => {
   const response = await GET(new NextRequest('http://x/api/projects/p1/export'), { params: Promise.resolve({ id: 'p1' }) })
   expect(response.status).toBe(200)
   const zip = await JSZip.loadAsync(await response.arrayBuffer())
-  for (const path of ['project.json', 'presets/user_project_presets.json']) {
-    const text = await zip.file(path)!.async('text')
-    expect(text).not.toContain('legacy-secret')
-    expect(text).not.toContain('openapiDiscoveryHeaders')
-  }
-  // The project keeps its sources; a preset never carries them, since presets
-  // hold only allowlisted fields and openapiSources is a credential-bearing secret.
-  expect(await zip.file('project.json')!.async('text')).toContain('https://example.test/spec')
+  // D10: a source URL, query token included, is a per-project secret that
+  // travels with the project, like the project's other credentials.
+  expect(await zip.file('project.json')!.async('text')).toContain('https://example.test/spec?token=fixture-token')
   expect(await zip.file('presets/user_project_presets.json')!.async('text')).not.toContain('openapiSources')
 })
 

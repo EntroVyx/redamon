@@ -35,7 +35,6 @@ export const RECON_PHASES = [
   'Port Scanning',
   'HTTP Probing',
   'Resource Enumeration',
-  'OpenAPI Ingestion',
   'Vulnerability Scanning',
   'MITRE Enrichment',
 ] as const
@@ -205,6 +204,8 @@ export interface GraphInputs {
   existing_vector_db_services_count?: number
   existing_external_domains_count?: number
   fronted_count?: number
+  /** OpenAPI only: the last runs' per-document status ("<id>|<url hash>|<code>|<time>"); null when unreadable. */
+  openapiSourceStatus?: string[] | null
   source: 'graph' | 'settings'
 }
 
@@ -242,7 +243,7 @@ export const PARTIAL_RECON_PHASE_MAP: Record<string, readonly string[]> = {
   Tlsx: ['TLS Certificate Grab'],
   Httpx: ['HTTP Probing'],
   Katana: ['Resource Enumeration'],
-  OpenAPI: ['OpenAPI Ingestion'],
+  OpenAPI: ['Resource Enumeration'],
   ZapAjaxSpider: ['Resource Enumeration'],
   Hakrawler: ['Resource Enumeration'],
   Jsluice: ['Resource Enumeration'],

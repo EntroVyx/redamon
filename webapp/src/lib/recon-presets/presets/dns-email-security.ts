@@ -34,6 +34,7 @@ Security teams auditing email spoofing defenses (SPF, DMARC, DKIM), DNS administ
 - CVE lookup and MITRE enrichment -- not relevant to DNS/email checks
 - All HTTP/web security checks (WAF bypass, TLS expiry, CSP, session security, etc.)
 - Most OSINT providers (Censys, URLScan, OTX, etc.) -- Shodan DNS features are sufficient
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery runs all tools (crt.sh, HackerTarget, Knockpy, Subfinder, Amass, PureDNS) with brute-force to enumerate every hostname
@@ -106,6 +107,7 @@ Security teams auditing email spoofing defenses (SPF, DMARC, DKIM), DNS administ
     // --- Directory/API/Parameter fuzzing: disabled ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
     arjunEnabled: false,
 
     // --- Nuclei: disabled ---

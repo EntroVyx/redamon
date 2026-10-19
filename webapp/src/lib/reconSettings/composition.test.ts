@@ -40,6 +40,7 @@ function legalValue(key: string, spec: RegistryField): unknown {
       if (spec.validator === 'http_header') return ['X-Scan-Id: abc']
       if (spec.validator === 'project_file') return ['/usr/share/seclists/a.txt']
       if (spec.validator === 'project_file_name') return ['mine.yaml']
+      if (spec.validator === 'url_path_list') return ['/openapi.json']
       return ['a']
     case 'number-list':
       return [200]

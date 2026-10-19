@@ -31,6 +31,7 @@ Security teams running compliance audits, blue teamers validating hardening base
 - CVE lookup -- compliance focus, not vulnerability enumeration
 - MITRE CWE/CAPEC enrichment -- not classifying CVEs
 - All OSINT providers (Shodan, Censys, URLScan, etc.) -- passive enrichment not needed
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery enumerates all hostnames under the target domain
@@ -141,6 +142,7 @@ Security teams running compliance audits, blue teamers validating hardening base
     // --- DISABLE directory/API fuzzing ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- DISABLE parameter discovery ---
     arjunEnabled: false,

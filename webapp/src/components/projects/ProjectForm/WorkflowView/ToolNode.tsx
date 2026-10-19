@@ -12,6 +12,7 @@ interface ToolNodeData {
   enabledField: string
   group: number
   badge?: 'active' | 'passive' | 'both'
+  idle?: boolean
   chainBroken: boolean
   starvedInputs: string[]
   groupColor: string
@@ -34,6 +35,7 @@ function ToolNodeComponent({ data }: NodeProps) {
     enabled,
     enabledField,
     badge,
+    idle,
     chainBroken,
     starvedInputs,
     groupColor,
@@ -99,13 +101,16 @@ function ToolNodeComponent({ data }: NodeProps) {
             </button>
           </div>
         </div>
-        {badge && (
+        {(badge || idle) && (
           <div className={styles.toolNodeBadges}>
             {(badge === 'active' || badge === 'both') && (
               <span className={styles.badgeActive}>Active</span>
             )}
             {(badge === 'passive' || badge === 'both') && (
               <span className={styles.badgePassive}>Passive</span>
+            )}
+            {idle && (
+              <span className={styles.badgeIdle} title="No documents configured and Auto-discover is off">Idle</span>
             )}
           </div>
         )}

@@ -15,6 +15,8 @@ function isHttpUrl(value: unknown): boolean {
   }
 }
 
+const SOURCE_FIELDS = ['id', 'url', 'serverOverride', 'enabled'] as const
+
 export function validateOpenApiSettings(settings: Settings): string | null {
   if ('openapiEnabled' in settings && typeof settings.openapiEnabled !== 'boolean') {
     return 'openapiEnabled must be a boolean'
@@ -85,20 +87,64 @@ export function normalizeOpenApiSourceIds(
   ))
 }
 
-// Old projects and exports can retain plaintext headers inside their JSON sources.
-// Allowlisting source fields prevents those credentials from crossing any boundary.
-export function stripLegacyOpenApiHeaders<T extends Settings>(settings: T): T {
-  const clean = { ...settings }
-  delete clean.openapiDiscoveryHeaders
-  if (Array.isArray(clean.openapiSources)) {
-    Object.assign(clean, { openapiSources: clean.openapiSources.map(source => {
-      if (!isRecord(source)) return source
-      return Object.fromEntries(
-        ['id', 'url', 'serverOverride', 'enabled']
-          .filter(key => key in source)
-          .map(key => [key, source[key]]),
-      )
-    }) })
+/**
+ * Sources as they are stored: a row the form left blank is dropped rather than
+ * refused, and a source keeps only its four fields, so nothing else written
+ * with it (a header, a note) is stored, exported or read back.
+ */
+export function cleanOpenApiSources(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return value
+    .filter(source => !(isRecord(source) && (source.url === undefined || source.url === null
+      || (typeof source.url === 'string' && !source.url.trim()))))
+    .map(source => isRecord(source)
+      ? Object.fromEntries(SOURCE_FIELDS.filter(key => source[key] !== undefined).map(key => [key, source[key]]))
+      : source)
+}
+
+function clampInt(value: unknown, min: number, max: number): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : undefined
+}
+
+/**
+ * Make an imported project's OpenAPI columns storable, in place. A bundle is
+ * untrusted and may be old, so an import never fails on one bad row: a source
+ * keeps only its four fields and is dropped when it is invalid, a missing or
+ * repeated id is minted, a discovery path that breaks the rules is
+ * dropped, numbers are clamped to their bounds, and a flag that is not a
+ * boolean is removed so the column default applies.
+ */
+export function sanitizeImportedOpenApiSettings(
+  settings: Settings,
+  createId: () => string = () => crypto.randomUUID(),
+): void {
+  for (const flag of ['openapiEnabled', 'openapiAutoDiscover']) {
+    if (flag in settings && typeof settings[flag] !== 'boolean') delete settings[flag]
   }
-  return clean
+  for (const [key, min, max] of [['openapiTimeout', 1, 60], ['openapiMaxDocuments', 1, 200]] as const) {
+    if (!(key in settings)) continue
+    const clamped = clampInt(settings[key], min, max)
+    if (clamped === undefined) delete settings[key]
+    else settings[key] = clamped
+  }
+  if ('openapiDiscoveryPaths' in settings) {
+    const paths = Array.isArray(settings.openapiDiscoveryPaths) ? settings.openapiDiscoveryPaths : []
+    settings.openapiDiscoveryPaths = paths
+      .filter(path => validateOpenApiSettings({ openapiDiscoveryPaths: [path] }) === null)
+      .slice(0, 200)
+  }
+  if ('openapiSources' in settings) {
+    const seen = new Set<string>()
+    const kept: Settings[] = []
+    for (const source of Array.isArray(settings.openapiSources) ? settings.openapiSources : []) {
+      if (!isRecord(source)) continue
+      const clean: Settings = Object.fromEntries(
+        SOURCE_FIELDS.filter(key => source[key] !== undefined).map(key => [key, source[key]]))
+      if (typeof clean.id !== 'string' || seen.has(clean.id)) clean.id = createId()
+      if (validateOpenApiSettings({ openapiSources: [clean] }) !== null) continue
+      seen.add(clean.id as string)
+      kept.push(clean)
+    }
+    settings.openapiSources = kept
+  }
 }

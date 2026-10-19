@@ -1122,7 +1122,7 @@ export function TargetSection({ data, updateField, mode = 'create' }: TargetSect
                 <span className={styles.toggleLabel}>Enable Stealth Mode</span>
                 <p className={styles.toggleDescription}>
                   Force the entire pipeline to use only passive and low-noise techniques.
-                  Active scanners (Kiterunner, banner grabbing) are disabled. Port scanning
+                  Active scanners (Kiterunner, banner grabbing, OpenAPI import) are disabled. Port scanning
                   switches to passive mode. Nuclei disables DAST and interactsh. The AI agent
                   uses only stealthy methods and will stop if stealth is impossible for a
                   requested action.

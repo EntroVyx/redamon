@@ -60,7 +60,7 @@ export function ResourceEnumAiSection({ data, updateField, onRun }: ResourceEnum
       {isOpen && (
         <div className={styles.sectionContent}>
           <p className={styles.sectionDescription}>
-            Classifies every Endpoint and Parameter discovered by Katana / Hakrawler / GAU / FFuf / ParamSpider / Arjun / Kiterunner / jsluice against an AI-shape catalogue. Tags chat / completion / embedding / tool-call / SSE / MCP / GraphQL endpoints, flags RAG ingestion paths, and marks parameters likely to carry prompt-injection vectors. Pure regex over data already in the graph; no extra traffic is sent to the target.
+            Classifies every Endpoint and Parameter discovered by Katana / Hakrawler / GAU / FFuf / ParamSpider / Arjun / Kiterunner / jsluice, or declared in an OpenAPI document, against an AI-shape catalogue. Tags chat / completion / embedding / tool-call / SSE / MCP / GraphQL endpoints, flags RAG ingestion paths, and marks parameters likely to carry prompt-injection vectors. Pure regex over data already in the graph; no extra traffic is sent to the target.
           </p>
 
           {masterOn && (

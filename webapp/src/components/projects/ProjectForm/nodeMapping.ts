@@ -49,7 +49,7 @@ export const SECTION_NODE_MAP: Record<string, string[]> = {
   Tlsx:               ['Certificate', 'Subdomain'],
   Httpx:              ['BaseURL', 'Certificate', 'Technology', 'Header'],
   Katana:             ['Endpoint', 'Parameter', 'BaseURL', 'ExternalDomain'],
-  OpenAPI:            ['Endpoint', 'BaseURL', 'Subdomain'],
+  OpenAPI:            ['Endpoint', 'BaseURL', 'Parameter'],
   ZapAjaxSpider:      ['Endpoint', 'Parameter', 'BaseURL', 'ExternalDomain'],
   Hakrawler:          ['Endpoint', 'Parameter', 'BaseURL', 'ExternalDomain'],
   Jsluice:            ['Endpoint', 'Parameter', 'BaseURL', 'Secret', 'ExternalDomain'],

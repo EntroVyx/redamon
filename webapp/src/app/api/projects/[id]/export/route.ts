@@ -1,4 +1,3 @@
-import { stripLegacyOpenApiHeaders } from '@/lib/validation/openapiSettings'
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { getGraphSession } from '@/app/api/graph/neo4j'
@@ -252,7 +251,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       ...projectWithoutBinary
     } = project
     const projectExport = {
-      ...stripLegacyOpenApiHeaders(projectWithoutBinary),
+      ...projectWithoutBinary,
       ...(roeDocumentBase64 ? { roeDocumentDataBase64: roeDocumentBase64 } : {}),
     }
 
@@ -333,7 +332,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     // Append user project presets
     if (userPresets.length > 0) {
-      archive.append(Buffer.from(JSON.stringify(userPresets.map(preset => ({ ...preset, settings: stripLegacyOpenApiHeaders((preset.settings ?? {}) as Record<string, unknown>) })), null, 2)), { name: 'presets/user_project_presets.json' })
+      archive.append(Buffer.from(JSON.stringify(userPresets, null, 2)), { name: 'presets/user_project_presets.json' })
     }
     if (muteRulesPresets.length > 0) {
       archive.append(

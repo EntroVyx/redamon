@@ -27,6 +27,7 @@ Bug bounty hunters who have already triaged a target (perhaps with the Quick Win
 - Nuclei with all severity levels + DAST mode + Interactsh OOB detection
 - Security checks for comprehensive header/TLS/infrastructure validation
 - CVE lookup and MITRE enrichment
+- OpenAPI import with Auto-discover: API specification documents found on live hosts become declared endpoints and parameters (never called; later scanners request them with GET or HEAD only)
 
 ### What it disables
 - Port scanning (Naabu, Masscan, Nmap) -- not needed for web-focused bounty hunting, httpx handles web ports
@@ -201,6 +202,7 @@ Bug bounty hunters who have already triaged a target (perhaps with the Quick Win
 
     // --- DISABLE Kiterunner (too noisy) ---
     kiterunnerEnabled: false,
+    openapiAutoDiscover: true,
 
     // --- Arjun: GET + POST parameter discovery ---
     arjunEnabled: true,

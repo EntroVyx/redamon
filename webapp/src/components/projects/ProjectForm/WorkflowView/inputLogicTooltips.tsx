@@ -512,6 +512,20 @@ const Kiterunner = (
   </div>
 )
 
+const OpenAPI = (
+  <div style={wrapperStyle}>
+    <div style={firstSectionTitleStyle}>How input is generated</div>
+    <p style={paraStyle}>
+      OpenAPI starts from the specification documents listed under Configured documents. With Auto-discover on, it also looks at the live BaseURLs from HTTP probing, at crawled URLs whose path looks like API documentation, and at a short list of common documentation paths on each in-scope host. Custom URLs entered in the partial recon window are fetched as specification documents even when Auto-discover is off. Every document, redirect and reference must stay on the same host and inside the project scope, and a host that resolves to an internal address it was not given is refused. Anything else is skipped before a request is sent. Stealth mode turns this step off.
+    </p>
+
+    <div style={sectionTitleStyle}>How output transforms the graph</div>
+    <p style={{ ...paraStyle, margin: 0 }}>
+      Each operation the document declares becomes an <strong>Endpoint</strong> under the <strong>BaseURL</strong> of the API server it names, linked with HAS_ENDPOINT. A path with variables, such as /users/&#123;id&#125;, is stored with an example value, and the original pattern is kept on the Endpoint. Declared query, body and path parameters become <strong>Parameter</strong> nodes linked with HAS_PARAMETER. An Endpoint that crawling already found keeps everything it had and is marked as declared. Servers on hosts that discovery has not found are listed in the run log but not added. OpenAPI never calls a declared operation. Later scanners request an endpoint known only from a specification with GET or HEAD only, and nuclei templates send their own requests to it as to any other target URL.
+    </p>
+  </div>
+)
+
 const Ffuf = (
   <div style={wrapperStyle}>
     <div style={firstSectionTitleStyle}>How input is generated</div>
@@ -1084,6 +1098,7 @@ export const INPUT_LOGIC_TOOLTIPS: Record<string, ReactNode> = {
   ZapAjaxSpider,
   Hakrawler,
   Kiterunner,
+  OpenAPI,
   Ffuf,
   Jsluice,
   JsRecon,

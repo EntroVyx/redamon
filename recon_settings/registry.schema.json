@@ -157,6 +157,7 @@
         "hostname",
         "hostname_list",
         "url",
+        "url_path_list",
         "port_spec",
         "free_text",
         "identifier",

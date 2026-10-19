@@ -46,6 +46,7 @@ OSINT analysts, threat intelligence teams, or red team operators building a targ
 - Security checks (some connect to target)
 - Amass active mode and brute force
 - GAU URL verification and method detection (would send requests to target)
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery queries certificate transparency, DNS databases, and OSINT APIs
@@ -138,6 +139,7 @@ OSINT analysts, threat intelligence teams, or red team operators building a targ
     // --- DISABLE directory/API fuzzing ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- Arjun: passive mode only ---
     arjunEnabled: true,

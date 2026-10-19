@@ -37,6 +37,7 @@ Red team operators performing authorized reconnaissance against targets with act
 - Security checks (some probes connect directly to target services)
 - Amass active mode and brute force
 - Nuclei DAST mode, Interactsh, and intrusive/fuzz/dos templates
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery runs entirely through passive sources -- certificate logs, DNS databases, and OSINT APIs
@@ -164,6 +165,7 @@ Red team operators performing authorized reconnaissance against targets with act
 
     // --- DISABLE API discovery ---
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- Arjun: passive mode only ---
     arjunEnabled: true,

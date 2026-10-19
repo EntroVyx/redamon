@@ -31,6 +31,7 @@ Cloud security engineers, red teams targeting cloud-hosted organizations, and se
 - GAU archive lookups -- not relevant to live cloud exposure
 - jsluice, JS Recon -- JavaScript analysis not relevant to cloud infrastructure
 - Masscan -- using Naabu with targeted cloud ports instead of broad sweeps
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery enumerates all hostnames including cloud-hosted subdomains
@@ -152,6 +153,7 @@ Cloud security engineers, red teams targeting cloud-hosted organizations, and se
     // --- DISABLE directory/API fuzzing ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- DISABLE parameter discovery ---
     arjunEnabled: false,

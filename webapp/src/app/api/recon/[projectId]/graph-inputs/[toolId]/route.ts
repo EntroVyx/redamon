@@ -131,6 +131,26 @@ const JS_TOOL: ToolQuery = {
   }),
 }
 
+// Per-source OpenAPI status, one string per configured document
+// ("<id>|<url hash>|<code>|<time>"), written on the Domain of the run that
+// fetched it; a Domain batch spreads them over its roots.
+const OPENAPI_SOURCE_STATUS = `MATCH (d:Domain {user_id: $uid, project_id: $pid})
+  WHERE d.openapi_source_status IS NOT NULL
+  UNWIND d.openapi_source_status AS s
+  RETURN collect(DISTINCT s) AS status`
+
+async function openApiSourceStatus(session: { run: (q: string, p: Record<string, unknown>) => Promise<{ records: Neo4jRecord[] }> },
+  uid: string, pid: string): Promise<string[] | null> {
+  try {
+    const result = await session.run(OPENAPI_SOURCE_STATUS, { uid, pid })
+    return strings(result.records[0], 'status')
+  } catch (err) {
+    // Cosmetic: the form shows the status as unknown.
+    console.warn('OpenAPI source status read failed:', err)
+    return null
+  }
+}
+
 const TOOL_QUERIES: Record<string, ToolQuery> = {
   SubdomainDiscovery: SUBDOMAIN_COUNT_TOOL,
   Urlscan: SUBDOMAIN_COUNT_TOOL,
@@ -369,6 +389,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
           return NextResponse.json({
             ...withDiscovery(fields),
             ...tool.respond(result.records[0]),
+            ...(toolId === 'OpenAPI'
+              ? { openapiSourceStatus: await openApiSourceStatus(session, uid, projectId) }
+              : {}),
             source: 'graph',
           })
         } finally {

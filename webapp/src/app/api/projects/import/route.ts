@@ -1,4 +1,3 @@
-import { stripLegacyOpenApiHeaders } from '@/lib/validation/openapiSettings'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import prisma from '@/lib/prisma'
@@ -24,6 +23,7 @@ import {
 import { MUTEABLE_FINDING_LABELS } from '@/lib/mcp/findingLabels'
 import { pickProjectColumns } from '@/lib/projectColumns'
 import { sanitizeImportedRoeParsedJson } from '@/lib/roe/createRoe'
+import { sanitizeImportedOpenApiSettings } from '@/lib/validation/openapiSettings'
 import { importRevision, MAX_IMPORTED_REVISIONS, REVISIONS_BUNDLE_PATH } from '@/lib/roe/revisionBundle'
 import { jevImportWarnings } from '@/lib/reconSettings/jevEngine'
 import { PROJECT_EXPORT_EXCLUDED, isPluginArchivePath } from '@/lib/projectExport/pluginExclusion'
@@ -218,7 +218,7 @@ export async function POST(request: NextRequest) {
     if (!projectFile) {
       return NextResponse.json({ error: 'Invalid export: missing project.json' }, { status: 400 })
     }
-    const projectData = stripLegacyOpenApiHeaders(JSON.parse(await projectFile.async('text')))
+    const projectData = JSON.parse(await projectFile.async('text'))
 
     // Strip fields that will be regenerated.
     //
@@ -252,6 +252,9 @@ export async function POST(request: NextRequest) {
       if (sanitized) projectFields.roeParsedJson = sanitized
       else delete projectFields.roeParsedJson
     }
+    // The OpenAPI columns create and update validate: a bad row is dropped, a
+    // number clamped, so an older or edited bundle still imports.
+    sanitizeImportedOpenApiSettings(projectFields)
 
     // Import is a SECOND creation path, and it has to apply the same rule
     // create_project does or it is the way around it. A bundle that claims a

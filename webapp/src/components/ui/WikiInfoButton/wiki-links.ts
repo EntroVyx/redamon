@@ -57,6 +57,7 @@ export const TOOL_WIKI: Record<string, { page: string; anchor?: string }> = {
   Gau:                { page: 'Project-Settings-Reference', anchor: 'passive-url-discovery-gau' },
   ParamSpider:        { page: 'Project-Settings-Reference', anchor: 'paramspider-passive-parameter-discovery' },
   Kiterunner:         { page: 'Project-Settings-Reference', anchor: 'api-discovery-kiterunner' },
+  OpenAPI:            { page: 'Project-Settings-Reference', anchor: 'openapi-import' },
   Arjun:              { page: 'Project-Settings-Reference', anchor: 'parameter-discovery-arjun' },
 
   // JS Recon

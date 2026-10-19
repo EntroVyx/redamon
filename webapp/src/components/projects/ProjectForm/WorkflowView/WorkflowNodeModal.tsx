@@ -110,7 +110,7 @@ export function WorkflowNodeModal({
       case 'Tlsx':              return <TlsxSection {...baseProps} />
       case 'Httpx':             return <HttpxSection {...baseProps} />
       case 'Katana':            return <KatanaSection {...baseProps} />
-      case 'OpenAPI':           return <OpenApiSection {...baseProps} />
+      case 'OpenAPI':           return <OpenApiSection {...baseProps} projectId={mode === 'edit' ? projectId : undefined} />
       case 'ZapAjaxSpider':     return <ZapAjaxSpiderSection {...baseProps} />
       case 'Hakrawler':         return <HakrawlerSection {...baseProps} />
       case 'Jsluice':           return <JsluiceSection {...baseProps} />

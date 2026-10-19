@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { normalizeOpenApiSourceIds, validateOpenApiSettings, stripLegacyOpenApiHeaders } from './openapiSettings'
+import { cleanOpenApiSources, normalizeOpenApiSourceIds, sanitizeImportedOpenApiSettings, validateOpenApiSettings } from './openapiSettings'
 
 describe('validateOpenApiSettings', () => {
   test('accepts configured sources', () => {
@@ -65,17 +65,47 @@ test('validates project discovery paths and permits an empty list', () => {
     expect(validateOpenApiSettings({ openapiDiscoveryPaths: paths })).toContain('openapiDiscoveryPaths')
   }
 })
-test('strips legacy plaintext credentials without mutating the stored project', () => {
-  const legacy = {
-    name: 'Copy',
-    openapiSources: [{ id: 'source-1', url: 'https://example.test/spec', enabled: true,
-      serverOverride: 'https://example.test/api', headers: ['Authorization: old-source-secret'],
-      unknown: { headers: ['nested-secret'] } }],
-    openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: old-discovery-secret'] }],
-  }
-  const clean = stripLegacyOpenApiHeaders(legacy)
-  expect(clean).toEqual({ name: 'Copy', openapiSources: [{ id: 'source-1',
-    url: 'https://example.test/spec', enabled: true, serverOverride: 'https://example.test/api' }] })
+test('a stored source keeps its four fields and a blank row is dropped, not refused', () => {
+  const sources = [
+    { id: 'source-1', url: 'https://example.test/spec', enabled: true, serverOverride: 'https://example.test/api',
+      headers: ['Authorization: extra-secret'], note: 'x' },
+    { id: 'source-2', url: '   ' },
+    { id: 'source-3' },
+  ]
+  const clean = cleanOpenApiSources(sources)
+  expect(clean).toEqual([{ id: 'source-1', url: 'https://example.test/spec', enabled: true,
+    serverOverride: 'https://example.test/api' }])
   expect(JSON.stringify(clean)).not.toContain('secret')
-  expect(legacy.openapiSources[0].headers).toHaveLength(1)
+  expect(validateOpenApiSettings({ openapiSources: clean })).toBeNull()
+  expect(sources[0].headers).toHaveLength(1)
+})
+
+test('an imported bundle is made storable instead of being refused', () => {
+  const settings: Record<string, unknown> = {
+    openapiEnabled: 'yes',
+    openapiAutoDiscover: true,
+    openapiTimeout: 0,
+    openapiMaxDocuments: 999,
+    openapiDiscoveryPaths: ['/openapi.json', '//elsewhere.test/spec', '/q?x', '/api-docs/'],
+    openapiSources: [
+      { id: 'a', url: 'https://example.test/spec', headers: ['X: y'] },
+      { id: 'a', url: 'https://example.test/other' },
+      { url: 'ftp://example.test/spec' },
+      'junk',
+      { url: 'https://example.test/third', enabled: 'no' },
+    ],
+  }
+  let n = 0
+  sanitizeImportedOpenApiSettings(settings, () => `minted-${++n}`)
+  expect(settings).toEqual({
+    openapiAutoDiscover: true,
+    openapiTimeout: 1,
+    openapiMaxDocuments: 200,
+    openapiDiscoveryPaths: ['/openapi.json', '/api-docs/'],
+    openapiSources: [
+      { id: 'a', url: 'https://example.test/spec' },
+      { id: 'minted-1', url: 'https://example.test/other' },
+    ],
+  })
+  expect(validateOpenApiSettings(settings)).toBeNull()
 })

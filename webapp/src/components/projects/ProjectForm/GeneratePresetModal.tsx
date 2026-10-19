@@ -40,6 +40,7 @@ function buildSummary(params: Record<string, unknown>) {
     gauEnabled: 'GAU',
     paramspiderEnabled: 'ParamSpider',
     kiterunnerEnabled: 'Kiterunner',
+    openapiEnabled: 'OpenAPI',
     nucleiEnabled: 'Nuclei',
     cveLookupEnabled: 'CVE Lookup',
     mitreEnabled: 'MITRE',

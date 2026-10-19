@@ -36,7 +36,7 @@ export type Unit =
 export type Validator =
   | 'docker_image' | 'http_header' | 'project_file' | 'project_file_name'
   | 'status_codes' | 'severity' | 'scan_modules' | 'hostname' | 'hostname_list' | 'url'
-  | 'port_spec' | 'free_text' | 'identifier' | 'json_object' | 'attack_skill_config'
+  | 'url_path_list' | 'port_spec' | 'free_text' | 'identifier' | 'json_object' | 'attack_skill_config'
   | 'github_name' | 'github_repo_list'
 export type DenyReason =
   | 'identity' | 'internal' | 'escalation' | 'secret' | 'upload-managed'

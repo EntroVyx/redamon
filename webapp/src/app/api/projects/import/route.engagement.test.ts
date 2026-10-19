@@ -145,15 +145,20 @@ describe('row 9: an unauthorized third-party bundle is refused', () => {
   })
 })
 
-test('importing a legacy project copy discards plaintext OpenAPI headers', async () => {
+test('an imported project gets OpenAPI settings the create path would accept, never a 400 for one bad row', async () => {
   const res = await POST(await bundle({
     engagementKind: 'internal',
-    openapiSources: [{ id: 's1', url: 'https://example.test/spec', headers: ['Authorization: legacy-secret'] }],
-    openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: legacy-secret'] }],
+    openapiSources: [
+      { id: 's1', url: 'https://example.test/spec', headers: ['Authorization: extra-secret'] },
+      { id: 's2', url: 'javascript:alert(1)' },
+    ],
+    openapiDiscoveryPaths: ['/openapi.json', '//elsewhere.test/spec'],
+    openapiTimeout: 0,
   }, []))
   expect(res.status).toBeLessThan(400)
   const stored = h.createProject.mock.calls[0][0].data
   expect(stored.openapiSources).toEqual([{ id: 's1', url: 'https://example.test/spec' }])
-  expect(stored).not.toHaveProperty('openapiDiscoveryHeaders')
-  expect(JSON.stringify(stored)).not.toContain('legacy-secret')
+  expect(stored.openapiDiscoveryPaths).toEqual(['/openapi.json'])
+  expect(stored.openapiTimeout).toBe(1)
+  expect(JSON.stringify(stored)).not.toContain('extra-secret')
 })

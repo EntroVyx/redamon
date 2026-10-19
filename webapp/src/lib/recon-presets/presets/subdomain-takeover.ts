@@ -52,6 +52,7 @@ Discover every subdomain that exists and squeeze every possible takeover finding
 - SecurityChecks -- no header/TLS/WAF noise mixed in.
 - OSINT enrichment providers -- would duplicate subdomain work with worse signal-to-noise.
 - GraphQL scan -- unrelated.
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How the layered scanner works
 1. **Subdomain discovery** fans out across 5 parallel sources + active Amass + brute-force + Puredns filtering + GAU historical mining.
@@ -148,6 +149,7 @@ Discover every subdomain that exists and squeeze every possible takeover finding
     aiSurfaceReconEnabled: false,
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
     arjunEnabled: false,
 
     // ============================================================

@@ -176,6 +176,9 @@ const HOSTNAME_LIST_LINE_RE = /^[A-Za-z0-9._-]{1,253}$/
 /** A 5,000-name list is ~50 KB; this leaves room without letting a row grow unbounded. */
 const HOSTNAME_LIST_MAX_CHARS = 1_000_000
 
+/** Lists whose own ceiling is lower than the generic 5000 entries. */
+const LIST_MAX_ENTRIES: Record<string, number> = { url_path_list: 200 }
+
 function checkHostnameList(value: unknown): string | null {
   if (typeof value !== 'string') return 'must be a string'
   if (value.length > HOSTNAME_LIST_MAX_CHARS) return `is longer than ${HOSTNAME_LIST_MAX_CHARS} characters`
@@ -267,6 +270,14 @@ function checkScalar(validator: string, value: unknown, ctx: ValidationContext):
       return typeof value === 'string' && (value === '' || /^https?:\/\/[^\s]+$/.test(value))
         ? null
         : 'must be an http or https URL'
+    case 'url_path_list':
+      // One origin-relative path per item, requested on every in-scope origin:
+      // a scheme-relative '//', a query or a fragment would change the host or
+      // the request the operator asked for.
+      return typeof value === 'string' && value.length <= 2048 && value.startsWith('/')
+        && !value.startsWith('//') && !/[\s\x00-\x1f\x7f\\?#]/.test(value)
+        ? null
+        : 'must be an origin-relative path starting with /, without whitespace, a query or a fragment'
     case 'github_name':
       // Empty means "none set"; anything else names one account.
       return typeof value === 'string' && (value === '' || (value.length <= 39 && REGEX_GITHUB_ORG.test(value)))
@@ -351,7 +362,9 @@ export function validateValue(
     case 'string-list':
     case 'number-list': {
       if (!Array.isArray(value)) return 'must be an array'
-      if (value.length > 5000) return 'has more than 5000 entries'
+      if (value.length > (LIST_MAX_ENTRIES[spec.validator ?? ''] ?? 5000)) {
+        return `has more than ${LIST_MAX_ENTRIES[spec.validator ?? ''] ?? 5000} entries`
+      }
       for (const item of value) {
         if (spec.type === 'number-list') {
           if (typeof item !== 'number' || !Number.isInteger(item)) {

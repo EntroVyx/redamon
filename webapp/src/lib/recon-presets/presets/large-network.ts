@@ -34,6 +34,7 @@ Network security teams and pentesters who need to map large external perimeters 
 - jsluice, JS Recon -- JavaScript analysis not applicable
 - Nuclei -- this preset discovers and maps; vulnerability scanning comes after
 - Most OSINT providers except Shodan and Censys (the most relevant for IP/infrastructure data)
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery resolves hostnames and builds an IP inventory (useful even in IP mode for reverse DNS)
@@ -171,6 +172,7 @@ Network security teams and pentesters who need to map large external perimeters 
     // --- DISABLE directory/API fuzzing ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- DISABLE parameter discovery ---
     arjunEnabled: false,

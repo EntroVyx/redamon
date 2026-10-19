@@ -21,6 +21,7 @@ Red-teamers and AI-security engineers scoping the adversarial-AI attack surface 
 - Nuclei + GraphQL + Subdomain Takeover (with **AI takeover classifier**) + VHost/SNI
 - WAF detection with the **AI classifier**
 - **AI Surface Recon (active), every workload on:** chat-shape probes, MCP handshake, MCP tools/list enumeration, MCP tool-poisoning YARA scan, OpenAPI/ai-plugin discovery, model-family guess, vector-DB confirmation read, Julius fingerprint pack, latency baseline, and response caching, with a generous per-probe timeout and concurrency
+- OpenAPI import with Auto-discover: API specification documents found on live hosts become declared endpoints and parameters (never called; later scanners request them with GET or HEAD only)
 
 ### What it disables
 - Stealth mode (would turn off MCP tools/list and the vector-DB read and throttle probing, defeating the purpose)
@@ -79,6 +80,7 @@ Every AI signal is a property annotation on existing graph nodes (Endpoint, Tech
     paramspiderEnabled: true,
     jsluiceEnabled: true,
     kiterunnerEnabled: true,
+    openapiAutoDiscover: true,
     arjunEnabled: true,
     ffufEnabled: true,
     // AI: Endpoint AI Classifier (full coverage)

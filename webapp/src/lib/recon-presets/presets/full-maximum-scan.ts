@@ -33,6 +33,7 @@ Pentesters running a final comprehensive sweep on a target they have full author
 - CVE lookup: 50 max CVEs per service, min CVSS 0
 - MITRE: full CWE + CAPEC enrichment
 - All 10 OSINT providers at maximum results (Shodan, URLScan 10000, OTX, Censys, FOFA 5000, Netlas, VirusTotal, ZoomEye 5000, CriminalIP, Uncover 1000)
+- OpenAPI import with Auto-discover: API specification documents found on live hosts become declared endpoints and parameters (never called; later scanners request them with GET or HEAD only)
 
 ### What it disables
 - Nothing. Every tool is enabled.
@@ -252,6 +253,7 @@ Pentesters running a final comprehensive sweep on a target they have full author
 
     // --- Kiterunner: routes-large, high connections ---
     kiterunnerEnabled: true,
+    openapiAutoDiscover: true,
     kiterunnerWordlists: ['routes-large'],
     kiterunnerRateLimit: 200,
     kiterunnerConnections: 200,

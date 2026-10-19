@@ -15,8 +15,7 @@ import { GET } from './[id]/route'
 
 const settings = {
   openapiEnabled: true,
-  openapiSources: [{ url: 'https://example.test/spec', headers: ['Authorization: legacy-secret'] }],
-  openapiDiscoveryHeaders: [{ origin: 'https://example.test', headers: ['Cookie: legacy-secret'] }],
+  openapiSources: [{ url: 'https://example.test/spec?token=source-secret' }],
 }
 
 beforeEach(() => {
@@ -25,7 +24,7 @@ beforeEach(() => {
   h.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1', name: 'preset', settings })
 })
 
-test('saving a preset excludes OpenAPI source and discovery credentials', async () => {
+test('saving a preset excludes the OpenAPI document sources', async () => {
   const response = await POST(new NextRequest('http://x/api/presets', {
     method: 'POST', body: JSON.stringify({ name: 'preset', settings }),
   }))
@@ -33,8 +32,7 @@ test('saving a preset excludes OpenAPI source and discovery credentials', async 
   const saved = h.create.mock.calls[0][0].data.settings
   expect(saved.openapiEnabled).toBe(true)
   expect(saved).not.toHaveProperty('openapiSources')
-  expect(saved).not.toHaveProperty('openapiDiscoveryHeaders')
-  expect(JSON.stringify(saved)).not.toContain('legacy-secret')
+  expect(JSON.stringify(saved)).not.toContain('source-secret')
 })
 
 test('reading a legacy preset excludes project-specific OpenAPI settings', async () => {

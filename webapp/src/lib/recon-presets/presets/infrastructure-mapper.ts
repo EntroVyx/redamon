@@ -33,6 +33,7 @@ Network pentesters and infrastructure security teams mapping an external or inte
 - jsluice, JS Recon -- JavaScript analysis not relevant
 - Nuclei -- this preset maps infrastructure; vulnerability testing comes after
 - Most OSINT providers except Shodan and Censys (most relevant for infrastructure)
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery enumerates all hostnames and resolves IPs
@@ -162,6 +163,7 @@ Network pentesters and infrastructure security teams mapping an external or inte
     // --- DISABLE directory/API fuzzing ---
     ffufEnabled: false,
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- DISABLE parameter discovery ---
     arjunEnabled: false,

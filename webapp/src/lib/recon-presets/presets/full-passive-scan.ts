@@ -49,6 +49,7 @@ Red team operators in the pre-engagement phase, OSINT analysts building target p
 - Security checks (some connect to target directly)
 - Amass active mode and brute force (DNS brute-forcing touches target nameservers)
 - Stealth mode (not needed -- we never touch the target at all)
+- OpenAPI import (fetches API specification documents from the target)
 
 ### How it works
 1. Subdomain discovery queries certificate transparency logs, DNS databases, and OSINT APIs to enumerate all known subdomains
@@ -135,6 +136,7 @@ Red team operators in the pre-engagement phase, OSINT analysts building target p
 
     // --- DISABLE API discovery ---
     kiterunnerEnabled: false,
+    openapiEnabled: false,
 
     // --- Arjun: passive mode only (no requests to target) ---
     arjunEnabled: true,
