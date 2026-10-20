@@ -166,6 +166,19 @@ describe('F2: a batch project is still validated and normalized', () => {
       .toEqual(['domain1.com', 'domain2.it'])
   })
 
+  test('saving a Brazilian domain keeps the full root and relative prefixes', async () => {
+    const res = await put(fullFormBody({
+      domainBatchMode: true,
+      targetDomain: '',
+      domainBatchHosts: ['api.example.com.br', 'www.example.com.br'],
+    }))
+    expect(res.status).toBe(200)
+    const data = mockUpdate.mock.calls[0][0].data
+    expect(data.domainBatchGroups).toMatchObject([
+      { rootDomain: 'example.com.br', prefixes: ['api.', 'www.'] },
+    ])
+  })
+
   test('an empty host list on a batch project is refused', async () => {
     const res = await put(fullFormBody({ domainBatchMode: true, domainBatchHosts: [] }))
     expect(res.status).toBe(400)

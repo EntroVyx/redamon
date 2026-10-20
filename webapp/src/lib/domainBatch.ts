@@ -6,14 +6,10 @@
  * server-side, so what the operator approved is literally what the pipeline runs
  * and a crafted `domainBatchGroups` in a request body is never trusted.
  *
- * The rule is deliberately "the last two labels are the domain", NOT a public
- * suffix list: it is the same thing an operator does by hand when filling the
- * single-domain form (target = the domain, everything else = subdomain prefixes),
- * so a batch and a hand-built project scan identically. `foo.example.co.uk`
- * therefore groups under `co.uk`. That is a known, tested consequence, not an
- * oversight - see the tests. A WILDCARD entry is the one exception: it consults
- * PUBLIC_SUFFIXES, because "scan the host you listed" survives that quirk and
- * "enumerate everything under co.uk" does not.
+ * The root is the label before the public suffix plus that suffix. The curated
+ * multi-label suffix list keeps hosts such as `foo.example.com.br` under
+ * `example.com.br`; other hosts use their last two labels. A wildcard must name
+ * that root exactly, so it cannot widen a scan to an entire public suffix.
  *
  * Group order is first-appearance order, and it is the RUN order: the operator
  * approves a list in the preview and the pipeline walks it top to bottom.
@@ -29,13 +25,7 @@ export const ROOT_DOMAIN_PREFIX = '.'
 export const WILDCARD_PREFIX = '*'
 
 /**
- * Multi-label public suffixes, for wildcard entries ONLY.
- *
- * rootOf() is deliberately last-two-labels (see the header), so `acme.co.uk`
- * reduces to `co.uk`. For a literal entry that is a harmless, tested quirk: the
- * group still scans exactly the host that was listed. For a WILDCARD it is not
- * harmless - `*.co.uk` would mean "enumerate every subdomain of co.uk", i.e. a
- * whole public suffix the operator never authorized.
+ * Multi-label public suffixes used for grouping and wildcard validation.
  *
  * Mirror of `_MULTI_LABEL_SUFFIXES` in recon/main_recon_modules/origin_discovery.py,
  * which exists for the same reason - keep the two in sync. Curated subset of the
@@ -128,10 +118,13 @@ function normalizeHost(raw: string): string {
   return h
 }
 
-/** The last two labels. "suba.sub3.domain3.com" -> "domain3.com". */
+/** The registrable root for suffixes we know, otherwise the last two labels. */
 function rootOf(host: string): string {
   const labels = host.split('.')
-  return labels.slice(-2).join('.')
+  const suffix = labels.slice(-2).join('.')
+  return labels.length > 2 && PUBLIC_SUFFIXES.has(suffix)
+    ? labels.slice(-3).join('.')
+    : suffix
 }
 
 /**

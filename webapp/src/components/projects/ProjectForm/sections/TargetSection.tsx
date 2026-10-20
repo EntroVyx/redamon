@@ -336,8 +336,8 @@ export function TargetSection({ data, updateField, mode = 'create' }: TargetSect
               {batchMode ? (
                 <>
                   Paste or upload a list of hostnames. They are grouped by domain
-                  (<strong>the last two labels</strong>, so a.b.example.com belongs to
-                  example.com) and each group is scanned in turn by a <strong>single</strong>{' '}
+                  (for example, a.b.example.com belongs to example.com and
+                  a.example.com.br belongs to example.com.br) and each group is scanned in turn by a <strong>single</strong>{' '}
                   recon run, writing to the graph as it finishes each one. Only the hostnames
                   you list are scanned &mdash; <strong>except wildcards</strong>. Write{' '}
                   <code>*.example.com</code> (or <code>*example.com</code>) to run the full

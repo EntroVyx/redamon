@@ -123,9 +123,7 @@ class TestSettingsBoundary:
         assert groups[0]['prefixes'] == ['*', 'ok.']
 
     def test_a_wildcard_on_a_public_suffix_is_demoted_not_honoured(self):
-        # rootOf() is last-two-labels, so `acme.co.uk` reduces to `co.uk`. For a
-        # literal group that is a harmless documented quirk; a wildcard would
-        # mean "enumerate every subdomain of co.uk".
+        # Older stored groups can still have a public suffix as their root.
         groups = _parse_domain_batch_groups([
             {'rootDomain': 'co.uk', 'prefixes': ['*', 'acme.']},
         ])

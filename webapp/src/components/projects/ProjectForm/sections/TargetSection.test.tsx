@@ -1,7 +1,7 @@
 /**
  * Strategy row 6: the Domain batch group preview must agree with what is saved.
  *
- * The preview is the ONLY place the grouping rule (last two labels) is visible to
+ * The preview is where the operator sees the grouping rule, including multi-label suffixes,
  * an operator, and it is what they approve before the scan runs. If it disagrees
  * with the persisted grouping, or if the input cannot be typed into, the feature's
  * central promise ("you see exactly what will run, in order") is broken.
@@ -91,6 +91,15 @@ describe('the preview matches the grouping that will be persisted', () => {
     fireEvent.change(s.textarea(), { target: { value: HOSTS } })
     expect(screen.getAllByRole('row').slice(1)).toHaveLength(3)
     expect(screen.getByText('sub3.domain3.com, suba.sub3.domain3.com')).toBeTruthy()
+  })
+
+  test('a Brazilian domain keeps its registrable root in the preview', () => {
+    const s = renderSection()
+    fireEvent.change(s.textarea(), { target: { value: 'api.example.com.br\nwww.example.com.br' } })
+    const rows = screen.getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(1)
+    expect(within(rows[0]).getAllByRole('cell')[1].textContent).toBe('example.com.br')
+    expect(within(rows[0]).getAllByRole('cell')[2].textContent).toBe('api.example.com.br, www.example.com.br')
   })
 
   test('an invalid entry is flagged and not silently grouped', () => {

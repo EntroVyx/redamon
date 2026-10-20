@@ -1158,9 +1158,8 @@ _BATCH_HOST_CHARSET = re.compile(r'^[a-z0-9.-]+$')
 def _is_public_suffix(root: str) -> bool:
     """Is this 'registrable domain' actually a public suffix, e.g. ``co.uk``?
 
-    The batch grouping rule is last-two-labels, so ``acme.co.uk`` reduces to
-    ``co.uk``. Harmless for a literal group (it still scans only the host that
-    was listed) and NOT harmless for a wildcard one.
+    Older persisted batch groups may still name ``co.uk`` as their root.
+    A wildcard on that root would enumerate the whole public suffix.
 
     Imported lazily from origin_discovery, which owns the curated list for the
     same reason: a module-level import would pull a scan module into the settings

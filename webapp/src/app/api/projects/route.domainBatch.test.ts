@@ -113,6 +113,19 @@ describe('F4: the soft guardrail receives the roots as a list', () => {
     expect(body.target_domains).toEqual(['domain1.com', 'domain2.it'])
   })
 
+  test('the Brazilian registrable root reaches the guardrail and saved project', async () => {
+    const res = await POST(postReq({
+      ...BATCH_BASE, domainBatchHosts: ['api.example.com.br', 'www.example.com.br'],
+      targetGuardrailEnabled: true,
+    }))
+    expect(res.status).toBe(201)
+    const call = mockFetch.mock.calls.find(c => String(c[0]).includes('/guardrail/check-target'))
+    expect(JSON.parse(call![1].body as string).target_domains).toEqual(['example.com.br'])
+    expect(mockProjectCreate.mock.calls[0][0].data.domainBatchGroups).toMatchObject([
+      { rootDomain: 'example.com.br', prefixes: ['api.', 'www.'] },
+    ])
+  })
+
   test('target_domain is NOT a comma-joined string', async () => {
     const body = await guardrailBody()
     expect(body.target_domain).toBe('')
